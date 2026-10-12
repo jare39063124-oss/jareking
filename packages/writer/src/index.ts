@@ -10,3 +10,4 @@
  */
 
 export * from './model';
+export * from './parser/docxParser.js';

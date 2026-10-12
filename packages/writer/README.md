@@ -61,3 +61,17 @@ pnpm --filter @jareking/writer typecheck
 ```
 
 仅做类型检查（不启动 Electron、不安装运行时依赖）。
+
+## T1.2 docx 解析器（文档解析）
+
+> 实现位置：`src/parser/docxParser.ts`、`src/parser/node-fs.d.ts`（最小 node:fs 环境声明）。包入口 `src/index.ts` 已 re-export。
+
+- **入口**：`parseDocx(buffer: Uint8Array)`（异步，JSZip 异步读包）/ `parseDocxFile(path: string)`（Node/Electron 主进程按路径读文件再解析）；二者均产出 `JkDocument`。
+- **依赖**：JSZip（读 zip 各部件）、fast-xml-parser（XML 解析，开启 `removeNSPrefix` 去掉 w:/a:/r: 等命名空间前缀，标签变 `p/r/t`、属性变 `@_val/@_id`）。
+- **解析映射范围**：
+  - 块级：`w:p`→Paragraph（`runs` 由行内元素构成，`pPr` 取对齐/缩进/行距/大纲级别/样式与编号引用）、`w:tbl`→Table（行→单元格，单元格 `blocks` 递归解析，支持嵌套表格）、`pPr/sectPr`→SectionBreak（携带其后分节属性）。
+  - 行内：`w:r`→Run（文本拼接保留空格、字符属性 rPr）、`w:hyperlink`→Hyperlink（经 `.rels` 把 rId/anchor 解析）、`w:drawing`/`w:pict`→Image（记录 `embed` rId + EMU 尺寸占位，二进制加载留待 T1.3）、`w:br`/`w:cr`→Break。
+  - 其他部件：`styles.xml`→`styleDefs`（StyleDef，含 basedOn 继承/next/link/docDefaults）、`numbering.xml`→`numberingDefs`（AbstractNumbering + ConcreteNumbering + 级别）、`sectPr`→`sections`（页边距/纸张/方向/页眉页脚关联）、`document.xml.rels`→`relationships`、`settings.xml`→`settings`。
+- **保真与降级（spec 4.2 / L2）**：常见结构按 L2 解析并回填 `fidelity.level='L2'`；无法完美映射的特性（`smartArt`/`oleObject`/`field`/`contentControl`/未知块级元素…）记入 `fidelity.features: UnsupportedFeature[]`，并把原始节点保留在 `data` 兜底槽（各 Block/Inline 的 `data.__raw`，未知块级在 `JkDocument.data.__unparsedBlocks`），保证「打开→保存」round-trip 不丢数据。
+- **单位约定（对齐 `document.ts` 注释）**：长度字段统一 EMU；Word twips ×635 转 EMU（`ind`/`spacing`/`pgSz`/`pgMar`/`tblGrid`/`tcW`）；字号 `sz` 为半磅（half-point）原值存储（44 = 22pt）；drawing `extent` cx/cy 已是 EMU 原值存储。
+- **测试**：`test/fixtures.ts`（JSZip 在运行时构造最小合法 docx，可控制纯文本/格式/表格/超链接/图片/未知元素等）、`test/docxParser.test.ts`（9 个 vitest 用例覆盖上述 8 类验收 + 文件路径解析）。运行：`pnpm --filter @jareking/writer test`。
