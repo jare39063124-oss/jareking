@@ -35,6 +35,18 @@ export async function exportDocx(doc: JkDocument): Promise<Uint8Array> {
   const rels = serializeDocumentRels(doc);
   if (rels) zip.file('word/_rels/document.xml.rels', rels);
 
+  // 写入图片二进制：依据 image 类型关系的 target 落到 word/<target>
+  const media = doc.media ?? {};
+  for (const rel of doc.relationships ?? []) {
+    if (rel.type !== 'image') continue;
+    const bytes = media[rel.id];
+    if (!bytes) continue;
+    const target = rel.target ?? '';
+    if (!target) continue;
+    const fullPath = target.startsWith('/') ? target.slice(1) : `word/${target}`;
+    zip.file(fullPath, bytes);
+  }
+
   return zip.generateAsync({ type: 'uint8array' });
 }
 

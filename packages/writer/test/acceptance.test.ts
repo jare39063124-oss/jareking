@@ -7,8 +7,20 @@
  * 这覆盖了「打开→编辑→保存」数据侧的核心保真，是 Phase 验收的回归基线。
  */
 import { describe, expect, it } from 'vitest';
+import JSZip from 'jszip';
 import type { JkDocument } from '../src/index.js';
 import { exportDocx, parseDocx } from '../src/index.js';
+
+/** 1x1 透明 PNG（最小合法 PNG） */
+const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+function pngBytes(): Uint8Array {
+  const bin = atob(PNG_BASE64);
+  const b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  return b;
+}
 
 function buildRichDoc(): JkDocument {
   return {
@@ -159,5 +171,45 @@ describe('T1.8 Writer Phase 验收（合成文档全链路保真）', () => {
     // 表格内加粗保留
     const boldCell = runs.find((r) => r.text === '单元格B');
     expect(boldCell?.rPr?.bold).toBe(true);
+  });
+});
+
+describe('T1.8 图片二进制 round-trip（media 落盘）', () => {
+  it('含图片的文档导出后 zip 含 media，再解析图片二进制不丢', async () => {
+    const bytes = pngBytes();
+    const doc: JkDocument = {
+      body: [
+        { type: 'paragraph', runs: [{ type: 'run', text: '带图段落 ' }] },
+        {
+          type: 'paragraph',
+          runs: [{ type: 'image', embed: 'rIdImg', alt: '测试图', width: 914400, height: 914400 }],
+        },
+      ],
+      sections: [],
+      styleDefs: { styles: [] },
+      numberingDefs: { abstractNum: [], num: [] },
+      settings: {},
+      relationships: [
+        { id: 'rIdImg', type: 'image', target: 'media/rIdImg.png' },
+      ],
+      media: { rIdImg: bytes },
+      fidelity: { level: 'L2', features: [] },
+    };
+
+    const exported = await exportDocx(doc);
+
+    // 导出包内应包含 word/media/rIdImg.png 且字节一致
+    const zip = await JSZip.loadAsync(exported);
+    const mediaFile = zip.file('word/media/rIdImg.png');
+    expect(mediaFile).toBeTruthy();
+    const mediaBytes = await mediaFile!.async('uint8array');
+    expect(mediaBytes.length).toBe(bytes.length);
+
+    // 再解析：media 与 image 关系保留
+    const reparsed = await parseDocx(exported);
+    expect(reparsed.media?.['rIdImg']).toBeTruthy();
+    expect(reparsed.media!['rIdImg'].length).toBe(bytes.length);
+    const imgRel = reparsed.relationships.find((r) => r.id === 'rIdImg');
+    expect(imgRel?.type).toBe('image');
   });
 });

@@ -51,6 +51,12 @@ export interface JkDocument extends ModelExtra {
   settings: DocumentSettings;
   /** 资源引用表（对应 .rels；图片/超链接/页眉页脚均通过 rId 关联） */
   relationships: Relationship[];
+  /**
+   * 二进制媒体载体（保存期使用，非持久化字段）。
+   * 键为资源 rId，值为图片字节；导出时据此把媒体写入 word/media/*，
+   * 并在 document.xml.rels 中建立 image 类型关系。解析时从 zip 取出回填。
+   */
+  media?: Record<string, Uint8Array>;
   /** 本模型保真等级与降级记录（解析阶段填充） */
   fidelity: FidelityReport;
 }

@@ -66,17 +66,20 @@
   - 完成（2026-10-13）：合法 docx(zip+命名空间+ContentTypes/rels)；单位换算与解析器精确互逆；__raw 兜底回插；13/13 vitest 通过（含解析→导出→再解析对称）
   - 局限：图片二进制 round-trip 待解析器侧补 media（T1.8 前）
 - [x] **T1.6** 工具栏与格式面板（核心子集）
-  - 完成（2026-10-13）：在 T1.4 编辑器上扩展格式工具栏——字体族（SimSun/黑体/微软雅黑/楷体/仿宋/Times New Roman/Arial/Calibri/Cambria）、字号（8~72pt）、字体颜色（取色器）、超链接（插入/取消，window.prompt 输入 URL）；新增 TipTap 扩展 TextStyle/Color/FontFamily/Link + 自研 FontSize（textStyle 挂 font-size）
-  - 转换层补齐：jkToHtml 输出 font-family 的 span；htmlToJk 解析 span 内 color/font-size/font-family（单引号包裹多词字体名）
-  - 回归测试追加 2 条（T1.6 describe）：字体/颜色/字号/超链接「编辑→保存→再解析」稳定保留；与 T1.4 合计桌面 4/4、writer 13/13
-  - **暂缓（非 M1 阻塞，排入 T1.7/T1.8 或后续）**：样式面板（命名样式下拉）、图片插入（二进制落盘，依赖 T1.8 图片 media 补齐）、分页符/分节符按钮、页面设置面板、Word 级快捷键体系对标（目前 Ctrl+B/I/U/Z/Y 由 StarterKit 提供，删除线/字体快捷键待补）
+  - 完成（2026-10-13）：在 T1.4 编辑器上扩展格式工具栏——字体族（SimSun/黑体/微软雅黑/楷体/仿宋/Times New Roman/Arial/Calibri/Cambria）、字号（8~72pt）、字体颜色（取色器）、超链接（插入/取消，window.prompt 输入 URL）、**插入图片**（本地文件 → data URL → TipTap Image，保存时由 htmlToJk 落盘为 media）；新增 TipTap 扩展 TextStyle/Color/FontFamily/Link/Image + 自研 FontSize
+  - 转换层补齐：jkToHtml 输出 font-family 的 span + 图片 data URL；htmlToJk 解析 span 内 color/font-size/font-family，并把 `<img>` 的 data URL 解码为媒体字节登记 image 关系
+  - 数据层补齐图片二进制：JkDocument 新增 `media` 载体；parser 从 zip 取出图片字节回填 `media`，exporter 把 `media` 写入 `word/media/*` 并建立 image 关系；writer 新增图片 round-trip 测试（导出包含 media、再解析字节一致）
+  - 回归测试追加 2 条（T1.6 describe）：字体/颜色/字号/超链接「编辑→保存→再解析」稳定保留；与 T1.4 合计桌面 4/4、writer 15/15（含图片测试）
+  - **暂缓（非 M1 阻塞，排入后续）**：样式面板（命名样式下拉）、分页符/分节符按钮、页面设置面板、Word 级快捷键体系对标（目前 Ctrl+B/I/U/Z/Y 由 StarterKit 提供，删除线/字体快捷键待补）
 - [ ] **T1.7** 高级特性：目录自动生成、批注、查找替换、拼写检查
   - **状态：暂缓**（2026-10-13 决策）
   - 查找替换：官方 `@tiptap/extension-find-and-replace` 仅发布 v3（全量 3.29~3.31），与当前 TipTap v2.27 主栈不兼容；升级到 v3 属破坏性迁移（命令/API 变更），风险高，不在本阶段做；待 Phase 1 稳定后单独评估 v3 升级或自研 ProseMirror 查找高亮插件
   - 目录自动生成 / 批注 / 拼写检查：依赖样式系统与编辑器内部状态，延后到编辑器成熟后
 - [ ] **T1.8** **Phase 验收**：10 份真实 docx「打开 → 编辑 → 保存」round-trip，格式无可见丢失；导出 PDF 正常
-  - **进度（2026-10-13）**：数据侧验收基线已落地——新增 `packages/writer/test/acceptance.test.ts`（合成富文档：标题/混排 rPr/有序无序列表/表格/超链接 → exportDocx → parseDocx，断言结构+字符属性不丢）；writer 测试 14/14 绿
-  - **待补**：① 10 份「真实」Word/WPS 产出的 .docx（沙箱无 Word，需在真实机器用 jareking 打开-编辑-保存人工核验）；② 导出 PDF（属 Phase 5，T1.8 的 PDF 项随 Phase 5 推进）
+  - **进度（2026-10-13）**：
+    - 数据侧验收基线已落地——`packages/writer/test/acceptance.test.ts`（合成富文档：标题/混排 rPr/有序无序列表/表格/超链接/图片 → exportDocx → parseDocx，断言结构+字符属性+图片字节不丢）；writer 测试 15/15 绿
+    - 真实机器验收工具已就位——`scripts/verify-docx-roundtrip.mjs`：对目录下（或单个）.docx 执行 parse→export→reparse，报告结构计数/图片关系/保真等级；已在 sample.docx 验证通过（10 段/1 表/0 降级，结构一致）。需先 `pnpm --filter @jareking/writer build`
+  - **待补**：① 10 份「真实」Word/WPS 产出的 .docx 在真实机器跑 verify-docx-roundtrip 人工核验（沙箱无 Word）；② 导出 PDF（属 Phase 5，T1.8 的 PDF 项随 Phase 5 推进）
 
 ## Phase 2 — Sheet 核心
 

@@ -243,6 +243,32 @@ async function parseRelationships(zip: Zip, path: string): Promise<Relationship[
   }));
 }
 
+/**
+ * 提取图片二进制到 media 映射（键为 rId）。
+ * relationship.target 形如 "media/image1.png"，相对 word/ 目录解析。
+ */
+async function parseMedia(zip: Zip, rels: Relationship[]): Promise<Record<string, Uint8Array>> {
+  const media: Record<string, Uint8Array> = {};
+  for (const rel of rels) {
+    if (rel.type !== 'image') continue;
+    const target = rel.target ?? '';
+    if (!target) continue;
+    // 相对 document.xml.rels 所在目录（word/_rels）→ 实际包内路径
+    const fullPath = target.startsWith('/')
+      ? target.slice(1)
+      : `word/${target}`;
+    try {
+      const file = zip.file(fullPath);
+      if (!file) continue;
+      const bytes = await file.async('uint8array');
+      media[rel.id] = bytes;
+    } catch {
+      // 媒体缺失：忽略，导出时该图片占位会被跳过
+    }
+  }
+  return media;
+}
+
 /* =========================================================================
  * 4. 样式系统（styles.xml）
  * ========================================================================= */
@@ -800,11 +826,12 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   const documentNode = docObj.document ?? {};
   const bodyNode = documentNode.body ?? {};
 
-  const [rels, styleDefs, numberingDefs, settings] = await Promise.all([
-    parseRelationships(zip, 'word/_rels/document.xml.rels'),
+  const rels = await parseRelationships(zip, 'word/_rels/document.xml.rels');
+  const [styleDefs, numberingDefs, settings, media] = await Promise.all([
     parseStyles(zip),
     parseNumbering(zip),
     parseSettings(zip),
+    parseMedia(zip, rels),
   ]);
 
   const unsupported: UnsupportedFeature[] = [];
@@ -825,6 +852,7 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
     numberingDefs,
     settings,
     relationships: rels,
+    media,
     fidelity,
   };
 

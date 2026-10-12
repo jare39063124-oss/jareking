@@ -9,6 +9,6 @@
  *   - T1.5 导出器：JkDocument → docx（OOXML 序列化）
  */
 
-export * from './model';
+export * from './model/index.js';
 export * from './parser/docxParser.js';
 export * from './exporter/index.js';

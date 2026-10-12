@@ -22,6 +22,7 @@ import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
+import Image from '@tiptap/extension-image';
 import { exportDocx, parseDocx } from '@jareking/writer';
 import {
   Bold,
@@ -32,6 +33,7 @@ import {
   Heading3,
   Italic,
   Link as LinkIcon,
+  Image as ImageIcon,
   List,
   ListOrdered,
   Redo2,
@@ -121,6 +123,7 @@ export function WriterEditor() {
       TableRow,
       TableHeader,
       TableCell,
+      Image,
     ],
     content: '',
     editorProps: {
@@ -238,6 +241,28 @@ export function WriterEditor() {
       .run();
   };
 
+  /** 插入图片：选择本地文件 → 读为 data URL → TipTap Image（保存时由 htmlToJk 落盘为 media） */
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const onInsertImage = () => imageInputRef.current?.click();
+
+  const onImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !editor) return;
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      editor.chain().focus().setImage({ src: dataUrl }).run();
+      toast.success(`已插入图片 ${file.name}`);
+    } catch {
+      toast.warning('图片插入失败');
+    }
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 工具栏 */}
@@ -298,6 +323,12 @@ export function WriterEditor() {
           active={editor?.isActive('link')}
           disabled={!canFormat}
           onClick={onLink}
+        />
+        <ToolBtn
+          icon={<ImageIcon size={15} />}
+          label="插入图片"
+          disabled={!canFormat}
+          onClick={onInsertImage}
         />
 
         <span className="mx-1 h-5 w-px bg-border" />
@@ -458,6 +489,13 @@ export function WriterEditor() {
         accept=".docx"
         className="hidden"
         onChange={onFileChange}
+      />
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={onImageChange}
       />
     </div>
   );

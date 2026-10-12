@@ -4,5 +4,5 @@
  * 供 T1.2 解析器、T1.3 渲染器、T1.4 编辑器、T1.5 导出器消费。
  */
 
-export * from './document';
-export * from './fidelity';
+export * from './document.js';
+export * from './fidelity.js';
