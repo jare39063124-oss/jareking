@@ -1,0 +1,25 @@
+{
+  "name": "@jareking/writer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "jareking Writer 文档内容模型（OOXML WordprocessingML 接口契约，框架无关）",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jareking/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
