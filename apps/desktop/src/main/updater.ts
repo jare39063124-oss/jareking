@@ -37,3 +37,21 @@ export function initAutoUpdater(): void {
     console.error('[updater] checkForUpdatesAndNotify 调用异常:', error);
   });
 }
+
+/**
+ * 手动触发一次更新检查（由渲染进程「检查更新」入口经 IPC 调用）。
+ * 开发模式或未打包时直接返回，不发起请求。
+ */
+export async function checkForUpdates(): Promise<boolean> {
+  if (!app.isPackaged) {
+    console.log('[updater] 开发模式跳过更新检查');
+    return false;
+  }
+  try {
+    await autoUpdater.checkForUpdatesAndNotify();
+    return true;
+  } catch (error: unknown) {
+    console.error('[updater] 手动更新检查失败:', error);
+    return false;
+  }
+}

@@ -182,6 +182,24 @@ export class Database {
     return value === null || value === undefined ? 0 : Number(value);
   }
 
+  /** 读取键值设置；不存在返回 null */
+  getSetting(key: string): string | null {
+    const rows = this.all<Row>('SELECT value FROM settings WHERE key = ?', [key]);
+    return rows[0] ? String(rows[0]['value']) : null;
+  }
+
+  /** 写入键值设置（不存在则插入，存在则覆盖），并在事务内落盘 */
+  setSetting(key: string, value: string): void {
+    this.transaction(() => {
+      this.exec(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        [key, value],
+      );
+    });
+    this.save();
+  }
+
   private assertOpen(): void {
     if (this.closed) {
       throw new Error('数据库已关闭，不能继续操作');

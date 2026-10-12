@@ -82,4 +82,12 @@ describe('Database', () => {
     // close 幂等
     expect(() => ctx.db.close()).not.toThrow();
   });
+
+  it('getSetting / setSetting 读写与覆盖', () => {
+    expect(ctx.db.getSetting('theme')).toBeNull();
+    ctx.db.setSetting('theme', 'dark');
+    expect(ctx.db.getSetting('theme')).toBe('dark');
+    ctx.db.setSetting('theme', 'light');
+    expect(ctx.db.getSetting('theme')).toBe('light');
+  });
 });
