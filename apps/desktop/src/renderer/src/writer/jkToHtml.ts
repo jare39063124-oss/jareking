@@ -96,10 +96,12 @@ function isOrderedList(doc: JkDocument, numId: string): boolean {
   return lvl.format !== 'bullet';
 }
 
-/** 把 rPr 格式化为嵌套的 HTML 标签（粗/斜/下划/删除线/颜色/字号） */
+/** 把 rPr 格式化为嵌套的 HTML 标签（粗/斜/下划/删除线/颜色/字号/字体族） */
 function wrapFormat(text: string, rPr?: RunProperties): string {
   if (!rPr) return text;
   let out = text;
+  const fam = rPr.font?.eastAsia || rPr.font?.ascii || rPr.font?.hAnsi || rPr.font?.cs;
+  if (fam) out = `<span style="font-family:'${fam.replace(/'/g, '')}'">${out}</span>`;
   if (rPr.color) out = `<span style="color:${colorToCss(rPr.color)}">${out}</span>`;
   if (rPr.size !== undefined) out = `<span style="font-size:${halfPointToPt(rPr.size)}">${out}</span>`;
   if (rPr.bold) out = `<strong>${out}</strong>`;

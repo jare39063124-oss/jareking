@@ -117,6 +117,12 @@ function deriveRPr(tag: string, el: Element, parent: RunProperties): RunProperti
       if (cm) rPr.color = normalizeColor(cm[1]);
       const sm = /(?:^|;)\s*font-size:\s*([\d.]+)\s*(pt|px)/.exec(style);
       if (sm) rPr.size = fontSizeToHalfPoint(parseFloat(sm[1]), sm[2]);
+      // 字体族：单引号包裹，可能含空格（如 'Microsoft YaHei'）
+      const fm = /(?:^|;)\s*font-family:\s*'?"?([^'";]+)'?"?/.exec(style);
+      if (fm) {
+        const fam = fm[1].trim();
+        rPr.font = { ascii: fam, eastAsia: fam, hAnsi: fam };
+      }
       break;
     }
     default:

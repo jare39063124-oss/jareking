@@ -13,6 +13,10 @@ import { useEffect, useRef } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
+import TextStyle from '@tiptap/extension-text-style';
+import Color from '@tiptap/extension-color';
+import FontFamily from '@tiptap/extension-font-family';
+import Link from '@tiptap/extension-link';
 import TextAlign from '@tiptap/extension-text-align';
 import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
@@ -27,6 +31,7 @@ import {
   Heading2,
   Heading3,
   Italic,
+  Link as LinkIcon,
   List,
   ListOrdered,
   Redo2,
@@ -45,6 +50,23 @@ import { IconButton } from '../components/IconButton';
 import { toast } from '../stores/toastStore';
 import { htmlToJk } from './htmlToJk';
 import { jkToHtml } from './jkToHtml';
+import { FontSize } from './fontSize';
+
+/** 常用字体（中文办公场景），FontFamily 扩展按名应用 */
+const FONT_FAMILIES = [
+  '宋体',
+  '黑体',
+  '微软雅黑',
+  '楷体',
+  '仿宋',
+  'Times New Roman',
+  'Arial',
+  'Calibri',
+  'Cambria',
+];
+
+/** 常用字号（磅），字号下拉选项 */
+const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72];
 
 /** 内置示例文档（位于 public/，Vite 自动复制到 out/renderer，运行时经 BASE_URL 引用） */
 const sampleDocxUrl = `${import.meta.env.BASE_URL}sample.docx`;
@@ -85,6 +107,15 @@ export function WriterEditor() {
         strike: true,
       }),
       Underline,
+      TextStyle,
+      Color,
+      FontFamily,
+      FontSize,
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+        HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
+      }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Table.configure({ resizable: true }),
       TableRow,
@@ -168,10 +199,109 @@ export function WriterEditor() {
 
   const canFormat = !!editor;
 
+  /** 字体族下拉：应用到当前选区 */
+  const onFontFamily = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const fam = e.target.value;
+    if (!fam || !editor) return;
+    editor.chain().focus().setFontFamily(fam).run();
+  };
+
+  /** 字号下拉：应用到当前选区（单位 pt） */
+  const onFontSize = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const sz = e.target.value;
+    if (!sz || !editor) return;
+    editor.chain().focus().setFontSize(`${sz}pt`).run();
+  };
+
+  /** 字体颜色：取色器变更即应用到当前选区 */
+  const onColor = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const color = e.target.value;
+    if (!color || !editor) return;
+    editor.chain().focus().setColor(color).run();
+  };
+
+  /** 插入/编辑超链接：弹窗输入 URL，空则移除链接 */
+  const onLink = () => {
+    if (!editor) return;
+    const prev = editor.getAttributes('link').href as string | undefined;
+    const url = window.prompt('输入链接地址（留空取消链接）：', prev ?? 'https://');
+    if (url === null) return; // 取消
+    if (url.trim() === '') {
+      editor.chain().focus().extendMarkRange('link').unsetLink().run();
+      return;
+    }
+    editor
+      .chain()
+      .focus()
+      .extendMarkRange('link')
+      .setLink({ href: url.trim() })
+      .run();
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 工具栏 */}
       <div className="flex h-10 shrink-0 flex-wrap items-center gap-0.5 border-b border-border bg-surface px-2">
+        {/* 字体族 / 字号 */}
+        <select
+          className="h-7 rounded border border-border bg-surface px-1 text-xs text-text outline-none disabled:opacity-50"
+          value={editor?.getAttributes('textStyle').fontFamily ?? ''}
+          disabled={!canFormat}
+          onChange={onFontFamily}
+          title="字体"
+        >
+          <option value="">字体</option>
+          {FONT_FAMILIES.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+        <select
+          className="h-7 w-14 rounded border border-border bg-surface px-1 text-xs text-text outline-none disabled:opacity-50"
+          value={editor?.getAttributes('textStyle').fontSize?.replace('pt', '') ?? ''}
+          disabled={!canFormat}
+          onChange={onFontSize}
+          title="字号"
+        >
+          <option value="">字号</option>
+          {FONT_SIZES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+
+        {/* 字体颜色 */}
+        <label
+          className="relative flex h-7 w-7 cursor-pointer items-center justify-center rounded border border-border disabled:opacity-50"
+          title="字体颜色"
+        >
+          <span
+            className="h-3.5 w-3.5 rounded-sm border border-border"
+            style={{
+              backgroundColor:
+                (editor?.getAttributes('textStyle').color as string) || '#000000',
+            }}
+          />
+          <input
+            type="color"
+            className="absolute inset-0 cursor-pointer opacity-0"
+            disabled={!canFormat}
+            onChange={onColor}
+          />
+        </label>
+
+        <ToolBtn
+          icon={<LinkIcon size={15} />}
+          label="超链接"
+          active={editor?.isActive('link')}
+          disabled={!canFormat}
+          onClick={onLink}
+        />
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
         <ToolBtn
           icon={<Bold size={15} />}
           label="加粗"
