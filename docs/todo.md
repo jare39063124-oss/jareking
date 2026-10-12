@@ -48,6 +48,7 @@
   - 完成（2026-10-13）：单实例锁 collect 命令行文件路径 + 聚焦；`updater.ts` 封装 electron-updater（仅 packaged 模式 checkForUpdatesAndNotify）；preload 扩展 invoke + IPC 通道常量；`electron-builder.yml`（nsis 可改路径 + 4 类文件关联）；typecheck/build 通过
   - 注意：`electron-updater` 是 CJS 包，ESM 主进程必须 `import electronUpdater from 'electron-updater'` 默认导入 + 解构，具名导入运行时失败
 - [ ] **T0.6** CI：GitHub Actions，Push 即构建 Windows 安装包（x64）并上传 Artifact
+  - **状态：暂缓**（需推送至 GitHub 仓库；GitHub 用户名 jareking 被占，待 T0.0 选定的 jareking-app 组织就绪后接入；不影响本地开发闭环，排入 M3 上云前）
 
 ## Phase 1 — Writer 核心
 
