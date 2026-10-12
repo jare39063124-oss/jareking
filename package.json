@@ -1,0 +1,23 @@
+{
+  "name": "jareking",
+  "version": "0.1.0",
+  "private": true,
+  "description": "jareking — WPS 平替办公套件（Writer/Sheet/Presentation/PDF + AI 助手），Windows 桌面端",
+  "packageManager": "pnpm@12.11.2",
+  "scripts": {
+    "dev": "pnpm --filter @jareking/core build && pnpm --filter @jareking/ai build && pnpm --filter @jareking/desktop dev",
+    "build": "pnpm --filter @jareking/desktop... build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,css}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-builder"
+    ]
+  }
+}

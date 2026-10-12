@@ -1,0 +1,7 @@
+{
+  "name": "@jareking/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "云端服务（v1 预留，不部署）：积分流水 / 账户 / 云同步 / 原生支付",
+  "scripts": {}
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@jareking/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "sql.js": "^1.14.2",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/sql.js": "^1.4.9",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.4"
+  }
+}

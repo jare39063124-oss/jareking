@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+/* jareking 设计令牌（T0.3 设计系统以此为基线扩展） */
+:root {
+  --jk-bg: #f5f6f8;
+  --jk-fg: #1f2329;
+  --jk-accent: #155eef;
+  --jk-border: #dee0e3;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --jk-bg: #1f2329;
+  --jk-fg: #e5e6eb;
+  --jk-accent: #4c88ff;
+  --jk-border: #3f444d;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--jk-bg);
+  color: var(--jk-fg);
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  overflow: hidden;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+}
