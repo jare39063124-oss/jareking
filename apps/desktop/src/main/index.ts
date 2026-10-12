@@ -1,10 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
+// 注意：__dirname 由 electron-vite 在打包时注入（ESM 环境下可用），无需手动声明
 const isDev = !app.isPackaged;
 
 let mainWindow: BrowserWindow | null = null;

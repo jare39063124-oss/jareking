@@ -13,7 +13,7 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@jareking/core": ["../core/src/index.ts"]
+      "@jareking/core": ["../core/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*"],

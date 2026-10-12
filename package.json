@@ -7,17 +7,11 @@
   "scripts": {
     "dev": "pnpm --filter @jareking/core build && pnpm --filter @jareking/ai build && pnpm --filter @jareking/desktop dev",
     "build": "pnpm --filter @jareking/desktop... build",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @jareking/core build && pnpm -r typecheck",
     "test": "pnpm -r test",
     "format": "prettier --write \"**/*.{ts,tsx,json,md,css}\""
   },
   "devDependencies": {
     "prettier": "^3.9.10"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "electron-builder"
-    ]
   }
 }
