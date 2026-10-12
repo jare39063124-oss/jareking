@@ -4,6 +4,7 @@ import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
 import { toast } from '../stores/toastStore';
+import { WriterEditor } from '../writer/WriterEditor';
 
 /** 云文件占位数据（右侧树） */
 const CLOUD_FILES: TreeNode[] = [
@@ -132,7 +133,7 @@ function ModulePlaceholder({ module }: { module: DocModule }) {
 function renderCanvas(module: DocModule) {
   switch (module) {
     case 'writer':
-      return <WriterCanvas />;
+      return <WriterEditor />;
     case 'sheet':
       return <SheetCanvas />;
     case 'slide':
@@ -140,19 +141,6 @@ function renderCanvas(module: DocModule) {
     case 'pdf':
       return <PdfCanvas />;
   }
-}
-
-/** Writer 占位画布：纸张 + 文本行 */
-function WriterCanvas() {
-  return (
-    <div className="flex w-[560px] flex-col gap-3 rounded-sm bg-surface p-12 shadow-card">
-      <span className="text-tiny text-muted">Writer 编辑区（占位）</span>
-      <div className="h-5 w-2/5 rounded-sm bg-hover" />
-      {[100, 96, 88, 100, 72, 100, 60].map((width, index) => (
-        <div key={index} className="h-2.5 rounded-full bg-muted-bg" style={{ width: `${width}%` }} />
-      ))}
-    </div>
-  );
 }
 
 /** Sheet 占位画布：迷你网格 */

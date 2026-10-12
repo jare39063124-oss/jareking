@@ -1,0 +1,334 @@
+/**
+ * WriterEditor —— 真实可编辑的 TipTap 文档编辑器（T1.4）。
+ *
+ * 职责：
+ *  - 首次加载：fetch 内置 sample.docx → parseDocx → jkToHtml → setContent
+ *  - 打开文件：<input type=file accept=.docx> → parseDocx → setContent
+ *  - 保存到文件：getHTML → htmlToJk → exportDocx → Blob 下载
+ *  - 工具栏：加粗/斜体/下划线/删除线、H1~H3、对齐、有序/无序列表、插入表格、撤销/重做、打开、保存
+ *  - 健壮性：所有解析/导出用 try/catch + toast，失败不白屏
+ */
+
+import { useEffect, useRef } from 'react';
+import { EditorContent, useEditor } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import Underline from '@tiptap/extension-underline';
+import TextAlign from '@tiptap/extension-text-align';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableHeader from '@tiptap/extension-table-header';
+import TableCell from '@tiptap/extension-table-cell';
+import { exportDocx, parseDocx } from '@jareking/writer';
+import {
+  Bold,
+  Download,
+  FolderOpen,
+  Heading1,
+  Heading2,
+  Heading3,
+  Italic,
+  List,
+  ListOrdered,
+  Redo2,
+  Strikethrough,
+  Table as TableIcon,
+  TextAlignCenter,
+  TextAlignEnd,
+  TextAlignJustify,
+  TextAlignStart,
+  Underline as UnderlineIcon,
+  Undo2,
+} from 'lucide-react';
+
+import { Button } from '../components/Button';
+import { IconButton } from '../components/IconButton';
+import { toast } from '../stores/toastStore';
+import { htmlToJk } from './htmlToJk';
+import { jkToHtml } from './jkToHtml';
+
+/** 内置示例文档（位于 public/，Vite 自动复制到 out/renderer，运行时经 BASE_URL 引用） */
+const sampleDocxUrl = `${import.meta.env.BASE_URL}sample.docx`;
+
+/** 工具栏按钮：图标 + 激活态高亮 + 点击命令 */
+function ToolBtn({
+  icon,
+  label,
+  active,
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <IconButton
+      label={label}
+      icon={icon}
+      disabled={disabled}
+      onClick={onClick}
+      className={active ? '!bg-accent/15 !text-accent' : undefined}
+    />
+  );
+}
+
+export function WriterEditor() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions: [
+      StarterKit.configure({
+        // 默认 history 提供撤销/重做；保留 strike
+        strike: true,
+      }),
+      Underline,
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableHeader,
+      TableCell,
+    ],
+    content: '',
+    editorProps: {
+      attributes: { class: 'jk-prose focus:outline-none' },
+    },
+  });
+
+  // 首次加载示例文档
+  useEffect(() => {
+    if (!editor) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(sampleDocxUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = new Uint8Array(await res.arrayBuffer());
+        const jk = await parseDocx(buf);
+        if (cancelled) return;
+        editor.commands.setContent(jkToHtml(jk));
+      } catch {
+        if (!cancelled) toast.warning('示例文档加载失败，已创建空白文档');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editor]);
+
+  // 卸载时销毁编辑器
+  useEffect(() => {
+    return () => {
+      editor?.destroy();
+    };
+  }, [editor]);
+
+  const onOpenFile = () => fileInputRef.current?.click();
+
+  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 允许重复选择同一文件
+    if (!file || !editor) return;
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const jk = await parseDocx(buf);
+      editor.commands.setContent(jkToHtml(jk));
+      toast.success(`已打开 ${file.name}`);
+    } catch {
+      toast.warning('打开失败：文件可能不是有效的 .docx');
+    }
+  };
+
+  const onSave = async () => {
+    if (!editor) return;
+    try {
+      const html = editor.getHTML();
+      const jk = htmlToJk(html);
+      const buf = await exportDocx(jk);
+      const blob = new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '导出.docx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('已导出「导出.docx」');
+    } catch {
+      toast.warning('导出失败：文档包含暂不支持的内容');
+    }
+  };
+
+  const canFormat = !!editor;
+
+  return (
+    <div className="flex h-full w-full min-h-0 flex-col">
+      {/* 工具栏 */}
+      <div className="flex h-10 shrink-0 flex-wrap items-center gap-0.5 border-b border-border bg-surface px-2">
+        <ToolBtn
+          icon={<Bold size={15} />}
+          label="加粗"
+          active={editor?.isActive('bold')}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleBold().run()}
+        />
+        <ToolBtn
+          icon={<Italic size={15} />}
+          label="斜体"
+          active={editor?.isActive('italic')}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleItalic().run()}
+        />
+        <ToolBtn
+          icon={<UnderlineIcon size={15} />}
+          label="下划线"
+          active={editor?.isActive('underline')}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleUnderline().run()}
+        />
+        <ToolBtn
+          icon={<Strikethrough size={15} />}
+          label="删除线"
+          active={editor?.isActive('strike')}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleStrike().run()}
+        />
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
+        <ToolBtn
+          icon={<Heading1 size={15} />}
+          label="标题 1"
+          active={editor?.isActive('heading', { level: 1 })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
+        />
+        <ToolBtn
+          icon={<Heading2 size={15} />}
+          label="标题 2"
+          active={editor?.isActive('heading', { level: 2 })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
+        />
+        <ToolBtn
+          icon={<Heading3 size={15} />}
+          label="标题 3"
+          active={editor?.isActive('heading', { level: 3 })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleHeading({ level: 3 }).run()}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().setParagraph().run()}
+        >
+          正文
+        </Button>
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
+        <ToolBtn
+          icon={<TextAlignStart size={15} />}
+          label="左对齐"
+          active={editor?.isActive({ textAlign: 'left' })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().setTextAlign('left').run()}
+        />
+        <ToolBtn
+          icon={<TextAlignCenter size={15} />}
+          label="居中"
+          active={editor?.isActive({ textAlign: 'center' })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().setTextAlign('center').run()}
+        />
+        <ToolBtn
+          icon={<TextAlignEnd size={15} />}
+          label="右对齐"
+          active={editor?.isActive({ textAlign: 'right' })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().setTextAlign('right').run()}
+        />
+        <ToolBtn
+          icon={<TextAlignJustify size={15} />}
+          label="两端对齐"
+          active={editor?.isActive({ textAlign: 'justify' })}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().setTextAlign('justify').run()}
+        />
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
+        <ToolBtn
+          icon={<List size={15} />}
+          label="无序列表"
+          active={editor?.isActive('bulletList')}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleBulletList().run()}
+        />
+        <ToolBtn
+          icon={<ListOrdered size={15} />}
+          label="有序列表"
+          active={editor?.isActive('orderedList')}
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+        />
+        <ToolBtn
+          icon={<TableIcon size={15} />}
+          label="插入表格"
+          disabled={!canFormat}
+          onClick={() =>
+            editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+          }
+        />
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
+        <ToolBtn
+          icon={<Undo2 size={15} />}
+          label="撤销"
+          disabled={!canFormat || !editor?.can().undo()}
+          onClick={() => editor?.chain().focus().undo().run()}
+        />
+        <ToolBtn
+          icon={<Redo2 size={15} />}
+          label="重做"
+          disabled={!canFormat || !editor?.can().redo()}
+          onClick={() => editor?.chain().focus().redo().run()}
+        />
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
+        <Button variant="secondary" size="sm" icon={<FolderOpen size={13} />} onClick={onOpenFile}>
+          打开
+        </Button>
+        <Button variant="primary" size="sm" icon={<Download size={13} />} onClick={onSave}>
+          保存
+        </Button>
+      </div>
+
+      {/* 纸张区 */}
+      <div className="min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-8">
+        <div className="mx-auto my-0 w-[794px] min-h-[1123px] rounded-sm bg-surface px-16 py-16 shadow-card">
+          <EditorContent editor={editor} />
+        </div>
+      </div>
+
+      {/* 隐藏的文件选择器 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".docx"
+        className="hidden"
+        onChange={onFileChange}
+      />
+    </div>
+  );
+}

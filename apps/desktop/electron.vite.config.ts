@@ -17,5 +17,7 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src'),
       },
     },
+    // 把 .docx 等纳入静态资源，支持 `import x from '...docx?url'`
+    assetsInclude: ['**/*.docx'],
   },
 });

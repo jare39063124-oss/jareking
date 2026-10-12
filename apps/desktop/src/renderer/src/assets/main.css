@@ -194,3 +194,108 @@
     background: transparent;
   }
 }
+
+/* ============================================================
+ * Writer / TipTap 编辑器排版（T1.4）
+ * 渲染进程打包（bundler 模式），普通 CSS 即可覆盖 ProseMirror 默认样式。
+ * ============================================================ */
+.jk-prose,
+.ProseMirror {
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--jk-fg);
+  outline: none;
+  word-break: break-word;
+}
+
+.ProseMirror:focus {
+  outline: none;
+}
+
+.ProseMirror h1 {
+  font-size: 1.8em;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.ProseMirror h2 {
+  font-size: 1.5em;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.ProseMirror h3 {
+  font-size: 1.25em;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.ProseMirror h4 {
+  font-size: 1.1em;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.ProseMirror h5 {
+  font-size: 1em;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.ProseMirror h6 {
+  font-size: 0.95em;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.ProseMirror p {
+  margin: 0.5em 0;
+}
+.ProseMirror ul,
+.ProseMirror ol {
+  padding-left: 1.6em;
+  margin: 0.5em 0;
+}
+.ProseMirror li {
+  margin: 0.2em 0;
+}
+.ProseMirror a {
+  color: var(--jk-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.ProseMirror table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  width: 100%;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.ProseMirror table,
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid #ccc;
+}
+.ProseMirror th,
+.ProseMirror td {
+  padding: 4px 8px;
+  vertical-align: top;
+  position: relative;
+  min-width: 1em;
+}
+.ProseMirror th {
+  background: var(--jk-muted-bg);
+  font-weight: 600;
+}
+.ProseMirror .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(21, 94, 239, 0.12);
+  pointer-events: none;
+}
+.ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--jk-accent);
+  pointer-events: none;
+}

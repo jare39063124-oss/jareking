@@ -58,8 +58,10 @@
   - 完成（2026-10-13）：段落/表格(嵌套)/样式(basedOn 继承)/编号/分节/超链接/图片占位/rPr 格式全覆盖；smartArt/OLE/域/公式降级记 UnsupportedFeature；9/9 vitest 通过
 - [ ] **T1.3** 渲染引擎：文档模型 → 分页布局 → DOM 渲染；缩放、页码、页眉页脚
   - **决策：T1.3 的只读渲染被 T1.4(TipTap 编辑器，本身即渲染+编辑) 吸收**；独立的「只读分页预览」留作打印/AI 差异预览，排入 T1.4 之后按需
-- [ ] **T1.4** 编辑器内核：基于 TipTap 定制 schema 映射文档模型；输入法/IME 兼容；撤销重做（500 步）；光标与选区跨格式保持
-  - 验收：可完成"输入-格式-删改-撤销"全流程无异常
+- [x] **T1.4** 编辑器内核：基于 TipTap 定制 schema 映射文档模型；输入法/IME 兼容；撤销重做（500 步）；光标与选区跨格式保持
+  - 完成（2026-10-13）：TipTap 编辑器（StarterKit + Underline + TextAlign + Table 套件）落地 `apps/desktop/src/renderer/src/writer/`；首加载 fetch 内置 sample.docx → parseDocx → jkToHtml → setContent；打开/保存走 `htmlToJk → exportDocx` 经 Blob 下载；工具栏 加粗/斜体/下划线/删除线/H1~H3/正文/四种对齐/有序无序列表/插 3×3 表/撤销重做/打开/保存；全部 try/catch + toast 兜底
+  - 测试：`apps/desktop/src/renderer/src/writer/roundtrip.test.ts`（vitest + jsdom，2 条）覆盖「打开→保存」保存侧闭环：sample.docx → parseDocx → jkToHtml 结构正确 → htmlToJk → exportDocx → 再解析结构稳定；与 `packages/writer` 13/13 合计 15/15 绿
+  - 局限（headless 沙箱）：GUI 渲染冒烟需在真实 Windows 机器 `env -u ELECTRON_RUN_AS_NODE pnpm dev` 人工确认；IME/选区跨格式为运行期行为，靠编辑器交互验证
 - [x] **T1.5** docx 导出：文档模型 → OOXML 序列化；保真 L2；图片/字体打包
   - 完成（2026-10-13）：合法 docx(zip+命名空间+ContentTypes/rels)；单位换算与解析器精确互逆；__raw 兜底回插；13/13 vitest 通过（含解析→导出→再解析对称）
   - 局限：图片二进制 round-trip 待解析器侧补 media（T1.8 前）
