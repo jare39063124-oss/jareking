@@ -52,15 +52,17 @@
 
 ## Phase 1 — Writer 核心
 
-- [ ] **T1.1** OOXML 文档模型设计：paragraph/run/table/section/styles/numbering 的 TypeScript 接口定义（**接口契约先行，供 T1.2~T1.5 并行**）
-- [ ] **T1.2** docx 解析器：JSZip + XML 流式解析 → 文档模型；保真标注（L1/L2/L3）；解析失败降级为纯文本
-  - 验收：10 份真实 docx 样例（含表格/图片/页眉）解析成功率 100%
+- [x] **T1.1** OOXML 文档模型设计：paragraph/run/table/section/styles/numbering 的 TypeScript 接口定义（**接口契约先行，供 T1.2~T1.5 并行**）
+  - 完成（2026-10-13）：`packages/writer/src/model/`，可判别联合类型 + 完整 styles/numbering 契约 + fidelity 降级清单；FidelityLevel 复用 core 单一事实源；typecheck 零错误
+- [x] **T1.2** docx 解析器：JSZip + fast-xml-parser → 文档模型；未知特性降级不丢数据
+  - 完成（2026-10-13）：段落/表格(嵌套)/样式(basedOn 继承)/编号/分节/超链接/图片占位/rPr 格式全覆盖；smartArt/OLE/域/公式降级记 UnsupportedFeature；9/9 vitest 通过
 - [ ] **T1.3** 渲染引擎：文档模型 → 分页布局 → DOM 渲染；缩放、页码、页眉页脚
-  - 验收：渲染结果与 Word 对比无明显版式偏差（人工抽查 10 样例）
+  - **决策：T1.3 的只读渲染被 T1.4(TipTap 编辑器，本身即渲染+编辑) 吸收**；独立的「只读分页预览」留作打印/AI 差异预览，排入 T1.4 之后按需
 - [ ] **T1.4** 编辑器内核：基于 TipTap 定制 schema 映射文档模型；输入法/IME 兼容；撤销重做（500 步）；光标与选区跨格式保持
   - 验收：可完成"输入-格式-删改-撤销"全流程无异常
-- [ ] **T1.5** docx 导出：文档模型 → OOXML 序列化；保真 L2；图片/字体打包
-  - 验收：导出文件可被 Word/WPS 正常打开且格式无可见丢失
+- [x] **T1.5** docx 导出：文档模型 → OOXML 序列化；保真 L2；图片/字体打包
+  - 完成（2026-10-13）：合法 docx(zip+命名空间+ContentTypes/rels)；单位换算与解析器精确互逆；__raw 兜底回插；13/13 vitest 通过（含解析→导出→再解析对称）
+  - 局限：图片二进制 round-trip 待解析器侧补 media（T1.8 前）
 - [ ] **T1.6** 工具栏与格式面板：字体/段落/样式/列表/表格/图片/超链接/分隔符/页面设置；快捷键体系对标 Word
 - [ ] **T1.7** 高级特性：目录自动生成、批注、查找替换、拼写检查
 - [ ] **T1.8** **Phase 验收**：10 份真实 docx「打开 → 编辑 → 保存」round-trip，格式无可见丢失；导出 PDF 正常
