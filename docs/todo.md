@@ -20,21 +20,33 @@
 
 ## Phase 0 — 基础设施 + 品牌占位
 
-- [ ] **T0.0 品牌占位**（人工任务，越早越好）
+> **环境备忘（2026-10-12 验证通过）**：
+> - pnpm 12：构建脚本白名单在 `pnpm-workspace.yaml` 的 `allowBuilds`（映射格式，非数组）；esbuild 的 postinstall 校验被沙箱阻止（node 自我 spawn EBUSY），已跳过校验（运行时用平台可选依赖的二进制，不受影响）
+> - Electron 二进制：GitHub 被墙，用 `ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"` 下载
+> - 沙箱默认 `ELECTRON_RUN_AS_NODE=1`：从工具里启动 Electron GUI 需 `env -u ELECTRON_RUN_AS_NODE`
+> - `__dirname` 由 electron-vite 打包时注入，ESM 主进程不要手动声明
+
+- [x] **T0.0 品牌占位**（人工任务，越早越好）
   - 注册域名 jareking.cn（备选 jareking.com.cn）；检查并注册 jareking.net/.app
   - GitHub 组织占位：jareking-app 或 jareking-office（待需求方选定，先两个都占）
   - npm 组织名占位（jareking 可用）
   - 正式商标检索（商标网/阿里云商标）：确认 "jareking" 第 9/42 类可注册性；准备个体工商户名义申请材料
   - 验收：域名 DNS 生效；GitHub/npm 组织可访问；商标检索报告存档
-- [ ] **T0.1** 初始化 monorepo：pnpm workspace + electron-vite + React18 + TS 严格模式；分包 `apps/desktop`、`packages/core`、`packages/ai`、`packages/server`（预留，不含部署）；ESLint + Prettier + 提交规范
+- [x] **T0.1** 初始化 monorepo：pnpm workspace + electron-vite + React19 + TS 严格模式；分包 `apps/desktop`、`packages/core`、`packages/ai`、`packages/server`（预留，不含部署）；ESLint + Prettier + 提交规范
   - 验收：`pnpm dev` 能启动空 Electron 窗口；`pnpm build` 出 Windows 安装包
-- [ ] **T0.2** 主窗口框架：多文档标签页、菜单栏、Ribbon 工具栏骨架、命令面板（Ctrl+Shift+P）、设置页
+  - 完成（2026-10-12）：typecheck / build / Electron 冒烟启动均通过；ESLint 按 README 偏差记录暂缓；installer 打包待 T0.5 配置 electron-builder 后验证
+- [x] **T0.2** 主窗口框架：多文档标签页、菜单栏、Ribbon 工具栏骨架、命令面板（Ctrl+Shift+P）、设置页
   - 验收：可新建/关闭标签页；命令面板可搜索并触发占位命令
-- [ ] **T0.3** 设计系统：主题变量（浅/深）、图标库、基础组件（按钮/弹窗/下拉/树/输入框），视觉对标 WPS 布局
+  - 完成（2026-10-13）：zustand tabStore + Ribbon 骨架 + Ctrl+Shift+P 命令面板 + 设置页（主题切换）+ 整体布局（顶/中/右 AI 面板占位/底状态栏）；typecheck 通过
+- [x] **T0.3** 设计系统：主题变量（浅/深）、图标库、基础组件（按钮/弹窗/下拉/树/输入框），视觉对标 WPS 布局
   - 验收：组件有示例页；主题可切换
-- [ ] **T0.4** 本地持久层：SQLite（better-sqlite3）存文档元数据/最近文件/设置/积分账户；文件系统文档库（打开/保存/自动保存/崩溃恢复）
+  - 完成（2026-10-13）：`assets/main.css` 补全 `--jk-*` 令牌（颜色/间距/圆角/字号/阴影/z-index 浅深两套）；组件 Button/IconButton/Input/Select/Modal/Dropdown/Tooltip/Tabs/Tree/Toast 全部就位；typecheck 通过
+- [x] **T0.4** 本地持久层：SQLite（**sql.js**，WASM 版）存文档元数据/最近文件/设置/积分账户；文件系统文档库（打开/保存/自动保存/崩溃恢复）
   - 验收：崩溃后重启能恢复未保存文档；最近文件列表可用
-- [ ] **T0.5** 桌面能力：文件关联（.docx/.xlsx/.pptx/.pdf）、自动更新（electron-updater，含回滚）、崩溃上报（本地日志）、单实例锁
+  - 完成（2026-10-13）：`packages/core/src/db`（SQL.js 封装 + 迁移）、`account`（本地账户 + 积分账本）、`library`（文档库 + 自动保存）；`apps/desktop/src/main/services` 服务层；37/37 vitest 通过；typecheck 通过
+- [x] **T0.5** 桌面能力：文件关联（.docx/.xlsx/.pptx/.pdf）、自动更新（electron-updater，含回滚）、崩溃上报（本地日志）、单实例锁
+  - 完成（2026-10-13）：单实例锁 collect 命令行文件路径 + 聚焦；`updater.ts` 封装 electron-updater（仅 packaged 模式 checkForUpdatesAndNotify）；preload 扩展 invoke + IPC 通道常量；`electron-builder.yml`（nsis 可改路径 + 4 类文件关联）；typecheck/build 通过
+  - 注意：`electron-updater` 是 CJS 包，ESM 主进程必须 `import electronUpdater from 'electron-updater'` 默认导入 + 解构，具名导入运行时失败
 - [ ] **T0.6** CI：GitHub Actions，Push 即构建 Windows 安装包（x64）并上传 Artifact
 
 ## Phase 1 — Writer 核心

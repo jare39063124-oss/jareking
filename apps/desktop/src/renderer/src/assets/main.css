@@ -1,41 +1,196 @@
 @import 'tailwindcss';
 
-/* jareking 设计令牌（T0.3 设计系统以此为基线扩展） */
+/* ============================================================
+ * jareking 设计令牌（T0.3）
+ * 命名规范：
+ *   --jk-*      原始令牌（颜色 / 间距 / 圆角 / 字号 / 阴影 / z-index）
+ *   @theme      将令牌映射为 Tailwind v4 工具类（如 bg-surface、text-ui）
+ * 主题切换：uiStore 设置 document.documentElement.dataset.theme，
+ *   由 :root[data-theme='dark'] 提供深色令牌覆盖。
+ * ============================================================ */
+
+/* ---------- 颜色（浅色，默认） ---------- */
 :root {
-  --jk-bg: #f5f6f8;
-  --jk-fg: #1f2329;
-  --jk-accent: #155eef;
-  --jk-border: #dee0e3;
+  --jk-bg: #f5f6f8;                          /* 应用背景 */
+  --jk-surface: #ffffff;                     /* 面板 / 卡片表面 */
+  --jk-fg: #1f2329;                          /* 主文字 */
+  --jk-accent: #155eef;                      /* 品牌强调色 */
+  --jk-accent-fg: #ffffff;                   /* 强调色上的文字 */
+  --jk-border: #dee0e3;                      /* 边框 / 分隔线 */
+  --jk-muted: #646a73;                       /* 次要文字 */
+  --jk-muted-bg: #eff0f1;                    /* 弱强调背景 */
+  --jk-hover: #e9ebef;                       /* 悬停底色 */
+  --jk-active: #dfe2e8;                      /* 按下 / 选中底色 */
+  --jk-danger: #d83931;                      /* 危险操作 */
+  --jk-success: #2ba471;                     /* 成功 */
+  --jk-warning: #d97706;                     /* 警告 */
+  --jk-overlay: rgba(31, 35, 41, 0.45);      /* 模态遮罩 */
   color-scheme: light;
+
+  /* ---------- 间距（4 的倍数，px） ---------- */
+  --jk-space-1: 4px;
+  --jk-space-2: 8px;
+  --jk-space-3: 12px;
+  --jk-space-4: 16px;
+  --jk-space-5: 20px;
+  --jk-space-6: 24px;
+  --jk-space-8: 32px;
+  --jk-space-10: 40px;
+  --jk-space-12: 48px;
+
+  /* ---------- 圆角 ---------- */
+  --jk-radius-sm: 4px;
+  --jk-radius-md: 6px;
+  --jk-radius-lg: 8px;
+  --jk-radius-xl: 12px;
+
+  /* ---------- 字号（12 / 13 / 14 / 16 / 20 / 24） ---------- */
+  --jk-text-tiny: 12px;    /* 辅助说明文字 */
+  --jk-text-ui: 13px;      /* 界面控件默认字号 */
+  --jk-text-body: 14px;    /* 正文 */
+  --jk-text-title: 16px;   /* 小标题 */
+  --jk-text-heading: 20px; /* 标题 */
+  --jk-text-display: 24px; /* 大标题 / 空状态主文案 */
+
+  /* ---------- 阴影 ---------- */
+  --jk-shadow-card: 0 1px 2px rgba(31, 35, 41, 0.06), 0 1px 3px rgba(31, 35, 41, 0.08);
+  --jk-shadow-panel: 0 4px 16px rgba(31, 35, 41, 0.1);
+  --jk-shadow-overlay: 0 12px 40px rgba(31, 35, 41, 0.18);
+
+  /* ---------- z-index 层级 ---------- */
+  --jk-z-sticky: 100;   /* 吸顶元素（标签栏 / Ribbon） */
+  --jk-z-dropdown: 200; /* 下拉菜单 / 浮层 */
+  --jk-z-overlay: 300;  /* 模态遮罩 */
+  --jk-z-modal: 400;    /* 模态面板 / 命令面板 */
+  --jk-z-toast: 500;    /* 全局 Toast */
 }
 
+/* ---------- 颜色（深色覆盖） ---------- */
 :root[data-theme='dark'] {
   --jk-bg: #1f2329;
+  --jk-surface: #262a31;
   --jk-fg: #e5e6eb;
   --jk-accent: #4c88ff;
+  --jk-accent-fg: #ffffff;
   --jk-border: #3f444d;
+  --jk-muted: #9ba1ab;
+  --jk-muted-bg: #2f343c;
+  --jk-hover: #33383f;
+  --jk-active: #3d434c;
+  --jk-danger: #f0615a;
+  --jk-success: #3ecf8e;
+  --jk-warning: #f5a623;
+  --jk-overlay: rgba(0, 0, 0, 0.6);
   color-scheme: dark;
+
+  --jk-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --jk-shadow-panel: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --jk-shadow-overlay: 0 12px 40px rgba(0, 0, 0, 0.55);
 }
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
+/* ============================================================
+ * Tailwind v4 @theme：令牌 → 工具类
+ * 说明：@theme 为增量合并，未列出的 Tailwind 默认令牌保持可用。
+ *   颜色：bg-surface / text-muted / border-border / bg-hover ...
+ *   字号：text-tiny(12) text-ui(13) text-body(14) text-title(16)
+ *        text-heading(20) text-display(24)
+ *   间距：Tailwind v4 默认刻度即以 4px 为基数（p-1=4px … p-12=48px），
+ *        与 --jk-space-* 一致，无需重复映射。
+ * ============================================================ */
+@theme {
+  /* 颜色 */
+  --color-bg: var(--jk-bg);
+  --color-surface: var(--jk-surface);
+  --color-fg: var(--jk-fg);
+  --color-accent: var(--jk-accent);
+  --color-accent-fg: var(--jk-accent-fg);
+  --color-border: var(--jk-border);
+  --color-muted: var(--jk-muted);
+  --color-muted-bg: var(--jk-muted-bg);
+  --color-hover: var(--jk-hover);
+  --color-active: var(--jk-active);
+  --color-danger: var(--jk-danger);
+  --color-success: var(--jk-success);
+  --color-warning: var(--jk-warning);
+  --color-overlay: var(--jk-overlay);
+
+  /* 字号 */
+  --text-tiny: var(--jk-text-tiny);
+  --text-tiny--line-height: 1.45;
+  --text-ui: var(--jk-text-ui);
+  --text-ui--line-height: 1.45;
+  --text-body: var(--jk-text-body);
+  --text-body--line-height: 1.5;
+  --text-title: var(--jk-text-title);
+  --text-title--line-height: 1.4;
+  --text-heading: var(--jk-text-heading);
+  --text-heading--line-height: 1.3;
+  --text-display: var(--jk-text-display);
+  --text-display--line-height: 1.25;
+
+  /* 圆角 */
+  --radius-sm: var(--jk-radius-sm);
+  --radius-md: var(--jk-radius-md);
+  --radius-lg: var(--jk-radius-lg);
+  --radius-xl: var(--jk-radius-xl);
+
+  /* 阴影 */
+  --shadow-card: var(--jk-shadow-card);
+  --shadow-panel: var(--jk-shadow-panel);
+  --shadow-overlay: var(--jk-shadow-overlay);
 }
 
-body {
-  background: var(--jk-bg);
-  color: var(--jk-fg);
-  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  overflow: hidden;
-}
+/* ============================================================
+ * 基础样式
+ * ============================================================ */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
 
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  gap: 8px;
+  body {
+    background: var(--jk-bg);
+    color: var(--jk-fg);
+    font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+    font-size: var(--jk-text-body);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 键盘焦点可见性（全局基线，组件可用工具类覆盖） */
+  :focus-visible {
+    outline: 2px solid var(--jk-accent);
+    outline-offset: 1px;
+  }
+
+  /* 桌面端细滚动条 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--jk-border) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--jk-border);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--jk-muted);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }

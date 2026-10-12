@@ -1,0 +1,55 @@
+# electron-builder 配置（T0.5 桌面能力）
+
+appId: com.jareking.app
+productName: jareking
+
+# 打包输出目录（相对 apps/desktop）
+directories:
+  output: release
+
+# Windows 安装包：NSIS + x64；oneClick=false 允许用户选择安装目录
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # icon: resources/icon.ico  # 待 resources/icon.png 就绪后添加 icon 字段
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+# 文件关联：docx / xlsx / pptx / pdf 双击用 jareking 打开（对应 spec 4.1）
+fileAssociations:
+  - ext:
+      - doc
+      - docx
+    role: Editor
+    name: jareking.Document
+    description: "jareking 文档（Writer）"
+  - ext:
+      - xls
+      - xlsx
+    role: Editor
+    name: jareking.Spreadsheet
+    description: "jareking 表格（Sheet）"
+  - ext:
+      - ppt
+      - pptx
+    role: Editor
+    name: jareking.Presentation
+    description: "jareking 演示（Presentation）"
+  - ext:
+      - pdf
+    role: Editor
+    name: jareking.Pdf
+    description: "jareking PDF 文档"
+
+# 主进程/预加载/渲染进程产物统一打asar
+asar: true
+
+files:
+  - out/**
+  - package.json
+
+# TODO(updater): 发布渠道确定后补充 publish 配置（generic provider 或 GitHub Releases），
+# 供 electron-updater 生成 app-update.yml；发布地址与回滚策略在 T8.4 打包发布时落地
