@@ -5,9 +5,9 @@
  * 字符串，用作编辑器初始 `content`。映射严格对齐 `document.ts` 字段定义：
  *   - Paragraph（含 pPr.outlineLvl / pPr.styleId → h1~h6；pPr.jc → text-align）
  *   - 连续 numPr 段落 → 合并为单组 <ol>/<ul>（编号格式来自 numberingDefs）
- *   - Run 的 rPr → <strong>/<em>/<u>/<s> 与 <span style="color/font-size">
+ *   - Run 的 rPr → <strong>/<em>/<u>/<s> 与 <span style="color/font-size/font-family">
  *   - Hyperlink → <a href>（URL 经 relationships 由 relId 解析）
- *   - Image → <img>（v1 占位渲染，src 取 embed 占位）
+ *   - Image → <img src="data:...">（二进制经 doc.media 还原为 data URL，编辑器可直接显示）
  *   - Break → <hr>（page）/ <br>（textWrapping）
  *   - Table → <table><tbody><tr><td>（单元格 blocks 递归）
  *
@@ -48,11 +48,9 @@ function halfPointToPt(size: number): string {
 /** 段落属性 → 标题级别 1~6；无则返回 null（普通段落） */
 function headingLevel(pPr?: ParagraphProperties): number | null {
   if (!pPr) return null;
-  // 大纲级别 0~5 对应 h1~h6
   if (typeof pPr.outlineLvl === 'number' && pPr.outlineLvl >= 0 && pPr.outlineLvl <= 5) {
     return pPr.outlineLvl + 1;
   }
-  // 样式 id 形如 Heading1 / heading1 / H1
   const sid = pPr.styleId;
   if (sid) {
     const m = /^(?:h|heading)?(\d)$/i.exec(sid.trim());
@@ -92,8 +90,40 @@ function isOrderedList(doc: JkDocument, numId: string): boolean {
   const abs = numbering.abstractNum.find((a) => a.abstractNumId === concrete.abstractNumId);
   if (!abs || !abs.levels.length) return false;
   const lvl = abs.levels.find((l) => l.level === 0) ?? abs.levels[0];
-  // 仅 bullet 视为无序，decimal/letter/roman 等均为有序
   return lvl.format !== 'bullet';
+}
+
+/** Uint8Array → base64（兼容 Node/Browser，避免长数组展开溢出） */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+
+/** 图片扩展名 → MIME */
+function extToMime(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'bmp':
+      return 'image/bmp';
+    case 'webp':
+      return 'image/webp';
+    case 'svg':
+      return 'image/svg+xml';
+    case 'tiff':
+      return 'image/tiff';
+    default:
+      return 'application/octet-stream';
+  }
 }
 
 /** 把 rPr 格式化为嵌套的 HTML 标签（粗/斜/下划/删除线/颜色/字号/字体族） */
@@ -112,7 +142,11 @@ function wrapFormat(text: string, rPr?: RunProperties): string {
 }
 
 /** 渲染单个行内元素（Run / Hyperlink / Image / Break / FootnoteRef） */
-function renderInline(inline: Inline, relMap: Map<string, string>): string {
+function renderInline(
+  inline: Inline,
+  relMap: Map<string, string>,
+  mediaMap: Map<string, string>,
+): string {
   switch (inline.type) {
     case 'run': {
       const r = inline as Run;
@@ -121,13 +155,13 @@ function renderInline(inline: Inline, relMap: Map<string, string>): string {
     case 'hyperlink': {
       const h = inline as Hyperlink;
       const url = (h.relId && relMap.get(h.relId)) || h.anchor || '#';
-      const inner = (h.runs ?? []).map((r) => renderInline(r, relMap)).join('');
+      const inner = (h.runs ?? []).map((r) => renderInline(r, relMap, mediaMap)).join('');
       return `<a href="${escapeHtml(url)}">${inner}</a>`;
     }
     case 'image': {
-      // v1 占位：embed 为图片部件 rId，浏览器无法直接加载，用空 src + alt 兜底
       const alt = inline.alt ? escapeHtml(inline.alt) : '';
-      return `<img src="" alt="${alt}" />`;
+      const src = mediaMap.get(inline.embed) ?? '';
+      return `<img src="${escapeHtml(src)}" alt="${alt}" />`;
     }
     case 'break':
       return inline.breakType === 'page' ? '<hr />' : '<br />';
@@ -139,13 +173,21 @@ function renderInline(inline: Inline, relMap: Map<string, string>): string {
 }
 
 /** 渲染段落内部的行内序列 */
-function renderRuns(runs: Inline[] | undefined, relMap: Map<string, string>): string {
-  return (runs ?? []).map((r) => renderInline(r, relMap)).join('');
+function renderRuns(
+  runs: Inline[] | undefined,
+  relMap: Map<string, string>,
+  mediaMap: Map<string, string>,
+): string {
+  return (runs ?? []).map((r) => renderInline(r, relMap, mediaMap)).join('');
 }
 
 /** 渲染一个普通段落（非列表环境：标题或段落） */
-function renderParagraph(p: Paragraph, relMap: Map<string, string>): string {
-  const inner = renderRuns(p.runs, relMap);
+function renderParagraph(
+  p: Paragraph,
+  relMap: Map<string, string>,
+  mediaMap: Map<string, string>,
+): string {
+  const inner = renderRuns(p.runs, relMap, mediaMap);
   const align = alignToCss(p.pPr?.jc);
   const style = align ? ` style="text-align:${align}"` : '';
   const lvl = headingLevel(p.pPr);
@@ -154,27 +196,35 @@ function renderParagraph(p: Paragraph, relMap: Map<string, string>): string {
 }
 
 /** 渲染表格单元格内的一组块（段落 / 嵌套表格），不支持单元格内列表分组 */
-function renderCellBlocks(blocks: Block[] | undefined, relMap: Map<string, string>): string {
+function renderCellBlocks(
+  blocks: Block[] | undefined,
+  relMap: Map<string, string>,
+  mediaMap: Map<string, string>,
+): string {
   const blocksArr = blocks ?? [];
   if (!blocksArr.length) return '<p></p>';
   return blocksArr
     .map((b) => {
-      if (b.type === 'paragraph') return renderParagraph(b, relMap);
-      if (b.type === 'table') return renderTable(b, relMap);
+      if (b.type === 'paragraph') return renderParagraph(b, relMap, mediaMap);
+      if (b.type === 'table') return renderTable(b, relMap, mediaMap);
       return '';
     })
     .join('');
 }
 
 /** 渲染表格 → <table><tbody><tr><td> */
-function renderTable(t: JkTable, relMap: Map<string, string>): string {
+function renderTable(
+  t: JkTable,
+  relMap: Map<string, string>,
+  mediaMap: Map<string, string>,
+): string {
   const jc = alignToCss(t.tablePr?.jc);
   const alignStyle = jc && jc !== 'left' ? ` style="margin-left:auto;margin-right:auto"` : '';
   const rows = t.rows
     .map(
       (tr) =>
         `<tr>${tr.cells
-          .map((cell) => `<td>${renderCellBlocks(cell.blocks, relMap)}</td>`)
+          .map((cell) => `<td>${renderCellBlocks(cell.blocks, relMap, mediaMap)}</td>`)
           .join('')}</tr>`,
     )
     .join('');
@@ -191,6 +241,16 @@ export function jkToHtml(doc: JkDocument): string {
     if (rel.targetMode === 'external' || /^https?:\/\//i.test(rel.target)) {
       relMap.set(rel.id, rel.target);
     }
+  }
+
+  // 图片二进制 → data URL（编辑器可直接显示）
+  const mediaMap = new Map<string, string>();
+  for (const rel of doc.relationships ?? []) {
+    if (rel.type !== 'image') continue;
+    const bytes = doc.media?.[rel.id];
+    if (!bytes) continue;
+    const ext = (rel.target.split('.').pop() ?? 'png').toLowerCase();
+    mediaMap.set(rel.id, `data:${extToMime(ext)};base64,${bytesToBase64(bytes)}`);
   }
 
   const blocks: Block[] = doc.body ?? [];
@@ -212,7 +272,7 @@ export function jkToHtml(doc: JkDocument): string {
         (blocks[i] as Paragraph).pPr?.numPr?.numId === numId
       ) {
         const p = blocks[i] as Paragraph;
-        items.push(`<li>${renderRuns(p.runs, relMap)}</li>`);
+        items.push(`<li>${renderRuns(p.runs, relMap, mediaMap)}</li>`);
         i += 1;
       }
       html.push(`<${tag}>${items.join('')}</${tag}>`);
@@ -220,13 +280,13 @@ export function jkToHtml(doc: JkDocument): string {
     }
 
     if (blk.type === 'paragraph') {
-      html.push(renderParagraph(blk, relMap));
+      html.push(renderParagraph(blk, relMap, mediaMap));
       i += 1;
       continue;
     }
 
     if (blk.type === 'table') {
-      html.push(renderTable(blk, relMap));
+      html.push(renderTable(blk, relMap, mediaMap));
       i += 1;
       continue;
     }

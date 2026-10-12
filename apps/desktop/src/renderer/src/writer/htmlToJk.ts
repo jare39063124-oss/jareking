@@ -89,6 +89,31 @@ function cleanRPr(rPr: RunProperties): RunProperties | undefined {
 interface ParseCtx {
   relationships: Relationship[];
   relSeq: number;
+  /** 图片二进制载体（data URL 解码后按 rId 存放），随文档返回供导出写入 zip */
+  media: Record<string, Uint8Array>;
+  mediaSeq: number;
+}
+
+/** data: URL → { bytes, ext }；非 data URL 返回 null */
+function decodeDataUrl(src: string): { bytes: Uint8Array; ext: string } | null {
+  const m = /^data:([^;]+);base64,(.+)$/.exec(src.trim());
+  if (!m) return null;
+  const mime = m[1].toLowerCase();
+  const b64 = m[2];
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const extMap: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpeg',
+    'image/gif': 'gif',
+    'image/bmp': 'bmp',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'image/tiff': 'tiff',
+  };
+  const ext = extMap[mime] ?? 'png';
+  return { bytes, ext };
 }
 
 /** 根据标签与 style 推导当前节点的字符属性（继承父级） */
@@ -166,11 +191,23 @@ function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: Pars
   }
 
   if (tag === 'img') {
-    out.push({
-      type: 'image',
-      embed: el.getAttribute('src') ?? '',
-      alt: el.getAttribute('alt') ?? undefined,
-    });
+    const src = el.getAttribute('src') ?? '';
+    const alt = el.getAttribute('alt') ?? undefined;
+    const decoded = decodeDataUrl(src);
+    if (decoded) {
+      // 内嵌图片：解码为二进制并登记为 image 关系 + media 载体
+      const relId = `rIdMedia${++ctx.mediaSeq}`;
+      ctx.media[relId] = decoded.bytes;
+      ctx.relationships.push({
+        id: relId,
+        type: 'image',
+        target: `media/${relId}.${decoded.ext}`,
+      });
+      out.push({ type: 'image', embed: relId, alt });
+    } else {
+      // 非 data URL（如外链/占位）：保留 src 作为 embed（导出时若无字节将降级）
+      out.push({ type: 'image', embed: src, alt });
+    }
     return;
   }
 
@@ -262,7 +299,7 @@ function parseTable(el: Element, ctx: ParseCtx): JkTable {
 export function htmlToJk(html: string): JkDocument {
   const parser = new DOMParser();
   const dom = parser.parseFromString(html, 'text/html');
-  const ctx: ParseCtx = { relationships: [], relSeq: 0 };
+  const ctx: ParseCtx = { relationships: [], relSeq: 0, media: {}, mediaSeq: 0 };
   const blocks: Block[] = [];
 
   dom.body.childNodes.forEach((node) => {
@@ -288,7 +325,7 @@ export function htmlToJk(html: string): JkDocument {
     // 其它根级元素忽略
   });
 
-  return {
+  const doc: JkDocument = {
     body: blocks,
     sections: [],
     styleDefs: { styles: [] },
@@ -297,4 +334,6 @@ export function htmlToJk(html: string): JkDocument {
     relationships: ctx.relationships,
     fidelity: { level: 'L2', features: [] },
   };
+  if (Object.keys(ctx.media).length) doc.media = ctx.media;
+  return doc;
 }
