@@ -75,3 +75,17 @@ pnpm --filter @jareking/writer typecheck
 - **保真与降级（spec 4.2 / L2）**：常见结构按 L2 解析并回填 `fidelity.level='L2'`；无法完美映射的特性（`smartArt`/`oleObject`/`field`/`contentControl`/未知块级元素…）记入 `fidelity.features: UnsupportedFeature[]`，并把原始节点保留在 `data` 兜底槽（各 Block/Inline 的 `data.__raw`，未知块级在 `JkDocument.data.__unparsedBlocks`），保证「打开→保存」round-trip 不丢数据。
 - **单位约定（对齐 `document.ts` 注释）**：长度字段统一 EMU；Word twips ×635 转 EMU（`ind`/`spacing`/`pgSz`/`pgMar`/`tblGrid`/`tcW`）；字号 `sz` 为半磅（half-point）原值存储（44 = 22pt）；drawing `extent` cx/cy 已是 EMU 原值存储。
 - **测试**：`test/fixtures.ts`（JSZip 在运行时构造最小合法 docx，可控制纯文本/格式/表格/超链接/图片/未知元素等）、`test/docxParser.test.ts`（9 个 vitest 用例覆盖上述 8 类验收 + 文件路径解析）。运行：`pnpm --filter @jareking/writer test`。
+
+## T1.5 docx 导出器（文档序列化）
+
+> 实现位置：`src/exporter/units.ts`、`src/exporter/xml.ts`、`src/exporter/document.ts`、`src/exporter/parts.ts`、`src/exporter/index.ts`；包入口 `src/index.ts` 已 re-export。
+
+- **公开 API**：
+  - `exportDocx(doc: JkDocument): Promise<Uint8Array>`——用 JSZip 构建合法 .docx 字节流。
+  - `exportDocxToFile(doc: JkDocument, path: string): Promise<void>`——导出并写入本地文件（Node/Electron 主进程）。
+- **职责**：把 `JkDocument` 反向序列化为合法 OOXML，闭合「打开 → 编辑 → 保存」round-trip；与 `docxParser.ts` **精确互逆**（字段与单位换算见下）。
+- **产出 ZIP 部件**：`[Content_Types].xml`、`_rels/.rels`、`word/document.xml`、`word/styles.xml`、`word/numbering.xml`、`word/settings.xml`，以及（当存在资源引用时）`word/_rels/document.xml.rels`。所有 XML 均声明标准 OOXML 命名空间（`w`/`r`/`wp`/`a`/`pic`），保证 Word/WPS 可正常打开。
+- **单位换算（逆映射解析器）**：解析器用 `tw2emu = round(twips * 635)` 把 twips 存为 EMU，导出时用 `emuToTwips = round(emu / 635)` 还原 twips，写回 `w:ind`(left/right/firstLine/hanging) / `w:spacing`(before/after) / `w:pgSz` / `w:pgMar` / `w:tblGrid`(gridCol) / `w:tcW` / `w:trHeight` / `w:tblW`。**例外（原值写回，不除 635）**：字号 `w:sz`（half-point，如 44=22pt）、`w:spacing/@w:line`（解析器原值存储）、drawing `wp:extent` 的 cx/cy（已是 EMU）。
+- **L2 兜底（不丢数据）**：`JkDocument.data.__unparsedBlocks`（解析器降级保留的未知块级元素）在导出时经 `data.__raw` 原样插回对应位置；超链接/图片的 `r:id` 通过 `document.xml.rels` 关联写回。已知块级/行内节点以模型为准做「模型驱动」序列化（编辑改动可反映），不盲目整体回贴 `__raw` 以免与模型输出重复产生非法 XML。
+- **图片限制（重要）**：当前解析器只保留图片的 `embed` rId 与 EMU 尺寸，**不保留二进制**。导出时写出合法 `w:drawing` 结构 + 关系引用，但图片二进制在「解析→导出」round-trip 中会丢失（真实 Word 打开会显示缺图）；若要完整还原需后续解析器把媒体二进制写入 `data.__raw`/`media`。图片 `w:drawing` 用 `<w:r>` 包裹，既是合法 OOXML（EG_RunInnerContent 含 w:drawing），也兼容本包解析器（仅识别位于 `<w:r>` 内的 drawing）。
+- **测试**：`test/exporter.test.ts`（4 个 vitest 用例：round-trip 对称、导出合法性、unknown 块不丢数据、图片结构保留）与既有 T1.2 用例一并运行，共 13 个全绿。验证方式：因沙箱无法装 Word/WPS，以「结构合法 + 命名空间正确 + 本包 parser 二次解析无异常」作为可被 Word 打开的代理验证。运行：`pnpm --filter @jareking/writer test`。

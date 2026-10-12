@@ -11,3 +11,4 @@
 
 export * from './model';
 export * from './parser/docxParser.js';
+export * from './exporter/index.js';
