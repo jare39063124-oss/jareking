@@ -723,10 +723,20 @@ function parseContainerBlocks(
     for (const item of items) {
       if (tag === 'p') {
         const para = parseParagraph(item);
-        blocks.push(para);
-        // 段内分节符（pPr/sectPr）→ 段后插入 SectionBreak
+        // 段内分节符（pPr/sectPr）→ SectionBreak 块
         const sectPr = item.pPr?.sectPr;
-        if (sectPr && unsupported) blocks.push(makeSectionBreak(sectPr));
+        if (sectPr && unsupported) {
+          if (para.runs.length === 0) {
+            // 空的分节段落：仅产出 SectionBreak（导出时它会还原为带 sectPr 的空段，
+            // 若此处同时保留空 Paragraph，round-trip 每保存一次会净增一个空段）
+            blocks.push(makeSectionBreak(sectPr));
+          } else {
+            blocks.push(para);
+            blocks.push(makeSectionBreak(sectPr));
+          }
+        } else {
+          blocks.push(para);
+        }
       } else if (tag === 'tbl') {
         blocks.push(parseTable(item));
       } else if (unsupported && unparsedBlocks) {

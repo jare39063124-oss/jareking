@@ -1,0 +1,174 @@
+/**
+ * GUI 冒烟验证（T1.4 / T2.2 验收）—— 通过 Chrome DevTools Protocol 自动化。
+ *
+ * 用法：
+ *   1) 启动应用：cd apps/desktop && env -u ELECTRON_RUN_AS_NODE \
+ *        ./node_modules/.bin/electron . --remote-debugging-port=9222
+ *   2) node scripts/gui-smoke.mjs [--port 9222]
+ *
+ * 步骤：连 CDP → 打开 Writer 标签（校验 ProseMirror + 示例文档标题）→
+ * 打开 Sheet 标签（校验 Univer canvas）→ 收集渲染错误 → Browser.close。
+ * Node ≥22（内置 WebSocket）。
+ */
+import process from 'node:process';
+
+const port = (() => {
+  const i = process.argv.indexOf('--port');
+  return i >= 0 ? Number(process.argv[i + 1]) : 9222;
+})();
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function findPage() {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+      const targets = (await res.json()).filter((t) => t.type === 'page');
+      // 主窗口：本地渲染页（file:// 或 dev server）
+      const page = targets.find((t) => !t.url.startsWith('devtools'));
+      if (page) return page;
+    } catch {
+      /* 未就绪，重试 */
+    }
+    await sleep(500);
+  }
+  throw new Error('未找到 Electron 页面目标（应用未启动或调试端口未开）');
+}
+
+class Cdp {
+  constructor(ws) {
+    this.ws = ws;
+    this.id = 0;
+    this.pending = new Map();
+    this.consoleErrors = [];
+    this.exceptions = [];
+    ws.addEventListener('message', (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.id && this.pending.has(msg.id)) {
+        const { resolve, reject } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        if (msg.error) reject(new Error(msg.error.message));
+        else resolve(msg.result);
+        return;
+      }
+      if (msg.method === 'Runtime.consoleAPICalled') {
+        const { type, args } = msg.params;
+        if (type === 'error') {
+          this.consoleErrors.push(args.map((a) => a.value ?? a.description ?? '').join(' '));
+        }
+      }
+      if (msg.method === 'Runtime.exceptionThrown') {
+        this.exceptions.push(msg.params.exceptionDetails?.exception?.description ?? 'unknown');
+      }
+    });
+  }
+
+  send(method, params = {}) {
+    const id = ++this.id;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  async eval(expression, awaitPromise = false) {
+    const r = await this.send('Runtime.evaluate', {
+      expression,
+      awaitPromise,
+      returnByValue: true,
+    });
+    if (r.exceptionDetails) {
+      throw new Error(r.exceptionDetails.exception?.description ?? 'eval failed');
+    }
+    return r.result?.value;
+  }
+}
+
+function pickIgnorable(text) {
+  const t = String(text);
+  return (
+    t.includes('favicon') ||
+    t.includes('Autofill') ||
+    t.includes('nsresult') ||
+    t.includes('GPU') ||
+    t.includes('gpu')
+  );
+}
+
+async function main() {
+  const page = await findPage();
+  console.log(`目标: ${page.title || '(无标题)'} ${page.url}`);
+
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve);
+    ws.addEventListener('error', reject);
+  });
+  const cdp = new Cdp(ws);
+  await cdp.send('Runtime.enable');
+
+  const results = {};
+  let failed = false;
+
+  // 0. 应用就绪
+  await cdp.eval(`document.readyState === 'complete'`);
+  results.appRoot = await cdp.eval(`!!document.querySelector('#root') && document.querySelector('#root').children.length > 0`);
+  if (!results.appRoot) failed = true;
+
+  // 1. Sheet（先验证：EmptyState 的模块按钮只在没有标签页时显示）
+  const openSheet = `(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sheet'));
+    if (!btn) return 'no-button';
+    btn.click();
+    return 'clicked';
+  })()`;
+  results.sheetOpen = await cdp.eval(openSheet);
+  await sleep(4000); // Univer 初始化较重
+  results.univerCanvas = await cdp.eval(`document.querySelectorAll('canvas').length`);
+  results.univerMounted = await cdp.eval(
+    `(() => { const el = document.querySelector('[class*="univer"]'); return !!el; })()`,
+  );
+  if (results.univerCanvas < 1) failed = true;
+
+  // 2. Writer：刷新页面回到空状态（模块按钮恢复），再点击 Writer
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  const openWriter = `(() => {
+    if (document.querySelector('.ProseMirror')) return 'already';
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Writer'));
+    if (!btn) return 'no-button';
+    btn.click();
+    return 'clicked';
+  })()`;
+  results.writerOpen = await cdp.eval(openWriter);
+  await sleep(1500);
+  results.proseMirror = await cdp.eval(`!!document.querySelector('.ProseMirror')`);
+  results.writerH1 = await cdp.eval(`document.querySelector('.ProseMirror h1')?.textContent ?? null`);
+  results.writerTextLen = await cdp.eval(`document.querySelector('.ProseMirror')?.textContent.length ?? 0`);
+  results.writerEditable = await cdp.eval(
+    `(() => { const pm = document.querySelector('.ProseMirror'); return !!pm && pm.getAttribute('contenteditable') !== 'false'; })()`,
+  );
+  if (!results.proseMirror || results.writerTextLen < 10) failed = true;
+
+  // 3. 汇总错误
+  const errors = [...cdp.exceptions, ...cdp.consoleErrors].filter((e) => !pickIgnorable(e));
+  results.consoleErrors = errors.slice(0, 10);
+  if (errors.length > 0) failed = true;
+
+  console.log('=== GUI 冒烟结果 ===');
+  console.log(JSON.stringify(results, null, 2));
+  console.log(failed ? '❌ 冒烟未通过' : '✅ GUI 冒烟通过');
+
+  try {
+    await cdp.send('Browser.close');
+  } catch {
+    /* 忽略 */
+  }
+  await sleep(800);
+  process.exit(failed ? 1 : 0);
+}
+
+main().catch((e) => {
+  console.error('冒烟脚本失败:', e.message);
+  process.exit(2);
+});

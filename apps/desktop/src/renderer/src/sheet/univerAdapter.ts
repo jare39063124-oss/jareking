@@ -73,13 +73,10 @@ function sheetToUniver(sheet: JkSheet): Record<string, any> {
 /** JkWorkbook → Univer createWorkbook 数据 */
 export function jkToUniverData(wb: JkWorkbook): Record<string, any> {
   const sheets: Record<string, any> = {};
-  const order: string[] = [];
   (wb.sheets ?? []).forEach((s, i) => {
-    const id = `sheet-${i}`;
-    sheets[id] = sheetToUniver(s);
-    order.push(id);
+    sheets[`sheet-${i}`] = sheetToUniver(s);
   });
-  if (!order.length) {
+  if (!Object.keys(sheets).length) {
     sheets['sheet-0'] = sheetToUniver({
       name: 'Sheet1',
       rowCount: DEFAULT_ROWS,
@@ -87,15 +84,9 @@ export function jkToUniverData(wb: JkWorkbook): Record<string, any> {
       cells: {},
       merges: [],
     });
-    order.push('sheet-0');
   }
-  return {
-    id: 'jareking-sheet',
-    locale: 'zh-CN',
-    styles: {},
-    sheets,
-    views: [{ id: 'view-0', activeSheetId: order[wb.activeSheetIndex ?? 0] ?? order[0] }],
-  };
+  // 官方最小形状：id/styles/sheets（locale 由 createUniver 全局配置，不放在工作簿上）
+  return { id: 'jareking-sheet', styles: {}, sheets };
 }
 
 /** Univer cellData 矩阵 → 稀疏 JkCell 映射 */

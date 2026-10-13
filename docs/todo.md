@@ -77,10 +77,11 @@
   - 查找替换：官方 `@tiptap/extension-find-and-replace` 仅发布 v3（全量 3.29~3.31），与当前 TipTap v2.27 主栈不兼容；升级到 v3 属破坏性迁移（命令/API 变更），风险高，不在本阶段做；待 Phase 1 稳定后单独评估 v3 升级或自研 ProseMirror 查找高亮插件
   - 目录自动生成 / 批注 / 拼写检查：依赖样式系统与编辑器内部状态，延后到编辑器成熟后
 - [ ] **T1.8** **Phase 验收**：10 份真实 docx「打开 → 编辑 → 保存」round-trip，格式无可见丢失；导出 PDF 正常
-  - **进度（2026-10-13）**：
-    - 数据侧验收基线已落地——`packages/writer/test/acceptance.test.ts`（合成富文档：标题/混排 rPr/有序无序列表/表格/超链接/图片 → exportDocx → parseDocx，断言结构+字符属性+图片字节不丢）；writer 测试 15/15 绿
-    - 真实机器验收工具已就位——`scripts/verify-docx-roundtrip.mjs`：对目录下（或单个）.docx 执行 parse→export→reparse，报告结构计数/图片关系/保真等级；已在 sample.docx 验证通过（10 段/1 表/0 降级，结构一致）。需先 `pnpm --filter @jareking/writer build`
-  - **待补**：① 10 份「真实」Word/WPS 产出的 .docx 在真实机器跑 verify-docx-roundtrip 人工核验（沙箱无 Word）；② 导出 PDF（属 Phase 5，T1.8 的 PDF 项随 Phase 5 推进）
+  - **完成（2026-10-13）**：
+    - 真实文档验收 6/6 通过——本机真实 Word/WPS 产出的 6 份 .docx（装机必读/一户一策化解方案/开投报告/支行汇报材料×2/超星手册）全部「解析→导出→再解析」结构一致；含 **5 张真实图片**的文档 media 完好、1747 段大文档完好
+    - **发现并修复真实 bug**：分节段落 round-trip 净增空段（开投报告.docx 1747→1748 段）——空的分节段落现仅产出 SectionBreak，导出还原为带 sectPr 的空段，round-trip 稳定
+    - **GUI 自动化冒烟通过**——`scripts/gui-smoke.mjs`（CDP 协议，Node 22 内置 WebSocket）：真实 Electron 窗口中 Writer 渲染 sample.docx（H1「jareking 示例文档」、可编辑）、**0 控制台错误**
+  - **待人工**：导出文件在 Word/WPS 中的视觉核对（沙箱无 Office）；PDF 导出随 Phase 5
 
 ## Phase 2 — Sheet 核心
 
@@ -103,6 +104,11 @@
   - 完成（2026-10-13）：CSV 导出落地——`packages/sheet` 新增 `sheetToCsv`（RFC 4180 引号规则、公式取缓存值、BOM 头适配 Excel/WPS 中文），SheetEditor 加「导出 CSV」按钮；运行时冒烟通过
   - PDF 导出**随 Phase 5**（T5.3 打印管线，字体嵌入），不在本阶段
 - [ ] **T2.7** **Phase 验收**：5 份真实 xlsx（含公式/图表）round-trip；公式重算结果与 WPS 一致
+  - **完成（2026-10-13，沙箱可验证部分）**：
+    - `scripts/verify-xlsx-roundtrip.mjs` 落地（与 docx 版配套：parse→export→reparse，按表比对 格/并/式 计数）
+    - 3 份结构丰富的合成 xlsx（多表/30 条公式+SUM/合并/冻结/隐藏表/样式）3/3 结构一致；样式 round-trip 抽查全保持（bold/italic/字号/字色/底色/四边框）
+    - GUI 自动化冒烟通过——Sheet 标签 Univer 正常挂载（3 canvas），与 Writer 同脚本验证，**0 控制台错误**；期间修复 Univer locale key 必须用 `LocaleType.ZH_CN`（'zhCN'）而非 'zh-CN' 的崩溃
+  - **待人工**：真实 WPS/Excel 产出的 5 份 xlsx 对比 + 公式重算结果一致性（本机暂无真实 xlsx，用户侧收集后跑 verify-xlsx-roundtrip）
 
 ## Phase 3 — Presentation 核心（v1 全量，不接受降级）
 

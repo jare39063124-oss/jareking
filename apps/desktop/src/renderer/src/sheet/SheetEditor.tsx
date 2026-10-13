@@ -76,9 +76,11 @@ export function SheetEditor() {
     if (!el || apiRef.current) return;
 
     const { univer, univerAPI } = createUniver({
-      locale: 'zh-CN',
+      // 注意：locale key 必须用 Univer LocaleType 枚举值（'zhCN'），
+      // 字符串 'zh-CN' 会导致内部 LOCALE_META 查表 undefined 而抛错
+      locale: LocaleType.ZH_CN,
       locales: {
-        'zh-CN': Object.assign(
+        [LocaleType.ZH_CN]: Object.assign(
           {},
           UniverZhCN as Record<string, string>,
           SortZhCN as Record<string, string>,
