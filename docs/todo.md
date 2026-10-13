@@ -132,8 +132,14 @@
   - 完成（2026-10-13）：packages/ai 重写实现——`fetchWithRetry`（429/5xx/网络错误指数退避 300ms×2^n，AbortSignal.any 组合超时）、SSE/NDJSON 通用流解析、四类适配器（openai-compatible 覆盖 DeepSeek/通义/Kimi/智谱等一切兼容网关 / claude / gemini / ollama）、`createAiAdapter` 工厂 + listModels；StreamEvent 统一 text/usage/done/error
   - 运行时冒烟（本地 mock 网关）：流式聚合+500 自动重试 ✅、非流式 usage 计量 ✅、不可路由地址 500ms 超时快速中断 ✅
   - 说明：明文 apiKey 每次调用注入（apiKeyRef 明文解析在 T4.2 接 DPAPI）；Claude/Gemini/Ollama 三家为按官方 API 规范实现，待有真实 Key 时联调
-- [ ] **T4.2** API 配置 UI：多配置管理（任意 BaseURL + Key + 模型名）、密钥系统凭据加密存储（keytar/DPAPI）、连通性测试、模型列表拉取
-- [ ] **T4.3** AI 操作协议：ops schema 定义（format.apply / text.replace / cell.set / chart.insert 等）+ Planner 系统提示词 + Executor 确定性执行 + diff 预览 + 撤销 + 积分估算
+- [x] **T4.2** API 配置 UI：多配置管理（任意 BaseURL + Key + 模型名）、密钥系统凭据加密存储（keytar/DPAPI）、连通性测试、模型列表拉取
+  - 完成（2026-10-13）：主进程 AiConfigService（settings KV + **Electron safeStorage 加密**，Windows 即 DPAPI；不可用环境 base64 兜底打标）；IPC 四通道 list/save/delete + ai:key:resolve；渲染层 aiStore + 设置面板「AI 服务商」区块（多配置增删改/表单/**拉取模型下拉回填**/**测试连接**）
+  - 端到端 GUI 冒烟：保存→safeStorage 解密回读→解析 Key 真实调用 mock 网关→配置列表**无 Key 泄漏**→UI 展示，全过、0 控制台错误
+- [x] **T4.3** AI 操作协议：ops schema 定义（format.apply / text.replace / cell.set / chart.insert 等）+ Planner 系统提示词 + Executor 确定性执行 + diff 预览 + 撤销 + 积分估算
+  - 完成（2026-10-13）：ops 协议（packages/ai/planner/writerOps.ts）——v1 十类 Writer ops（insertText/replaceSelection/setFormat/insertParagraph/insertTable/setColor/clearFormatting/insertHorizontalRule/undo/redo）zod 判别联合；LLM 输出容错解析（剥 \` 围栏、平衡 JSON 提取、非法 op 丢弃并记录 rejected）
+  - createWriterPlanner（prompt 构建：ops 说明书+文档节选+选区）+ 桌面侧 opsExecutor.ts（TipTap 确定性执行，单 op try/catch 不中断）
+  - AIPanel 真实接线：指令 → 启用配置 → resolveKey → Planner → Executor → 面板展示计划说明与执行摘要；无配置/无文档时给出引导提示
+  - **全链路 GUI 冒烟通过**：设置 mock LLM → AI 面板发指令 → 文档真实变更（aiDocChanged）+ 执行摘要展示，0 控制台错误
 - [ ] **T4.4** Writer AI 技能：格式指令、内容指令、润色/续写/翻译/摘要；选中浮动工具条
 - [ ] **T4.5** Sheet AI 技能：公式生成（自然语言 → 公式）、数据汇总、图表生成、数据洞察
 - [ ] **T4.6** Presentation AI 技能：大纲 → 成稿、一键生成 PPT

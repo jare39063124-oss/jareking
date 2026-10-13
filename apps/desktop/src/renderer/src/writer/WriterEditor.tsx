@@ -10,7 +10,8 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor } from "@tiptap/react";
+import { setActiveEditor } from "./editorRef";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -131,6 +132,11 @@ export function WriterEditor() {
       attributes: { class: 'jk-prose focus:outline-none' },
     },
   });
+  // AI 面板经 editorRef 取当前编辑器执行 ops（T4.3）
+  useEffect(() => {
+    if (editor) setActiveEditor(editor);
+    return () => setActiveEditor(null);
+  }, [editor]);
 
   // 首次加载示例文档
   useEffect(() => {

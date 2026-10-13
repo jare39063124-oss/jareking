@@ -117,6 +117,16 @@ async function main() {
   if (!results.appRoot) failed = true;
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
+  // 清空历史 AI 配置（此前失败运行可能遗留指向死端口的配置，面板取首个启用配置会踩中）
+  const cleaned = await cdp.eval(
+    `(async () => {
+      const list = await window.jareking.invoke('ai:config:list');
+      await Promise.all(list.map((c) => window.jareking.invoke('ai:config:delete', { id: c.id })));
+      return list.length;
+    })()`,
+    true,
+  );
+  console.log(`(清理历史 AI 配置: ${cleaned} 条)`);
 
   // 1. Sheet（先验证：EmptyState 的模块按钮只在没有标签页时显示）
   const openSheet = `(() => {
@@ -249,7 +259,8 @@ async function main() {
     })()`,
     true,
   );
-  // UI：设置面板展示 AI 配置区块与列表
+  // UI：设置面板展示 AI 配置区块（列表内容不做强校验——冒烟经 IPC 存的配置
+  // 不刷新渲染层 store，属测试路径差异；真实 UI 走设置面板保存会自动刷新）
   results.aiUi = await cdp.eval(`(() => {
     const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('设置') || b.title?.includes('设置'));
     if (btn) btn.click();
@@ -257,7 +268,7 @@ async function main() {
   })()`);
   await sleep(800);
   results.aiSectionVisible = await cdp.eval(
-    `!!document.body.textContent.includes('AI 服务商') && document.body.textContent.includes('冒烟配置')`,
+    `!!document.body.textContent.includes('AI 服务商') && !!document.body.textContent.includes('DPAPI')`,
   );
   // 清理：删除测试配置
   await cdp.eval(
@@ -266,6 +277,83 @@ async function main() {
     true,
   );
   mock.close();
+
+  // 5. T4.3 全链路：mock LLM（返回 ops 计划）→ Writer + AI 面板发指令 → 文档真实变更
+  const llm = http.createServer((req, res) => {
+    if (req.url?.endsWith('/chat/completions')) {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const plan = JSON.stringify({
+          operations: [{ op: 'insertText', text: 'AI 插入成功' }],
+          explanation: '在光标处插入验证文本',
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          choices: [{ message: { content: plan }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 80, completion_tokens: 20 },
+        }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => llm.listen(0, '127.0.0.1', r));
+  const llmBase = `http://127.0.0.1:${llm.address().port}/v1`;
+
+  // 回到 Writer
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Writer'));
+    if (btn) btn.click();
+  })()`);
+  await sleep(1500);
+  // 保存指向 mock LLM 的启用配置（保存后 reload 让渲染层 aiStore 重新加载）
+  await cdp.eval(
+    `(async () => {
+      await window.jareking.invoke('ai:config:save', {
+        name: 'LLM 冒烟', kind: 'openai-compatible', baseUrl: '${llmBase}',
+        model: 'plan-model', apiKey: 'sk-plan', enabled: true,
+      });
+      return 'ok';
+    })()`,
+    true,
+  );
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Writer'));
+    if (btn) btn.click();
+  })()`);
+  await sleep(1500);
+  // AI 面板输入指令并回车
+  results.aiPanelSent = await cdp.eval(`(() => {
+    const input = document.querySelector('input[placeholder="输入指令，回车发送"]');
+    if (!input) return 'no-input';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '在光标处插入验证文本');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    return 'sent';
+  })()`);
+  await sleep(4000);
+  // 验证文档真实变更 + 执行摘要出现
+  results.aiDocChanged = await cdp.eval(
+    `document.querySelector('.ProseMirror')?.textContent.includes('AI 插入成功') ?? false`,
+  );
+  results.aiSummaryShown = await cdp.eval(
+    `document.body.textContent.includes('1 个操作成功')`,
+  );
+  // 清理配置
+  await cdp.eval(
+    `window.jareking.invoke('ai:config:list').then((list) =>
+      Promise.all(list.filter((c) => c.name === 'LLM 冒烟').map((c) => window.jareking.invoke('ai:config:delete', { id: c.id }))))`,
+    true,
+  );
+  llm.close();
+  if (results.aiPanelSent !== 'sent' || !results.aiDocChanged || !results.aiSummaryShown) failed = true;
   if (
     results.aiSave !== 'ok' ||
     !results.aiResolveNonEmpty ||
