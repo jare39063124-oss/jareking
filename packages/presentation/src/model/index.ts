@@ -39,6 +39,8 @@ export interface JkSlide {
   shapes: JkShape[];
   /** 版式名（来自 slideLayout，v1 仅记录） */
   layout?: string;
+  /** 切换效果（v1 仅 none/fade；其余效果解析降级为 none） */
+  transition?: 'none' | 'fade' | 'slide';
 }
 
 /* =========================================================================

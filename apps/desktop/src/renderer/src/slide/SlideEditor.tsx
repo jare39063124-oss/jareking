@@ -18,6 +18,7 @@ import {
   Download,
   FolderOpen,
   ImageIcon,
+  Play,
   Plus,
   Square,
   Trash2,
@@ -26,6 +27,7 @@ import {
 import { exportPptx, parsePptx, type JkPresentation, type JkShape, type JkSlide } from '@jareking/presentation';
 import { Button } from '../components/Button';
 import { toast } from '../stores/toastStore';
+import { SlideshowOverlay } from './SlideshowOverlay';
 
 /** 舞台像素宽（画布 EMU 宽按比例缩放） */
 const STAGE_W = 896;
@@ -178,6 +180,19 @@ export function SlideEditor() {
   const stageRef = useRef<Konva.Stage>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
+  const [playing, setPlaying] = useState(false);
+
+  // F5 放映（拦截浏览器默认刷新）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'F5') {
+        e.preventDefault();
+        setPlaying(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const slide: JkSlide | undefined = pres.slides[slideIdx];
   const scale = STAGE_W / pres.slideWidth;
@@ -488,7 +503,27 @@ export function SlideEditor() {
           <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} disabled={!selectedId} onClick={deleteSelected}>
             删除
           </Button>
-          <span className="ml-2 text-xs text-text-secondary">拖拽移动 · 双击改文字 · 单击选中</span>
+          <span className="mx-1 h-5 w-px bg-border" />
+          <Button variant="secondary" size="sm" icon={<Play size={13} />} onClick={() => setPlaying(true)} title="F5">
+            放映
+          </Button>
+          <select
+            className="h-7 rounded border border-border bg-surface px-1 text-xs text-text outline-none"
+            value={slide?.transition ?? 'none'}
+            title="切换效果"
+            onChange={(e) => {
+              const v = e.target.value as 'none' | 'fade';
+              setPres((prev) => {
+                const slides = [...prev.slides];
+                slides[slideIdx] = { ...slides[slideIdx], transition: v };
+                return { ...prev, slides };
+              });
+            }}
+          >
+            <option value="none">无切换</option>
+            <option value="fade">淡入</option>
+          </select>
+          <span className="ml-2 text-xs text-text-secondary">拖拽移动 · 双击改文字 · 单击选中 · F5 放映</span>
         </div>
 
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/60 p-4">
@@ -527,6 +562,14 @@ export function SlideEditor() {
           if (f) void addImage(f);
         }}
       />
+
+      {playing && (
+        <SlideshowOverlay
+          pres={pres}
+          startIndex={slideIdx}
+          onClose={() => setPlaying(false)}
+        />
+      )}
     </div>
   );
 }

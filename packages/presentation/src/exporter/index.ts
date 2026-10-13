@@ -124,6 +124,7 @@ function serializeSlide(
   shapes: JkShape[],
   slideIndex: number,
   images: SlideImage[],
+  transition?: 'none' | 'fade' | 'slide',
 ): string {
   let id = 2; // id=1 保留给 spTree 组
   const parts: string[] = [];
@@ -152,6 +153,7 @@ function serializeSlide(
     <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
     ${parts.join('')}
   </p:spTree></p:cSld>
+  ${transition === 'fade' ? '<p:transition><p:fade/></p:transition>' : ''}
 </p:sld>`;
 }
 
@@ -228,7 +230,10 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
       images.push({ relId: `rId${images.length + 2}`, ext: sniffImageExt(bytes), bytes, modelKey });
     }
 
-    zip.file(`ppt/slides/slide${i + 1}.xml`, serializeSlide(slide.shapes ?? [], i, images));
+    zip.file(
+      `ppt/slides/slide${i + 1}.xml`,
+      serializeSlide(slide.shapes ?? [], i, images, slide.transition),
+    );
 
     if (images.length) {
       zip.file(

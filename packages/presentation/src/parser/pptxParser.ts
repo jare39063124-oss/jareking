@@ -240,7 +240,8 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
     if (!slideXml) continue;
     const slideObj = parseXml(slideXml);
     const spTree = slideObj?.sld?.cSld?.spTree;
-    slides.push({ partName, shapes: parseShapeTree(spTree) });
+    const transition = slideObj?.sld?.transition?.fade !== undefined ? 'fade' : 'none';
+    slides.push({ partName, shapes: parseShapeTree(spTree), transition });
   }
 
   // 兜底：无 sldIdLst 时按包内 slideN.xml 排序
@@ -256,7 +257,8 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
       const slideXml = await readPart(zip, name);
       if (!slideXml) continue;
       const slideObj = parseXml(slideXml);
-      slides.push({ partName: name, shapes: parseShapeTree(slideObj?.sld?.cSld?.spTree) });
+      const transition = slideObj?.sld?.transition?.fade !== undefined ? 'fade' : 'none';
+      slides.push({ partName: name, shapes: parseShapeTree(slideObj?.sld?.cSld?.spTree), transition });
     }
   }
 

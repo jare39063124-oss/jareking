@@ -168,6 +168,29 @@ async function main() {
   );
   if (results.konvaCanvas < 1 || !results.slidePanel) failed = true;
 
+  // 3b. 放映模式：点「放映」→ 全屏覆盖层出现 → Esc 退出
+  results.slideshowOpen = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('放映'));
+    if (!btn) return 'no-button';
+    btn.click();
+    return 'clicked';
+  })()`);
+  await sleep(800);
+  results.slideshowOverlay = await cdp.eval(
+    `(() => { const el = [...document.querySelectorAll('div')].find((d) => d.className.includes('bg-black') && d.className.includes('fixed')); return !!el; })()`,
+  );
+  results.slideshowCounter = await cdp.eval(
+    `(() => { const el = [...document.querySelectorAll('div')].find((d) => d.textContent === '1 / 2 · Esc 退出 · 右键上一页'); return !!el; })()`,
+  );
+  await cdp.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`,
+  );
+  await sleep(500);
+  results.slideshowClosed = await cdp.eval(
+    `(() => { const el = [...document.querySelectorAll('div')].find((d) => d.className.includes('bg-black') && d.className.includes('fixed')); return !el; })()`,
+  );
+  if (!results.slideshowOverlay || !results.slideshowClosed) failed = true;
+
   // 3. 汇总错误
   const errors = [...cdp.exceptions, ...cdp.consoleErrors].filter((e) => !pickIgnorable(e));
   results.consoleErrors = errors.slice(0, 10);
