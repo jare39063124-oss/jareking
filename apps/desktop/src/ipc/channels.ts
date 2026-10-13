@@ -12,6 +12,10 @@ export const IPC = {
   DOC_AUTOSAVE_SAVE: 'doc:autosave:save',
   DOC_AUTOSAVE_PENDING: 'doc:autosave:pending',
   UPDATER_CHECK: 'updater:check',
+  AI_CONFIG_LIST: 'ai:config:list',
+  AI_CONFIG_SAVE: 'ai:config:save',
+  AI_CONFIG_DELETE: 'ai:config:delete',
+  AI_KEY_RESOLVE: 'ai:key:resolve',
 } as const;
 
 /** 允许通过 db:query 执行的操作名（白名单，杜绝任意 SQL 注入） */

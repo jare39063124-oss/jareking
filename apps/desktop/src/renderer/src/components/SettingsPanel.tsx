@@ -1,6 +1,7 @@
 import { Moon, Sun } from 'lucide-react';
 import { Modal } from './Modal';
 import { Select } from './Select';
+import { AiConfigSection } from './AiConfigSection';
 import { toast } from '../stores/toastStore';
 import { useUiStore, type ThemeMode } from '../stores/uiStore';
 
@@ -48,8 +49,11 @@ export function SettingsPanel() {
   const setTheme = useUiStore((state) => state.setTheme);
 
   return (
-    <Modal open={open} onClose={() => setOpen(false)} title="设置" width={460}>
+    <Modal open={open} onClose={() => setOpen(false)} title="设置" width={560}>
       <div className="flex flex-col gap-6">
+        {/* AI 服务商配置（T4.2） */}
+        <AiConfigSection />
+
         {/* 外观：主题 */}
         <section className="flex flex-col gap-2">
           <h3 className="text-ui font-medium text-fg">外观</h3>

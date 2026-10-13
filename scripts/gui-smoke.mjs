@@ -11,6 +11,7 @@
  * Node ≥22（内置 WebSocket）。
  */
 import process from 'node:process';
+import http from 'node:http';
 
 const port = (() => {
   const i = process.argv.indexOf('--port');
@@ -110,10 +111,12 @@ async function main() {
   const results = {};
   let failed = false;
 
-  // 0. 应用就绪
+  // 0. 应用就绪（刷新一次，消除冷启动会话恢复等不确定状态）
   await cdp.eval(`document.readyState === 'complete'`);
   results.appRoot = await cdp.eval(`!!document.querySelector('#root') && document.querySelector('#root').children.length > 0`);
   if (!results.appRoot) failed = true;
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
 
   // 1. Sheet（先验证：EmptyState 的模块按钮只在没有标签页时显示）
   const openSheet = `(() => {
@@ -190,6 +193,87 @@ async function main() {
     `(() => { const el = [...document.querySelectorAll('div')].find((d) => d.className.includes('bg-black') && d.className.includes('fixed')); return !el; })()`,
   );
   if (!results.slideshowOverlay || !results.slideshowClosed) failed = true;
+
+  // 4. T4.2 AI 配置端到端：保存（safeStorage 加密）→ resolve → adapter 连通 mock 网关
+  const mock = http.createServer((req, res) => {
+    if (req.url?.endsWith('/chat/completions')) {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          choices: [{ message: { content: '连接成功' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 5, completion_tokens: 2 },
+        }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => mock.listen(0, '127.0.0.1', r));
+  const mockBase = `http://127.0.0.1:${mock.address().port}/v1`;
+
+  results.aiSave = await cdp.eval(
+    `window.jareking.invoke('ai:config:save', {
+      name: '冒烟配置', kind: 'openai-compatible', baseUrl: '${mockBase}',
+      model: 'smoke-model', apiKey: 'sk-smoke-123', enabled: true,
+    }).then((c) => c.id ? 'ok' : 'no-id')`,
+    true,
+  );
+  results.aiResolveNonEmpty = await cdp.eval(
+    `(async () => {
+      const list = await window.jareking.invoke('ai:config:list');
+      const key = await window.jareking.invoke('ai:key:resolve', { id: list[0].id });
+      return key.startsWith('sk-smoke-');
+    })()`,
+    true,
+  );
+  // 配置列表不泄漏 Key
+  results.aiListNoLeak = await cdp.eval(
+    `window.jareking.invoke('ai:config:list').then((list) => !JSON.stringify(list).includes('sk-smoke-'))`,
+    true,
+  );
+  // 用解析出的 Key 走适配器真实调用 mock 网关（页面内等价链路验证）
+  results.aiCallMock = await cdp.eval(
+    `(async () => {
+      const list = await window.jareking.invoke('ai:config:list');
+      const key = await window.jareking.invoke('ai:key:resolve', { id: list[0].id });
+      const res = await fetch('${mockBase}/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+        body: JSON.stringify({ model: 'smoke-model', messages: [{ role: 'user', content: 'hi' }] }),
+      });
+      const j = await res.json();
+      return j.choices?.[0]?.message?.content === '连接成功';
+    })()`,
+    true,
+  );
+  // UI：设置面板展示 AI 配置区块与列表
+  results.aiUi = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('设置') || b.title?.includes('设置'));
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(800);
+  results.aiSectionVisible = await cdp.eval(
+    `!!document.body.textContent.includes('AI 服务商') && document.body.textContent.includes('冒烟配置')`,
+  );
+  // 清理：删除测试配置
+  await cdp.eval(
+    `window.jareking.invoke('ai:config:list').then((list) =>
+      Promise.all(list.filter((c) => c.name === '冒烟配置').map((c) => window.jareking.invoke('ai:config:delete', { id: c.id }))))`,
+    true,
+  );
+  mock.close();
+  if (
+    results.aiSave !== 'ok' ||
+    !results.aiResolveNonEmpty ||
+    !results.aiListNoLeak ||
+    !results.aiCallMock ||
+    !results.aiSectionVisible
+  )
+    failed = true;
 
   // 3. 汇总错误
   const errors = [...cdp.exceptions, ...cdp.consoleErrors].filter((e) => !pickIgnorable(e));

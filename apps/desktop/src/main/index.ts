@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import { initAutoUpdater, checkForUpdates } from './updater.js';
 import { initServices, type AppServices } from './services/bootstrap.js';
+import type { AiConfigSaveInput } from './services/aiConfigService.js';
 import { IPC } from '../ipc/channels.js';
 
 // 注意：__dirname 由 electron-vite 在打包时注入（ESM 环境下可用），无需手动声明
@@ -39,7 +40,7 @@ export function getPendingOpenFiles(): string[] {
  */
 function registerIpcHandlers(): void {
   if (!services) return;
-  const { account, library, db } = services;
+  const { account, library, db, ai } = services;
 
   // 账户：获取并引导本地账户 + 注册礼（幂等）
   ipcMain.handle(IPC.ACCOUNT_GET, () => account.bootstrapAccount());
@@ -101,6 +102,23 @@ function registerIpcHandlers(): void {
 
   // 更新：手动触发检查（仅打包模式生效）
   ipcMain.handle(IPC.UPDATER_CHECK, async () => checkForUpdates());
+
+  // AI 配置：列表 / 保存（含密钥加密）/ 删除 / 明文 Key 解析（单次调用注入）
+  ipcMain.handle(IPC.AI_CONFIG_LIST, () => ai.list());
+  ipcMain.handle(IPC.AI_CONFIG_SAVE, (_event, payload?: AiConfigSaveInput) => {
+    if (!payload || !payload.name || !payload.kind || !payload.baseUrl) {
+      throw new Error('AI 配置缺少必填字段');
+    }
+    return ai.save(payload);
+  });
+  ipcMain.handle(IPC.AI_CONFIG_DELETE, (_event, payload?: { id: string }) => {
+    if (!payload?.id) return false;
+    return ai.remove(payload.id);
+  });
+  ipcMain.handle(IPC.AI_KEY_RESOLVE, (_event, payload?: { id: string }) => {
+    if (!payload?.id) return '';
+    return ai.resolveKey(payload.id);
+  });
 }
 
 function createWindow(): void {
