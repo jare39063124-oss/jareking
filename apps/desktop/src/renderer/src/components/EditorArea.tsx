@@ -4,6 +4,7 @@ import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
 import { toast } from '../stores/toastStore';
+import { SheetEditor } from '../sheet/SheetEditor';
 import { WriterEditor } from '../writer/WriterEditor';
 
 /** 云文件占位数据（右侧树） */
@@ -102,9 +103,6 @@ function ModulePlaceholder({ module }: { module: DocModule }) {
         <div className="flex items-center gap-2 text-ui font-medium text-fg">
           <meta.icon size={15} className="text-accent" aria-hidden="true" />
           {meta.label}
-          <span className="rounded-full border border-border px-1.5 py-px text-tiny font-normal text-muted">
-            编辑区占位
-          </span>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -121,10 +119,16 @@ function ModulePlaceholder({ module }: { module: DocModule }) {
         </div>
       </div>
 
-      {/* 画布区 */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/40 p-8">
-        {renderCanvas(module)}
-      </div>
+      {/* 画布区：Sheet 用无内边距全幅容器（Univer 需要真实尺寸）；其余模块居中展示 */}
+      {module === 'sheet' ? (
+        <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
+          <SheetEditor />
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/40 p-8">
+          {renderCanvas(module)}
+        </div>
+      )}
     </div>
   );
 }
@@ -134,43 +138,13 @@ function renderCanvas(module: DocModule) {
   switch (module) {
     case 'writer':
       return <WriterEditor />;
-    case 'sheet':
-      return <SheetCanvas />;
     case 'slide':
       return <SlideCanvas />;
     case 'pdf':
       return <PdfCanvas />;
+    case 'sheet':
+      return null; // Sheet 走上方全幅分支
   }
-}
-
-/** Sheet 占位画布：迷你网格 */
-function SheetCanvas() {
-  const columns = 'ABCDEFGHI'.split('');
-  const rows = Array.from({ length: 10 }, (_, index) => index + 1);
-
-  return (
-    <div className="overflow-hidden rounded-sm border border-border bg-surface shadow-card">
-      {/* 列头 */}
-      <div className="flex h-6 items-center border-b border-border bg-muted-bg text-tiny text-muted">
-        <span className="w-8 shrink-0 text-center">#</span>
-        {columns.map((column) => (
-          <span key={column} className="w-16 shrink-0 text-center">
-            {column}
-          </span>
-        ))}
-      </div>
-      {/* 数据行 */}
-      {rows.map((row) => (
-        <div key={row} className="flex h-7 items-center border-b border-border/60 text-tiny text-muted last:border-b-0">
-          <span className="w-8 shrink-0 text-center">{row}</span>
-          {columns.map((column) => (
-            <span key={column} className="h-full w-16 shrink-0 border-l border-border/60" />
-          ))}
-        </div>
-      ))}
-      <div className="p-2 text-tiny text-muted">Sheet 编辑区（占位）</div>
-    </div>
-  );
 }
 
 /** Presentation 占位画布：16:9 幻灯片 */

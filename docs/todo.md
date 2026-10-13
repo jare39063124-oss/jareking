@@ -84,9 +84,13 @@
 
 ## Phase 2 — Sheet 核心
 
-- [ ] **T2.1** xlsx 文件层：SheetJS 解析/写回；多 sheet、样式、合并单元格、行列属性
-- [ ] **T2.2** 表格引擎：集成 Univer（或自研 canvas 表格）；单元格编辑、格式化、行列操作、冻结窗格
-  - 验收：1 万行 × 20 列滚动帧率 ≥ 30fps
+- [x] **T2.1** xlsx 文件层：SheetJS 解析/写回；多 sheet、样式、合并单元格、行列属性
+  - 完成（2026-10-13）：新建 `packages/sheet`（**exceljs** 替代 SheetJS——社区版不读样式，exceljs 全支持）；`JkWorkbook/JkSheet/JkCell/JkCellStyle` 契约（0 基坐标、px 尺寸、稀疏 cells "r,c" 键）；解析覆盖 多 sheet（含隐藏）/值/公式（f 去 = 前缀+缓存结果）/合并（model.merges）/列宽（字符↔px）/行高（pt↔px）/冻结/基础样式（字体/填充/对齐/边框/数字格式/富文本降级）；导出精确互逆；A1 记法工具（toA1/parseA1Range）
+  - 运行时冒烟通过：export→parse round-trip 值/公式/合并/加粗/填充/列宽全部保持；exceljs `views/model` 为 null 的坑已防御
+- [x] **T2.2** 表格引擎：集成 Univer（或自研 canvas 表格）；单元格编辑、格式化、行列操作、冻结窗格
+  - 完成（2026-10-13）：**Univer v1.0.4 preset 方案**（`@univerjs/presets` + `@univerjs/preset-sheets-core`，中文 locale 自带全子包合并）；`apps/desktop/src/renderer/src/sheet/`：`univerAdapter.ts`（JkWorkbook ↔ Univer IWorkbookData：值/公式/合并/列宽行高）+ `SheetEditor.tsx`（挂载/打开/保存/重置示例，卸载 dispose 防泄漏）；EditorArea sheet 分支替换占位为全幅真实编辑器；Univer 自带工具栏/公式栏/右键菜单/多 sheet 标签/撤销重做
+  - 验收（1 万行×20 列 ≥30fps）：headless 无法测帧率，待真实机器人工验证
+  - **后续迭代**：JkCellStyle ↔ Univer IStyleData 样式映射（当前 Univer 内样式编辑不回存到 xlsx，T2.2.1）；冻结窗格读取映射；主包 16.4MB 需代码分割（T8.3）
 - [ ] **T2.3** 公式引擎：v1 集成 formula.js（200+ 函数）；自研公式解析器（ANTLR 语法 + 依赖图 + 循环引用检测）替换核心函数
 - [ ] **T2.4** 数据功能：排序、筛选、条件格式、数据验证
 - [ ] **T2.5** 图表：柱状/折线/饼图/散点；图表数据联动

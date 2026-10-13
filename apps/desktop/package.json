@@ -14,6 +14,7 @@
   "dependencies": {
     "@jareking/ai": "workspace:*",
     "@jareking/core": "workspace:*",
+    "@jareking/sheet": "workspace:*",
     "@jareking/writer": "workspace:*",
     "@tiptap/core": "^2.27.0",
     "@tiptap/extension-color": "^2.27.0",
@@ -30,6 +31,8 @@
     "@tiptap/pm": "^2.27.0",
     "@tiptap/react": "^2.27.0",
     "@tiptap/starter-kit": "^2.27.0",
+    "@univerjs/preset-sheets-core": "^1.0.4",
+    "@univerjs/presets": "^1.0.4",
     "electron-updater": "^6.8.9",
     "lucide-react": "^1.55.0",
     "react": "^19.3.0",
