@@ -112,7 +112,10 @@
 
 ## Phase 3 — Presentation 核心（v1 全量，不接受降级）
 
-- [ ] **T3.1** pptx 解析：幻灯片/版式/占位符/形状树 → 自有模型（基础保真）
+- [x] **T3.1** pptx 解析：幻灯片/版式/占位符/形状树 → 自有模型（基础保真）
+  - 完成（2026-10-13）：新建 `packages/presentation`（JSZip + fast-xml-parser，与 writer 同约定：removeNSPrefix 后用无前缀键）；模型 `JkPresentation/JkSlide/JkShape`（text/shape/image 可判别联合，EMU 坐标、pt 字号）；解析覆盖 幻灯片顺序（sldIdLst+rels，含 sldId 属性 r:id/id 冲突处理）/画布尺寸/文本框（段落+run 格式：粗斜下、字号、色、字体、对齐、级别、项目符号）/预设几何（含形状内文字+纯色填充+旋转）/图片（relId）
+  - **分类规则修正**：prstGeom rect + 有文本 → 文本框（真实 PPT 文本框都带 rect 几何），其余几何 → 形状；避免全部文本框被归为形状
+  - 冒烟通过（内存构造最小 pptx → 解析断言：形状序列/格式/填充/旋转/图片全对）；动画/母版/SmartArt/图表降级记录 fidelity.notes；导出器随 T3.4
 - [ ] **T3.2** 幻灯片编辑器：Konva/Fabric canvas；文本框/形状/图片/表格编辑；主题母版
 - [ ] **T3.3** 动画与切换（基础）、放映模式（F5）
 - [ ] **T3.4** pptx 导出（PptxGenJS + 自研序列化）；导出 PDF
