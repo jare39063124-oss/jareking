@@ -14,6 +14,8 @@ interface UiState {
   settingsOpen: boolean;
   /** 命令面板是否打开（Ctrl+Shift+P） */
   commandPaletteOpen: boolean;
+  /** PDF 工具箱模态是否打开（文件菜单入口） */
+  pdfToolboxOpen: boolean;
   /** Ribbon 当前激活的菜单标签 */
   activeRibbonTab: RibbonTabId;
   setTheme: (theme: ThemeMode) => void;
@@ -22,6 +24,7 @@ interface UiState {
   toggleAiPanel: () => void;
   setSettingsOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
+  setPdfToolboxOpen: (open: boolean) => void;
   setActiveRibbonTab: (tab: RibbonTabId) => void;
 }
 
@@ -35,6 +38,7 @@ export const useUiStore = create<UiState>()((set) => ({
   aiPanelOpen: true,
   settingsOpen: false,
   commandPaletteOpen: false,
+  pdfToolboxOpen: false,
   activeRibbonTab: 'home',
 
   setTheme: (theme) => {
@@ -53,6 +57,7 @@ export const useUiStore = create<UiState>()((set) => ({
   toggleAiPanel: () => set((state) => ({ aiPanelOpen: !state.aiPanelOpen })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setPdfToolboxOpen: (open) => set({ pdfToolboxOpen: open }),
   setActiveRibbonTab: (tab) => set({ activeRibbonTab: tab }),
 }));
 

@@ -111,9 +111,13 @@ async function main() {
   const results = {};
   let failed = false;
 
-  // 0. 应用就绪（刷新一次，消除冷启动会话恢复等不确定状态）
-  await cdp.eval(`document.readyState === 'complete'`);
-  results.appRoot = await cdp.eval(`!!document.querySelector('#root') && document.querySelector('#root').children.length > 0`);
+  // 0. 应用就绪（轮询等待挂载；刷新一次消除冷启动会话恢复等不确定状态）
+  results.appRoot = false;
+  for (let t = 0; t < 20; t++) {
+    results.appRoot = await cdp.eval(`!!document.querySelector('#root') && document.querySelector('#root').children.length > 0`);
+    if (results.appRoot) break;
+    await sleep(500);
+  }
   if (!results.appRoot) failed = true;
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
@@ -130,7 +134,7 @@ async function main() {
 
   // 1. Sheet（先验证：EmptyState 的模块按钮只在没有标签页时显示）
   const openSheet = `(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sheet'));
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('表格'));
     if (!btn) return 'no-button';
     btn.click();
     return 'clicked';
@@ -148,7 +152,7 @@ async function main() {
   await sleep(2500);
   const openWriter = `(() => {
     if (document.querySelector('.ProseMirror')) return 'already';
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Writer'));
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('文字'));
     if (!btn) return 'no-button';
     btn.click();
     return 'clicked';
@@ -306,7 +310,7 @@ async function main() {
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
   await cdp.eval(`(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Writer'));
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('文字'));
     if (btn) btn.click();
   })()`);
   await sleep(1500);
@@ -324,7 +328,7 @@ async function main() {
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
   await cdp.eval(`(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Writer'));
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('文字'));
     if (btn) btn.click();
   })()`);
   await sleep(1500);
@@ -382,7 +386,7 @@ async function main() {
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
   await cdp.eval(`(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sheet'));
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('表格'));
     if (btn) btn.click();
   })()`);
   await sleep(3500);
@@ -399,7 +403,7 @@ async function main() {
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
   await cdp.eval(`(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sheet'));
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('表格'));
     if (btn) btn.click();
   })()`);
   // 等 Univer 就绪（输入框非 disabled）
@@ -524,6 +528,26 @@ async function main() {
   );
   llm3.close();
   if (results.pptAiSent !== 'sent' || results.pptAiSlideCount !== 3) failed = true;
+
+  // 8. PDF 工具箱（文件菜单入口）
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  results.pdfFileTab = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '文件');
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(500);
+  results.pdfToolboxOpen = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('PDF 工具箱'));
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(600);
+  results.pdfToolboxVisible = await cdp.eval(
+    `document.body.textContent.includes('PDF 工具箱') && document.body.textContent.includes('本地离线处理') && document.body.textContent.includes('提取 / 删除页')`,
+  );
+  if (!results.pdfToolboxVisible) failed = true;
 
 
   if (results.aiPanelSent !== 'sent' || !results.aiDocChanged || !results.aiSummaryShown) failed = true;

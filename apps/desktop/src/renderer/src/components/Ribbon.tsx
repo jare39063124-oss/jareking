@@ -40,10 +40,12 @@ import {
   Underline,
   ZoomIn,
   ZoomOut,
+  FileCog,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Tabs } from './Tabs';
 import { toastNotImplemented } from '../stores/toastStore';
+import { useUiStore } from '../stores/uiStore';
 import { useUiStore, type RibbonTabId } from '../stores/uiStore';
 
 /** Ribbon 占位工具按钮 */
@@ -85,6 +87,10 @@ const RIBBON_TABS: RibbonTabDef[] = [
           { id: 'export-pdf', label: '导出 PDF', icon: FileDown },
           { id: 'print', label: '打印', icon: Printer },
         ],
+      },
+      {
+        name: 'PDF 工具',
+        tools: [{ id: 'pdf-toolbox', label: 'PDF 工具箱', icon: FileCog }],
       },
     ],
   },
@@ -225,6 +231,7 @@ const RIBBON_TABS: RibbonTabDef[] = [
 
 /** Ribbon 工具栏骨架：菜单标签行（可切换）+ 当前标签下的占位工具组 */
 export function Ribbon() {
+  const setPdfToolboxOpen = useUiStore((state) => state.setPdfToolboxOpen);
   const activeRibbonTab = useUiStore((state) => state.activeRibbonTab);
   const setActiveRibbonTab = useUiStore((state) => state.setActiveRibbonTab);
 
@@ -265,7 +272,10 @@ export function Ribbon() {
                     type="button"
                     title={tool.label}
                     className="flex w-[52px] flex-col items-center gap-1 rounded-sm p-1.5 text-tiny text-fg transition-colors hover:bg-active"
-                    onClick={() => toastNotImplemented(tool.label)}
+                    onClick={() => {
+                      if (tool.id === 'pdf-toolbox') setPdfToolboxOpen(true);
+                      else toastNotImplemented(tool.label);
+                    }}
                   >
                     <tool.icon size={18} aria-hidden="true" />
                     <span className="w-full text-center leading-tight">{tool.label}</span>

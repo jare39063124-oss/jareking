@@ -15,10 +15,10 @@ export interface ModuleMeta {
 
 /** 全应用共享的模块元信息表（标签栏 / 编辑区 / 状态栏 / 命令面板复用） */
 export const MODULE_META: Record<DocModule, ModuleMeta> = {
-  writer: { label: 'Writer 文字', shortLabel: 'Writer', defaultTitle: '文档', icon: FileText },
-  sheet: { label: 'Sheet 表格', shortLabel: 'Sheet', defaultTitle: '工作簿', icon: Table },
-  slide: { label: 'Presentation 演示', shortLabel: '演示', defaultTitle: '演示文稿', icon: Presentation },
-  pdf: { label: 'PDF 阅读', shortLabel: 'PDF', defaultTitle: 'PDF 文档', icon: BookOpen },
+  writer: { label: '文字', shortLabel: '文字', defaultTitle: '文档', icon: FileText },
+  sheet: { label: '表格', shortLabel: '表格', defaultTitle: '工作簿', icon: Table },
+  slide: { label: '演示', shortLabel: '演示', defaultTitle: '演示文稿', icon: Presentation },
+  pdf: { label: 'PDF', shortLabel: 'PDF', defaultTitle: 'PDF 文档', icon: BookOpen },
 };
 
 /** 多文档标签页结构 */

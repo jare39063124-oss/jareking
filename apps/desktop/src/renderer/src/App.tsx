@@ -1,5 +1,6 @@
 import { AIPanel } from './components/AIPanel';
 import { CommandPalette } from './components/CommandPalette';
+import { PdfToolbox } from './components/PdfToolbox';
 import { EditorArea } from './components/EditorArea';
 import { Ribbon } from './components/Ribbon';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -38,6 +39,7 @@ export default function App() {
       {/* 全局浮层 */}
       <CommandPalette />
       <SettingsPanel />
+      <PdfToolbox />
       <ToastViewport />
     </div>
   );
