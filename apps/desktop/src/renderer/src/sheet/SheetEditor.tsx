@@ -14,10 +14,18 @@ import { useEffect, useRef, useState } from 'react';
 import { createUniver, defaultTheme, LocaleType } from '@univerjs/presets';
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core';
 import UniverZhCN from '@univerjs/preset-sheets-core/locales/zh-CN';
+import { UniverSheetsSortPreset } from '@univerjs/preset-sheets-sort';
+import SortZhCN from '@univerjs/preset-sheets-sort/locales/zh-CN';
+import { UniverSheetsFilterPreset } from '@univerjs/preset-sheets-filter';
+import FilterZhCN from '@univerjs/preset-sheets-filter/locales/zh-CN';
+import { UniverSheetsConditionalFormattingPreset } from '@univerjs/preset-sheets-conditional-formatting';
+import CfZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN';
+import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
+import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
-import { exportXlsx, parseXlsx, type JkWorkbook } from '@jareking/sheet';
+import { exportXlsx, parseXlsx, sheetToCsv, type JkWorkbook } from '@jareking/sheet';
 import type { FUniver } from '@univerjs/core';
-import { Download, FolderOpen, RefreshCw } from 'lucide-react';
+import { Download, FileSpreadsheet, FolderOpen, RefreshCw } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { toast } from '../stores/toastStore';
@@ -69,9 +77,25 @@ export function SheetEditor() {
 
     const { univer, univerAPI } = createUniver({
       locale: 'zh-CN',
-      locales: { 'zh-CN': UniverZhCN as Record<string, string> },
+      locales: {
+        'zh-CN': Object.assign(
+          {},
+          UniverZhCN as Record<string, string>,
+          SortZhCN as Record<string, string>,
+          FilterZhCN as Record<string, string>,
+          CfZhCN as Record<string, string>,
+          DvZhCN as Record<string, string>,
+        ),
+      },
       theme: defaultTheme,
-      presets: [UniverSheetsCorePreset({ container: el })],
+      presets: [
+        UniverSheetsCorePreset({ container: el }),
+        // T2.4 数据功能：排序 / 筛选 / 条件格式 / 数据验证
+        UniverSheetsSortPreset(),
+        UniverSheetsFilterPreset(),
+        UniverSheetsConditionalFormattingPreset(),
+        UniverSheetsDataValidationPreset(),
+      ],
     });
     void univer;
     univerAPI.createWorkbook(jkToUniverData(demoWorkbook()) as Parameters<
@@ -105,30 +129,58 @@ export function SheetEditor() {
     }
   };
 
-  const onSave = async () => {
+  /** 当前 Univer 工作簿快照 → JkWorkbook（保存侧共用） */
+  const currentJkWorkbook = (): JkWorkbook | null => {
     const api = apiRef.current;
-    if (!api) return;
+    if (!api) return null;
+    const workbook = api.getActiveWorkbook();
+    if (!workbook) return null;
+    // FWorkbook.save() 返回 IWorkbookSnapshotData（v1.0 facade）
+    const snapshot = (workbook as unknown as { save: () => Record<string, unknown> }).save();
+    return univerSnapshotToJk(snapshot as Record<string, never>);
+  };
+
+  /** 触发浏览器下载 */
+  const downloadBlob = (buf: BlobPart, mime: string, filename: string): void => {
+    const blob = new Blob([buf], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const onSave = async () => {
     try {
-      const workbook = api.getActiveWorkbook();
-      if (!workbook) throw new Error('no active workbook');
-      // FWorkbook.save() 返回 IWorkbookSnapshotData（v1.0 facade）
-      const snapshot = (workbook as unknown as { save: () => Record<string, unknown> }).save();
-      const jk = univerSnapshotToJk(snapshot as Record<string, never>);
+      const jk = currentJkWorkbook();
+      if (!jk) throw new Error('no active workbook');
       const buf = await exportXlsx(jk);
-      const blob = new Blob([buf], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = '导出.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(
+        buf,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '导出.xlsx',
+      );
       toast.success('已导出「导出.xlsx」');
     } catch {
       toast.warning('导出失败：当前工作簿无法序列化');
+    }
+  };
+
+  /** T2.6：当前活动 sheet 导出 CSV（仅值，无样式/公式重算） */
+  const onSaveCsv = () => {
+    try {
+      const jk = currentJkWorkbook();
+      if (!jk || !jk.sheets.length) throw new Error('no sheet');
+      const sheet = jk.sheets[jk.activeSheetIndex ?? 0];
+      const csv = sheetToCsv(sheet);
+      // 加 BOM，保证 Excel/WPS 识别 UTF-8
+      downloadBlob(`\uFEFF${csv}`, 'text/csv;charset=utf-8', `${sheet.name || '导出'}.csv`);
+      toast.success(`已导出「${sheet.name || '导出'}.csv」`);
+    } catch {
+      toast.warning('CSV 导出失败');
     }
   };
 
@@ -147,6 +199,9 @@ export function SheetEditor() {
         </Button>
         <Button variant="primary" size="sm" icon={<Download size={13} />} onClick={onSave} disabled={!ready}>
           保存
+        </Button>
+        <Button variant="secondary" size="sm" icon={<FileSpreadsheet size={13} />} onClick={onSaveCsv} disabled={!ready}>
+          导出 CSV
         </Button>
         <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={onReset}>
           重置示例

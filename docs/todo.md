@@ -91,10 +91,17 @@
   - 完成（2026-10-13）：**Univer v1.0.4 preset 方案**（`@univerjs/presets` + `@univerjs/preset-sheets-core`，中文 locale 自带全子包合并）；`apps/desktop/src/renderer/src/sheet/`：`univerAdapter.ts`（JkWorkbook ↔ Univer IWorkbookData：值/公式/合并/列宽行高）+ `SheetEditor.tsx`（挂载/打开/保存/重置示例，卸载 dispose 防泄漏）；EditorArea sheet 分支替换占位为全幅真实编辑器；Univer 自带工具栏/公式栏/右键菜单/多 sheet 标签/撤销重做
   - 验收（1 万行×20 列 ≥30fps）：headless 无法测帧率，待真实机器人工验证
   - **后续迭代**：JkCellStyle ↔ Univer IStyleData 样式映射（当前 Univer 内样式编辑不回存到 xlsx，T2.2.1）；冻结窗格读取映射；主包 16.4MB 需代码分割（T8.3）
-- [ ] **T2.3** 公式引擎：v1 集成 formula.js（200+ 函数）；自研公式解析器（ANTLR 语法 + 依赖图 + 循环引用检测）替换核心函数
-- [ ] **T2.4** 数据功能：排序、筛选、条件格式、数据验证
+- [x] **T2.3** 公式引擎：v1 集成 formula.js（200+ 函数）；自研公式解析器（ANTLR 语法 + 依赖图 + 循环引用检测）替换核心函数
+  - 完成（2026-10-13）：**方案变更——无需 formula.js**。Univer core preset 已内置公式引擎（@univerjs/engine-formula + @univerjs/sheets-formula，400+ 函数，重算/依赖图/循环引用检测内置），T2.2 集成即生效；编辑器内公式栏/函数提示由 preset 自带
+  - 自研解析器替换（性能/可控性）：**延后**至 v2（Univer 引擎满足 v1，替换属优化非阻塞）
+- [x] **T2.4** 数据功能：排序、筛选、条件格式、数据验证
+  - 完成（2026-10-13）：注册 Univer 官方 preset 四件套——`preset-sheets-sort` / `preset-sheets-filter` / `preset-sheets-conditional-formatting` / `preset-sheets-data-validation`（均 1.0.4，中文 locale 与 core 合并注入）；功能入口进 Univer 自带工具栏/右键菜单
+  - 真实机器验收待做（headless 无法点 UI）
 - [ ] **T2.5** 图表：柱状/折线/饼图/散点；图表数据联动
-- [ ] **T2.6** 导出：CSV / PDF
+  - **暂缓**：Univer 1.0.4 无 chart preset（图表属独立插件，官方仍在演进）；v1 先以「无图表」交付 Phase 2，图表排入 v1 后期或 v2 评估（复评 Univer 版本或自研基于 canvas 的轻量图表插入）
+- [x] **T2.6** 导出：CSV / PDF
+  - 完成（2026-10-13）：CSV 导出落地——`packages/sheet` 新增 `sheetToCsv`（RFC 4180 引号规则、公式取缓存值、BOM 头适配 Excel/WPS 中文），SheetEditor 加「导出 CSV」按钮；运行时冒烟通过
+  - PDF 导出**随 Phase 5**（T5.3 打印管线，字体嵌入），不在本阶段
 - [ ] **T2.7** **Phase 验收**：5 份真实 xlsx（含公式/图表）round-trip；公式重算结果与 WPS 一致
 
 ## Phase 3 — Presentation 核心（v1 全量，不接受降级）
