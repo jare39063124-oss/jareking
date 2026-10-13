@@ -78,6 +78,9 @@ export function pPrInner(pPr?: ParagraphProperties): string {
     if (sp.length) parts.push(`<w:spacing ${sp.join(' ')}/>`);
   }
   if (pPr.outlineLvl !== undefined) parts.push(`<w:outlineLvl w:val="${pPr.outlineLvl}"/>`);
+  // snapToGrid / widowControl：显式 false 时写回（OOXML 默认 true，丢失会被 WPS 按网格行距渲染致页数暴涨）
+  if (pPr.snapToGrid === false) parts.push('<w:snapToGrid w:val="0"/>');
+  if (pPr.widowControl === false) parts.push('<w:widowControl w:val="0"/>');
   return parts.join('');
 }
 
@@ -93,6 +96,7 @@ export function rPrInner(rPr?: RunProperties): string {
     if (f.eastAsia) fa.push(`w:eastAsia="${escapeXmlAttr(f.eastAsia)}"`);
     if (f.hAnsi) fa.push(`w:hAnsi="${escapeXmlAttr(f.hAnsi)}"`);
     if (f.cs) fa.push(`w:cs="${escapeXmlAttr(f.cs)}"`);
+    if (f.hint) fa.push(`w:hint="${escapeXmlAttr(f.hint)}"`);
     if (fa.length) parts.push(`<w:rFonts ${fa.join(' ')}/>`);
   }
   // 标志型属性：仅在 true 时写空元素（与解析器 hasFlag 互逆）

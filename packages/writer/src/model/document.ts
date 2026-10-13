@@ -214,6 +214,13 @@ export interface ParagraphProperties extends ModelExtra {
   keepNext?: boolean;
   /** 段前分页（对应 w:pageBreakBefore） */
   pageBreakBefore?: boolean;
+  /**
+   * 是否对齐文档网格（对应 w:snapToGrid；默认 true）。
+   * WPS 对该属性敏感：显式 false 时行高紧凑，丢失后 WPS 按网格行距渲染导致页数暴涨。
+   */
+  snapToGrid?: boolean;
+  /** 孤行控制（对应 w:widowControl；默认 true） */
+  widowControl?: boolean;
 }
 
 /** 对齐方式（Word: w:jc 取值子集） */
@@ -224,7 +231,9 @@ export type Alignment =
   | 'right'
   | 'center'
   | 'justify'
-  | 'distribute';
+  | 'distribute'
+  /** OOXML 原值：两端对齐（justify 的 Word 原生写法，解析需保留） */
+  | 'both';
 
 /** 缩进（对应 w:ind；单位 EMU，首行/悬挂用磅值） */
 export interface Indentation {
@@ -299,6 +308,11 @@ export interface Font {
   hAnsi?: string;
   /** 复杂文种字体（w:cs） */
   cs?: string;
+  /**
+   * 字体提示（w:hint，如 "eastAsia"）——决定东亚字符的回退优先级。
+   * WPS 渲染敏感：丢失后中文字体回退路径改变。
+   */
+  hint?: string;
 }
 
 /* =========================================================================

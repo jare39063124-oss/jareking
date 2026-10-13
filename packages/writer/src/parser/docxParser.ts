@@ -158,7 +158,7 @@ function findAttrDeep(node: any, attr: string): string | undefined {
  * 1. 取值集合与映射
  * ========================================================================= */
 
-const ALIGNMENTS = new Set(['start', 'end', 'left', 'right', 'center', 'justify', 'distribute']);
+const ALIGNMENTS = new Set(['start', 'end', 'left', 'right', 'center', 'justify', 'distribute', 'both']);
 const UNDERLINES = new Set([
   'none',
   'single',
@@ -170,7 +170,7 @@ const UNDERLINES = new Set([
   'words',
 ]);
 
-function isAlignment(v: string | undefined): v is 'start' | 'end' | 'left' | 'right' | 'center' | 'justify' | 'distribute' {
+function isAlignment(v: string | undefined): v is 'start' | 'end' | 'left' | 'right' | 'center' | 'justify' | 'distribute' | 'both' {
   return v !== undefined && ALIGNMENTS.has(v);
 }
 function isUnderline(v: string | undefined): v is 'none' | 'single' | 'double' | 'thick' | 'dotted' | 'dashed' | 'wave' | 'words' {
@@ -450,6 +450,13 @@ function parseParagraphProperties(pPr: any): ParagraphProperties | undefined {
   if (ol !== undefined) pp.outlineLvl = Number(ol);
   if (pPr.keepNext !== undefined) pp.keepNext = true;
   if (pPr.pageBreakBefore !== undefined) pp.pageBreakBefore = true;
+  // snapToGrid / widowControl：显式 false 必须记录（WPS 渲染差异敏感）
+  const snap = getAttr(pPr.snapToGrid, '@_val');
+  if (snap === '0' || snap === 'false') pp.snapToGrid = false;
+  else if (snap === '1' || snap === 'true') pp.snapToGrid = true;
+  const widow = getAttr(pPr.widowControl, '@_val');
+  if (widow === '0' || widow === 'false') pp.widowControl = false;
+  else if (widow === '1' || widow === 'true') pp.widowControl = true;
   return Object.keys(pp).length ? pp : undefined;
 }
 
@@ -460,10 +467,12 @@ function parseFont(rFonts: any): Font | undefined {
   const ea = getAttr(rFonts, '@_eastAsia');
   const ha = getAttr(rFonts, '@_hAnsi');
   const cs = getAttr(rFonts, '@_cs');
+  const hint = getAttr(rFonts, '@_hint');
   if (ascii) f.ascii = ascii;
   if (ea) f.eastAsia = ea;
   if (ha) f.hAnsi = ha;
   if (cs) f.cs = cs;
+  if (hint) f.hint = hint;
   return Object.keys(f).length ? f : undefined;
 }
 
