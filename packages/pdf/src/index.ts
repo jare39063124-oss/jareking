@@ -1,0 +1,251 @@
+/**
+ * @jareking/pdf —— jareking PDF 页面工具箱数据层（T5 加速，源自用户自研
+ * 「PDF页面工具箱 v2」的功能融合）。
+ *
+ * 覆盖（与工具箱对齐）：页面提取/删除、合并、旋转、插入页面、页面替换、
+ * 图片转 PDF（A4 等比居中）。压缩（栅格化重建）与 Office 转 PDF 属
+ * 渲染/外部引擎层，另行接入。
+ *
+ * 坐标约定：页码规格面向用户（从 1 开始），内部统一转 0 基索引。
+ * 支持格式："1,3-5"（含 "last"/"-1" 表示末页）。
+ */
+import { PDFDocument, degrees } from 'pdf-lib';
+
+/* =========================================================================
+ * 页码规格解析
+ * ========================================================================= */
+
+export interface PageSpecParseOptions {
+  /** 总页数（解析 last / 越界裁剪用） */
+  /** 保持输入顺序（默认 false = 按页码升序去重） */
+  keepOrder?: boolean;
+}
+
+/**
+ * 解析页码规格："1,3-5,last" / "-1"（末页）→ 0 基页索引数组。
+ * 越界页自动忽略；重复页在升序模式下去重。
+ */
+export function parsePageSpec(spec: string, pageCount: number, opts?: PageSpecParseOptions): number[] {
+  const indices: number[] = [];
+  const seen = new Set<number>();
+  for (const rawPart of spec.split(/[,，]/)) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    let fromStr: string;
+    let toStr: string;
+    if (part.includes('-')) {
+      const [a, b] = part.split('-');
+      fromStr = a.trim();
+      toStr = b.trim();
+    } else {
+      fromStr = part;
+      toStr = part;
+    }
+    const resolve = (t: string): number | null => {
+      if (/^(last|末页|-1)$/i.test(t)) return pageCount - 1;
+      if (/^first$/i.test(t)) return 0;
+      const n = Number(t);
+      if (!Number.isInteger(n) || n < 1 || n > pageCount) return null;
+      return n - 1;
+    };
+    const from = resolve(fromStr);
+    const to = resolve(toStr);
+    if (from === null || to === null) continue;
+    const [lo, hi] = from <= to ? [from, to] : [to, from];
+    for (let p = lo; p <= hi; p++) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        indices.push(p);
+      }
+    }
+  }
+  if (opts?.keepOrder) {
+    // keepOrder 模式允许重复：重新按规格顺序展开
+    const ordered: number[] = [];
+    for (const rawPart of spec.split(/[,，]/)) {
+      const part = rawPart.trim();
+      if (!part) continue;
+      const [a, b] = part.includes('-') ? part.split('-') : [part, part];
+      const resolve = (t: string): number | null => {
+        if (/^(last|末页|-1)$/i.test(t)) return pageCount - 1;
+        const n = Number(t);
+        return Number.isInteger(n) && n >= 1 && n <= pageCount ? n - 1 : null;
+      };
+      const from = resolve(a.trim());
+      const to = resolve(b.trim());
+      if (from === null || to === null) continue;
+      const [lo, hi] = from <= to ? [from, to] : [to, from];
+      for (let p = lo; p <= hi; p++) ordered.push(p);
+    }
+    return ordered;
+  }
+  return indices.sort((a, b) => a - b);
+}
+
+/* =========================================================================
+ * 基础
+ * ========================================================================= */
+
+export async function loadPdf(bytes: Uint8Array): Promise<PDFDocument> {
+  return PDFDocument.load(bytes, { ignoreEncryption: true });
+}
+
+export function getPageCount(pdf: Uint8Array | PDFDocument): number | Promise<number> {
+  if (pdf instanceof PDFDocument) return pdf.getPageCount();
+  return loadPdf(pdf).then((d) => d.getPageCount());
+}
+
+async function save(doc: PDFDocument): Promise<Uint8Array> {
+  return doc.save({ useObjectStreams: false });
+}
+
+/* =========================================================================
+ * 页面操作（与「PDF页面工具箱 v2」功能对齐）
+ * ========================================================================= */
+
+/** 提取指定页 → 新 PDF */
+export async function extractPages(pdfBytes: Uint8Array, spec: string, opts?: { keepOrder?: boolean }): Promise<Uint8Array> {
+  const src = await loadPdf(pdfBytes);
+  const indices = parsePageSpec(spec, src.getPageCount(), opts);
+  if (!indices.length) throw new Error('页码规格未匹配到任何页面');
+  const out = await PDFDocument.create();
+  const pages = await out.copyPages(src, indices);
+  pages.forEach((p) => out.addPage(p));
+  return save(out);
+}
+
+/** 删除指定页 → 新 PDF */
+export async function deletePages(pdfBytes: Uint8Array, spec: string): Promise<Uint8Array> {
+  const doc = await loadPdf(pdfBytes);
+  const total = doc.getPageCount();
+  const toDelete = new Set(parsePageSpec(spec, total));
+  if (!toDelete.size) throw new Error('页码规格未匹配到任何页面');
+  if (toDelete.size >= total) throw new Error('不能删除全部页面');
+  const keep: number[] = [];
+  for (let i = 0; i < total; i++) if (!toDelete.has(i)) keep.push(i);
+  const out = await PDFDocument.create();
+  const pages = await out.copyPages(doc, keep);
+  pages.forEach((p) => out.addPage(p));
+  return save(out);
+}
+
+/** 旋转页面（degrees: 90/180/270；spec 为 "all" 或页码规格） */
+export async function rotatePages(
+  pdfBytes: Uint8Array,
+  spec: string,
+  degrees_: 90 | 180 | 270,
+): Promise<Uint8Array> {
+  const doc = await loadPdf(pdfBytes);
+  const total = doc.getPageCount();
+  const targets = spec === 'all' || spec === '全部'
+    ? Array.from({ length: total }, (_, i) => i)
+    : parsePageSpec(spec, total);
+  if (!targets.length) throw new Error('页码规格未匹配到任何页面');
+  for (const i of targets) {
+    const page = doc.getPage(i);
+    const current = page.getRotation().angle;
+    page.setRotation(degrees((current + degrees_) % 360));
+  }
+  return save(doc);
+}
+
+/** 多文件合并（按数组顺序） */
+export async function mergePdfs(pdfBytesList: Uint8Array[]): Promise<Uint8Array> {
+  if (!pdfBytesList.length) throw new Error('没有可合并的文件');
+  const out = await PDFDocument.create();
+  for (const bytes of pdfBytesList) {
+    const src = await loadPdf(bytes);
+    const pages = await out.copyPages(src, src.getPageIndices());
+    pages.forEach((p) => out.addPage(p));
+  }
+  return save(out);
+}
+
+export interface InsertPosition {
+  type: 'front' | 'back' | 'after';
+  /** type='after' 时的基准页（1 基） */
+  afterPage?: number;
+}
+
+/** 插入页面：把 source 的指定页（可选）插入 target 的最前/最后/指定页之后 */
+export async function insertPages(
+  targetBytes: Uint8Array,
+  sourceBytes: Uint8Array,
+  position: InsertPosition,
+  sourceSpec?: string,
+): Promise<Uint8Array> {
+  const target = await loadPdf(targetBytes);
+  const source = await loadPdf(sourceBytes);
+  const indices = sourceSpec ? parsePageSpec(sourceSpec, source.getPageCount()) : source.getPageIndices();
+  if (!indices.length) throw new Error('来源页码规格未匹配到任何页面');
+  const copied = await target.copyPages(source, indices);
+
+  let at: number;
+  if (position.type === 'front') at = 0;
+  else if (position.type === 'back') at = target.getPageCount();
+  else {
+    const after = position.afterPage ?? target.getPageCount();
+    at = Math.min(Math.max(after, 0), target.getPageCount());
+  }
+  copied.forEach((p, i) => target.insertPage(at + i, p));
+  return save(target);
+}
+
+/** 页面替换：用 source 的指定页逐页顶替 target 的指定页 */
+export async function replacePages(
+  targetBytes: Uint8Array,
+  sourceBytes: Uint8Array,
+  targetSpec: string,
+  sourceSpec?: string,
+): Promise<Uint8Array> {
+  const target = await loadPdf(targetBytes);
+  const source = await loadPdf(sourceBytes);
+  const targetIndices = parsePageSpec(targetSpec, target.getPageCount());
+  if (!targetIndices.length) throw new Error('被替换页码规格未匹配到任何页面');
+  const sourceIndices = sourceSpec
+    ? parsePageSpec(sourceSpec, source.getPageCount(), { keepOrder: true })
+    : source.getPageIndices();
+  if (sourceIndices.length !== targetIndices.length) {
+    throw new Error(`替换源页数（${sourceIndices.length}）与被替换页数（${targetIndices.length}）不一致`);
+  }
+  const copied = await target.copyPages(source, sourceIndices);
+  targetIndices.forEach((ti, i) => {
+    target.removePage(ti);
+    target.insertPage(ti, copied[i]);
+  });
+  return save(target);
+}
+
+export interface ImageInput {
+  bytes: Uint8Array;
+  /** 'jpg' | 'png'（webp/bmp/gif 需先转码，浏览器侧用 canvas 完成） */
+  type: 'jpg' | 'png';
+}
+
+/** 图片转 PDF：每图一页 A4，等比居中（左右留白 24pt），纵向排布 */
+export async function imagesToPdf(images: ImageInput[]): Promise<Uint8Array> {
+  if (!images.length) throw new Error('没有可用的图片');
+  const out = await PDFDocument.create();
+  const A4 = { w: 595.28, h: 841.89 };
+  const margin = 24;
+  for (const img of images) {
+    const embedded = img.type === 'png' ? await out.embedPng(img.bytes) : await out.embedJpg(img.bytes);
+    const page = out.addPage([A4.w, A4.h]);
+    // 等比缩放至内容区（A4 减去左右留白与上下对称留白）
+    const boxW = A4.w - margin * 2;
+    const boxH = A4.h - margin * 2;
+    const scale = Math.min(boxW / embedded.width, boxH / embedded.height, 1);
+    const w = embedded.width * scale;
+    const h = embedded.height * scale;
+    const x = (A4.w - w) / 2;
+    const y = (A4.h - h) / 2;
+    page.drawImage(embedded, { x, y, width: w, height: h });
+  }
+  return save(out);
+}
+
+/** 页面信息（UI 列表用） */
+export async function getPdfInfo(pdfBytes: Uint8Array): Promise<{ pageCount: number; title?: string }> {
+  const doc = await loadPdf(pdfBytes);
+  return { pageCount: doc.getPageCount(), title: doc.getTitle() ?? undefined };
+}

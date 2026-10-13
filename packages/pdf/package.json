@@ -1,0 +1,26 @@
+{
+  "name": "@jareking/pdf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "jareking PDF 页面工具箱数据层（pdf-lib，浏览器/Node 双环境）",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^22.20.5"
+  }
+}
