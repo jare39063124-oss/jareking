@@ -128,7 +128,10 @@
 
 ## Phase 4 — AI 助手
 
-- [ ] **T4.1** AI 适配层：`AIAdapter` 接口 + OpenAI 兼容 / Claude / Gemini / Ollama 四类适配器；流式输出、重试退避、超时、token 计量
+- [x] **T4.1** AI 适配层：`AIAdapter` 接口 + OpenAI 兼容 / Claude / Gemini / Ollama 四类适配器；流式输出、重试退避、超时、token 计量
+  - 完成（2026-10-13）：packages/ai 重写实现——`fetchWithRetry`（429/5xx/网络错误指数退避 300ms×2^n，AbortSignal.any 组合超时）、SSE/NDJSON 通用流解析、四类适配器（openai-compatible 覆盖 DeepSeek/通义/Kimi/智谱等一切兼容网关 / claude / gemini / ollama）、`createAiAdapter` 工厂 + listModels；StreamEvent 统一 text/usage/done/error
+  - 运行时冒烟（本地 mock 网关）：流式聚合+500 自动重试 ✅、非流式 usage 计量 ✅、不可路由地址 500ms 超时快速中断 ✅
+  - 说明：明文 apiKey 每次调用注入（apiKeyRef 明文解析在 T4.2 接 DPAPI）；Claude/Gemini/Ollama 三家为按官方 API 规范实现，待有真实 Key 时联调
 - [ ] **T4.2** API 配置 UI：多配置管理（任意 BaseURL + Key + 模型名）、密钥系统凭据加密存储（keytar/DPAPI）、连通性测试、模型列表拉取
 - [ ] **T4.3** AI 操作协议：ops schema 定义（format.apply / text.replace / cell.set / chart.insert 等）+ Planner 系统提示词 + Executor 确定性执行 + diff 预览 + 撤销 + 积分估算
 - [ ] **T4.4** Writer AI 技能：格式指令、内容指令、润色/续写/翻译/摘要；选中浮动工具条
