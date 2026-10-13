@@ -25,19 +25,19 @@ fileAssociations:
       - docx
     role: Editor
     name: jareking.Document
-    description: "jareking 文档（Writer）"
+    description: "jareking 文档"
   - ext:
       - xls
       - xlsx
     role: Editor
     name: jareking.Spreadsheet
-    description: "jareking 表格（Sheet）"
+    description: "jareking 表格"
   - ext:
       - ppt
       - pptx
     role: Editor
     name: jareking.Presentation
-    description: "jareking 演示（Presentation）"
+    description: "jareking 演示"
   - ext:
       - pdf
     role: Editor
@@ -51,5 +51,8 @@ files:
   - out/**
   - package.json
 
-# TODO(updater): 发布渠道确定后补充 publish 配置（generic provider 或 GitHub Releases），
-# 供 electron-updater 生成 app-update.yml；发布地址与回滚策略在 T8.4 打包发布时落地
+# 发布渠道：GitHub Releases（组织 jareking-office，仓库待建）；T8.4 落地自动更新
+publish:
+  provider: github
+  owner: jareking-office
+  repo: jareking
