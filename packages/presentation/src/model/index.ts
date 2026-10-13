@@ -17,6 +17,11 @@ export interface JkPresentation {
   slideWidth: number;
   /** 画布高（EMU，对应 p:sldSz@cy） */
   slideHeight: number;
+  /**
+   * 图片二进制载体（键 = `${slideIndex}:${relId}`，rId 每页独立会重号）。
+   * 解析时从包内 media 提取回填；导出时据此写入 ppt/media/*。
+   */
+  media?: Record<string, Uint8Array>;
   /** v1 保真报告（未建模特性记录于此） */
   fidelity?: PresentationFidelity;
 }

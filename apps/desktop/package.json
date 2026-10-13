@@ -14,6 +14,7 @@
   "dependencies": {
     "@jareking/ai": "workspace:*",
     "@jareking/core": "workspace:*",
+    "@jareking/presentation": "workspace:*",
     "@jareking/sheet": "workspace:*",
     "@jareking/writer": "workspace:*",
     "@tiptap/core": "^2.27.0",
@@ -38,9 +39,11 @@
     "@univerjs/preset-sheets-sort": "^1.0.4",
     "@univerjs/presets": "^1.0.4",
     "electron-updater": "^6.8.9",
+    "konva": "^10.7.1",
     "lucide-react": "^1.55.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-konva": "^19.3.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

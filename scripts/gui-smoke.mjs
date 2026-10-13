@@ -150,6 +150,24 @@ async function main() {
   );
   if (!results.proseMirror || results.writerTextLen < 10) failed = true;
 
+  // 3. Slide：再次刷新回空状态，点击演示模块
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  const openSlide = `(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('演示'));
+    if (!btn) return 'no-button';
+    btn.click();
+    return 'clicked';
+  })()`;
+  results.slideOpen = await cdp.eval(openSlide);
+  await sleep(2500); // Konva 初始化
+  results.konvaCanvas = await cdp.eval(`document.querySelectorAll('canvas').length`);
+  // 幻灯片缩略列表（"第 1 页"按钮）
+  results.slidePanel = await cdp.eval(
+    `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('第 1 页')); return !!b; })()`,
+  );
+  if (results.konvaCanvas < 1 || !results.slidePanel) failed = true;
+
   // 3. 汇总错误
   const errors = [...cdp.exceptions, ...cdp.consoleErrors].filter((e) => !pickIgnorable(e));
   results.consoleErrors = errors.slice(0, 10);

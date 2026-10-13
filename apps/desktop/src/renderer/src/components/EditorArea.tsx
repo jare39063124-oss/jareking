@@ -1,10 +1,11 @@
-import { BookOpen, Cloud, FolderOpen, Plus, Presentation } from 'lucide-react';
+import { BookOpen, Cloud, FolderOpen, Plus } from 'lucide-react';
 import { Button } from './Button';
 import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
 import { toast } from '../stores/toastStore';
 import { SheetEditor } from '../sheet/SheetEditor';
+import { SlideEditor } from '../slide/SlideEditor';
 import { WriterEditor } from '../writer/WriterEditor';
 
 /** 云文件占位数据（右侧树） */
@@ -119,10 +120,14 @@ function ModulePlaceholder({ module }: { module: DocModule }) {
         </div>
       </div>
 
-      {/* 画布区：Sheet 用无内边距全幅容器（Univer 需要真实尺寸）；其余模块居中展示 */}
+      {/* 画布区：Sheet/Slide 用无内边距全幅容器（引擎需要真实尺寸）；其余模块居中展示 */}
       {module === 'sheet' ? (
         <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
           <SheetEditor />
+        </div>
+      ) : module === 'slide' ? (
+        <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
+          <SlideEditor />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/40 p-8">
@@ -138,23 +143,12 @@ function renderCanvas(module: DocModule) {
   switch (module) {
     case 'writer':
       return <WriterEditor />;
-    case 'slide':
-      return <SlideCanvas />;
     case 'pdf':
       return <PdfCanvas />;
     case 'sheet':
-      return null; // Sheet 走上方全幅分支
+    case 'slide':
+      return null; // Sheet/Slide 走上方全幅分支
   }
-}
-
-/** Presentation 占位画布：16:9 幻灯片 */
-function SlideCanvas() {
-  return (
-    <div className="flex aspect-video w-[640px] flex-col items-center justify-center gap-2 rounded-sm bg-surface shadow-card">
-      <Presentation size={28} className="text-muted" aria-hidden="true" />
-      <span className="text-ui text-muted">幻灯片 1 · 演示编辑区（占位）</span>
-    </div>
-  );
 }
 
 /** PDF 占位画布：单页 */

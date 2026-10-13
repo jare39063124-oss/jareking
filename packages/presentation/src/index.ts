@@ -7,3 +7,4 @@
 
 export * from './model/index.js';
 export * from './parser/pptxParser.js';
+export * from './exporter/index.js';

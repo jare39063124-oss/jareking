@@ -260,10 +260,38 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
     }
   }
 
+  // 图片二进制提取：rId 每页独立，键为 `${slideIndex}:${relId}`
+  const media: Record<string, Uint8Array> = {};
+  for (let i = 0; i < slides.length; i++) {
+    const part = slides[i].partName;
+    if (!part) continue;
+    const relsPath = part.replace(/([^/]+)$/, '_rels/$1.rels');
+    const relsXml = await readPart(zip, relsPath);
+    if (!relsXml) continue;
+    const rels = parseXml(relsXml);
+    for (const rel of childArray(rels?.Relationships, 'Relationship')) {
+      const type = getAttr(rel, '@_Type') ?? '';
+      if (!type.endsWith('/image')) continue;
+      const id = getAttr(rel, '@_Id') ?? '';
+      if (!id) continue;
+      let target = getAttr(rel, '@_Target') ?? '';
+      while (target.startsWith('../')) target = target.slice(3);
+      if (!target.startsWith('ppt/')) target = `ppt/${target}`;
+      try {
+        const file = zip.file(target);
+        if (!file) continue;
+        media[`${i}:${id}`] = await file.async('uint8array');
+      } catch {
+        // 媒体缺失：忽略
+      }
+    }
+  }
+
   return {
     slides,
     slideWidth,
     slideHeight,
+    media: Object.keys(media).length ? media : undefined,
     fidelity: { level: 'L1', notes },
   };
 }

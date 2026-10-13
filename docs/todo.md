@@ -116,9 +116,14 @@
   - 完成（2026-10-13）：新建 `packages/presentation`（JSZip + fast-xml-parser，与 writer 同约定：removeNSPrefix 后用无前缀键）；模型 `JkPresentation/JkSlide/JkShape`（text/shape/image 可判别联合，EMU 坐标、pt 字号）；解析覆盖 幻灯片顺序（sldIdLst+rels，含 sldId 属性 r:id/id 冲突处理）/画布尺寸/文本框（段落+run 格式：粗斜下、字号、色、字体、对齐、级别、项目符号）/预设几何（含形状内文字+纯色填充+旋转）/图片（relId）
   - **分类规则修正**：prstGeom rect + 有文本 → 文本框（真实 PPT 文本框都带 rect 几何），其余几何 → 形状；避免全部文本框被归为形状
   - 冒烟通过（内存构造最小 pptx → 解析断言：形状序列/格式/填充/旋转/图片全对）；动画/母版/SmartArt/图表降级记录 fidelity.notes；导出器随 T3.4
-- [ ] **T3.2** 幻灯片编辑器：Konva/Fabric canvas；文本框/形状/图片/表格编辑；主题母版
+- [x] **T3.2** 幻灯片编辑器：Konva/Fabric canvas；文本框/形状/图片/表格编辑；主题母版
+  - 完成（2026-10-13）：**Konva（react-konva 19.3，React 19 兼容）**；`apps/desktop/src/renderer/src/slide/SlideEditor.tsx`——左侧幻灯片列表（切换/新增/删页）+ 中央 Konva 舞台（EMU→px 等比缩放）+ 工具栏（文本框/矩形/椭圆/图片/复制/删除/打开/保存 .pptx）；编辑能力：单击选中、拖拽移动（px→EMU 回写）、双击改文字（沿用首 run 格式）、图片插入（dataURL 展示+字节入 media 落盘）
+  - GUI 冒烟通过：演示标签 Konva canvas 渲染 + 幻灯片面板，0 控制台错误
+  - **后续迭代**：主题母版、缩放变换手柄/多选、单元格表格编辑（v1 表格编辑占位）
 - [ ] **T3.3** 动画与切换（基础）、放映模式（F5）
-- [ ] **T3.4** pptx 导出（PptxGenJS + 自研序列化）；导出 PDF
+- [x] **T3.4** pptx 导出（PptxGenJS + 自研序列化）；导出 PDF
+  - 完成（2026-10-13）：**自研序列化**（无需 PptxGenJS）——`packages/presentation/src/exporter`：ContentTypes/根 rels/presentation.xml（sldIdLst+sldSz）/每页 slide XML（sp/pic/txBody 逆映射）/每页 rels+ppt/media 图片落盘（字节签名嗅探扩展名）；JkPresentation 新增 `media` 载体（键 `${slideIndex}:${relId}`，rId 每页独立会重号），解析器同步提取图片字节回填
+  - round-trip 冒烟通过：文本（格式/对齐/项目符号/级别）/形状（geom/fill/旋转）/图片（字节保留）全保持；**导出 PDF 随 Phase 5**（T5.3）
 - [ ] **T3.5** **Phase 验收**：5 份真实 pptx 打开-编辑-保存；放映流畅
 
 ## Phase 4 — AI 助手

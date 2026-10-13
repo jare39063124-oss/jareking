@@ -1,0 +1,264 @@
+/**
+ * T3.4 pptx 导出器：JkPresentation → 最小合法 pptx（ZIP/OOXML 包）。
+ *
+ * 与解析器（parser/pptxParser.ts）互逆：
+ * EMU 原值回写、字号 pt → sz 百分之一磅、旋转度 → rot ×60000、
+ * 颜色 #RRGGBB → srgbClr、图片字节经图片签名嗅探扩展名写入 ppt/media/*。
+ * 动画/母版/主题 v1 不生成（保真报告记录降级）。
+ */
+import JSZip from 'jszip';
+import type {
+  JkAutoShape,
+  JkPresentation,
+  JkShape,
+  JkTextShape,
+  TextParagraph,
+  TextRun,
+} from '../model/index.js';
+
+const escapeXmlText = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escapeXmlAttr = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** 字节签名 → 扩展名（PNG/JPEG/GIF/BMP/WEBP） */
+function sniffImageExt(bytes: Uint8Array): string {
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50) return 'png';
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
+  if (bytes.length > 6 && bytes[0] === 0x47 && bytes[1] === 0x49) return 'gif';
+  if (bytes.length > 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'bmp';
+  if (
+    bytes.length > 12 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  )
+    return 'webp';
+  return 'png';
+}
+
+/* =========================================================================
+ * 文字序列化
+ * ========================================================================= */
+
+function serializeRun(r: TextRun): string {
+  const attrs: string[] = [`lang="zh-CN"`];
+  if (r.fontSize !== undefined) attrs.push(`sz="${Math.round(r.fontSize * 100)}"`);
+  if (r.bold) attrs.push(`b="1"`);
+  if (r.italic) attrs.push(`i="1"`);
+  if (r.underline) attrs.push(`u="sng"`);
+  const inner: string[] = [];
+  if (r.color) {
+    inner.push(`<a:solidFill><a:srgbClr val="${escapeXmlAttr(r.color.replace(/^#/, ''))}"/></a:solidFill>`);
+  }
+  if (r.fontFamily) inner.push(`<a:latin typeface="${escapeXmlAttr(r.fontFamily)}"/>`);
+  const rPr = `<a:rPr ${attrs.join(' ')}>${inner.join('')}</a:rPr>`;
+  return `<a:r>${rPr}<a:t>${escapeXmlText(r.text)}</a:t></a:r>`;
+}
+
+function serializeParagraph(p: TextParagraph): string {
+  const pPrAttrs: string[] = [];
+  if (p.align) {
+    const map = { left: 'l', center: 'ctr', right: 'r', justify: 'just' } as const;
+    pPrAttrs.push(`algn="${map[p.align]}"`);
+  }
+  if (p.level !== undefined) pPrAttrs.push(`lvl="${p.level}"`);
+  const pPr = pPrAttrs.length || p.bullet
+    ? `<a:pPr ${pPrAttrs.join(' ')}>${p.bullet ? '<a:buFont typeface="Arial"/><a:buChar char="•"/>' : ''}</a:pPr>`
+    : '';
+  const runs = p.runs.map(serializeRun).join('');
+  return `<a:p>${pPr}${runs}</a:p>`;
+}
+
+function serializeTxBody(paragraphs: TextParagraph[] | undefined): string {
+  const ps = paragraphs?.length ? paragraphs.map(serializeParagraph).join('') : '<a:p/>';
+  return `<p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>${ps}</p:txBody>`;
+}
+
+/* =========================================================================
+ * 形状序列化
+ * ========================================================================= */
+
+function shapeHeader(s: JkShape, id: number): string {
+  const rot = s.rotation !== undefined ? ` rot="${Math.round(s.rotation * 60000)}"` : '';
+  return (
+    `<p:nvSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(s.name ?? `Shape ${id}`)}"/>` +
+    `<p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
+    `<p:spPr><a:xfrm${rot}><a:off x="${Math.round(s.x)}" y="${Math.round(s.y)}"/>` +
+    `<a:ext cx="${Math.round(s.w)}" cy="${Math.round(s.h)}"/></a:xfrm>`
+  );
+}
+
+function serializeTextShape(s: JkTextShape, id: number): string {
+  const geom = s.geom ?? 'rect';
+  return (
+    `<p:sp>${shapeHeader(s, id)}` +
+    `<a:prstGeom prst="${escapeXmlAttr(geom)}"><a:avLst/></a:prstGeom></p:spPr>` +
+    serializeTxBody(s.paragraphs) +
+    `</p:sp>`
+  );
+}
+
+function serializeAutoShape(s: JkAutoShape, id: number): string {
+  const fill = s.fill
+    ? `<a:solidFill><a:srgbClr val="${escapeXmlAttr(s.fill.replace(/^#/, ''))}"/></a:solidFill>`
+    : '';
+  return (
+    `<p:sp>${shapeHeader(s, id)}` +
+    `<a:prstGeom prst="${escapeXmlAttr(s.geom)}"><a:avLst/></a:prstGeom>${fill}</p:spPr>` +
+    (s.paragraphs?.length ? serializeTxBody(s.paragraphs) : '') +
+    `</p:sp>`
+  );
+}
+
+/* =========================================================================
+ * 幻灯片与包
+ * ========================================================================= */
+
+interface SlideImage {
+  relId: string; // 每页内分配（rId2 起）
+  ext: string;
+  bytes: Uint8Array;
+  modelKey: string; // `${slideIndex}:${shape.relId}`
+}
+
+function serializeSlide(
+  shapes: JkShape[],
+  slideIndex: number,
+  images: SlideImage[],
+): string {
+  let id = 2; // id=1 保留给 spTree 组
+  const parts: string[] = [];
+  for (const s of shapes) {
+    if (s.type === 'text') {
+      parts.push(serializeTextShape(s, id++));
+    } else if (s.type === 'shape') {
+      parts.push(serializeAutoShape(s, id++));
+    } else if (s.type === 'image') {
+      const img = images.find((im) => im.modelKey === `${slideIndex}:${s.relId}`);
+      if (!img) continue; // 无字节：降级跳过（fidelity 记录由调用方汇总）
+      parts.push(
+        `<p:pic><p:nvPicPr><p:cNvPr id="${id++}" name="${escapeXmlAttr(s.name ?? '图片')}"/>` +
+          `<p:cNvPicPr/><p:nvPr/></p:nvPicPr>` +
+          `<p:blipFill><a:blip r:embed="${escapeXmlAttr(img.relId)}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
+          `<p:spPr><a:xfrm><a:off x="${Math.round(s.x)}" y="${Math.round(s.y)}"/>` +
+          `<a:ext cx="${Math.round(s.w)}" cy="${Math.round(s.h)}"/></a:xfrm>` +
+          `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`,
+      );
+    }
+  }
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+    ${parts.join('')}
+  </p:spTree></p:cSld>
+</p:sld>`;
+}
+
+/** JkPresentation → pptx 字节流 */
+export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
+  const zip = new JSZip();
+  const slides = pres.slides ?? [];
+  const media = pres.media ?? {};
+
+  // [Content_Types].xml
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/>` +
+      `<Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/>` +
+      `<Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/>` +
+      `<Default Extension="bmp" ContentType="image/bmp"/><Default Extension="webp" ContentType="image/webp"/>` +
+      `<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>` +
+      slides
+        .map(
+          (_, i) =>
+            `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`,
+        )
+        .join('') +
+      `</Types>`,
+  );
+
+  zip.file(
+    '_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>`,
+  );
+
+  // presentation.xml（每页一个 rId；rId1 起）
+  const slideRids = slides.map((_, i) => `rId${i + 1}`);
+  zip.file(
+    'ppt/presentation.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+      `<p:sldIdLst>${slides
+        .map((_, i) => `<p:sldId id="${256 + i}" r:id="${slideRids[i]}"/>`)
+        .join('')}</p:sldIdLst>` +
+      `<p:sldSz cx="${Math.round(pres.slideWidth)}" cy="${Math.round(pres.slideHeight)}"/>` +
+      `<p:notesSz cx="6858000" cy="9144000"/></p:presentation>`,
+  );
+
+  zip.file(
+    'ppt/_rels/presentation.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      slideRids
+        .map(
+          (rid, i) =>
+            `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`,
+        )
+        .join('') +
+      `</Relationships>`,
+  );
+
+  // 每页：slide XML + 图片收集 + 每页 rels
+  let mediaSeq = 0;
+  slides.forEach((slide, i) => {
+    // 收集本页图片（按 shape 顺序分配 rId，从 rId2 起）
+    const images: SlideImage[] = [];
+    for (const s of slide.shapes ?? []) {
+      if (s.type !== 'image') continue;
+      const modelKey = `${i}:${s.relId}`;
+      const bytes = media[modelKey];
+      if (!bytes) continue;
+      const existing = images.find((im) => im.modelKey === modelKey);
+      if (existing) continue;
+      images.push({ relId: `rId${images.length + 2}`, ext: sniffImageExt(bytes), bytes, modelKey });
+    }
+
+    zip.file(`ppt/slides/slide${i + 1}.xml`, serializeSlide(slide.shapes ?? [], i, images));
+
+    if (images.length) {
+      zip.file(
+        `ppt/slides/_rels/slide${i + 1}.xml.rels`,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+          images
+            .map(
+              (im) =>
+                `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
+            )
+            .join('') +
+          `</Relationships>`,
+      );
+      // 图片字节（target 序号与 rels 中出现顺序一致）
+      let imgNo = mediaSeq - images.length;
+      for (const im of images) {
+        zip.file(`ppt/media/image${++imgNo}.${im.ext}`, im.bytes);
+      }
+    }
+  });
+
+  return zip.generateAsync({ type: 'uint8array' });
+}
+
+/** 导出并写入本地 .pptx 文件（Node / Electron 主进程） */
+export async function exportPptxToFile(pres: JkPresentation, path: string): Promise<void> {
+  const buf = await exportPptx(pres);
+  const fs = (await import('node:fs/promises')) as unknown as {
+    writeFile: (p: string, d: Uint8Array) => Promise<void>;
+  };
+  await fs.writeFile(path, buf);
+}
