@@ -121,7 +121,9 @@ function parseCell(cell: ExcelJS.Cell | undefined): JkCell | undefined {
 function parseWorksheet(ws: ExcelJS.Worksheet): JkSheet {
   const cells: JkSheet['cells'] = {};
   ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    // includeEmpty:true——纯样式格（空表格边框格）无值但是合法单元格，
+    // includeEmpty:false 会将其跳过导致 round-trip 丢失；内容过滤在 parseCell 内做
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
       const parsed = parseCell(cell);
       if (parsed) cells[`${rowNumber - 1},${colNumber - 1}`] = parsed;
     });
@@ -134,7 +136,8 @@ function parseWorksheet(ws: ExcelJS.Worksheet): JkSheet {
 
   // 列宽：exceljs width 为字符数 → px ≈ round(7 * chars + 5)
   const colWidths: Record<number, number> = {};
-  ws.columns.forEach((col, idx) => {
+  // exceljs 的 columns 在无 <cols> 定义时为 null，需兜底
+  (ws.columns ?? []).forEach((col, idx) => {
     if (col?.width) colWidths[idx] = Math.round(col.width * 7 + 5);
   });
 

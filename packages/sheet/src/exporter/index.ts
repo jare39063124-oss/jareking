@@ -81,6 +81,7 @@ function fillSheet(wb: ExcelJS.Workbook, sheet: JkSheet): ExcelJS.Worksheet {
     } else if (jk.value !== undefined && jk.value !== null) {
       target.value = jk.value as ExcelJS.CellValue;
     }
+    // 纯样式格（空表格边框格等）：无值也要落样式，否则重解析时单元格丢失
     if (jk.style) applyStyle(target, jk.style);
   }
 
