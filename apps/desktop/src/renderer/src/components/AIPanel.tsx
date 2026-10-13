@@ -21,6 +21,15 @@ interface ChatItem {
   content: string;
 }
 
+/** T4.4 快捷技能（预设指令，走同一条 Planner→Executor 管道） */
+const QUICK_SKILLS: { label: string; instruction: string }[] = [
+  { label: '润色选区', instruction: '润色当前选区的文字，使其更通顺专业，用 replaceSelection 替换选区' },
+  { label: '续写', instruction: '根据文档现有内容，在光标处续写一段自然的后续内容' },
+  { label: '翻译为英文', instruction: '把当前选区翻译成英文，用 replaceSelection 替换选区' },
+  { label: '总结全文', instruction: '总结整篇文档，在光标处插入一段简短总结' },
+  { label: '插入表格', instruction: '在光标处插入一个 3 行 3 列的表格' },
+];
+
 export function AIPanel() {
   const toggleAiPanel = useUiStore((state) => state.toggleAiPanel);
   const configs = useAiStore((s) => s.configs);
@@ -36,8 +45,8 @@ export function AIPanel() {
     if (!loaded) void loadConfigs();
   }, [loaded, loadConfigs]);
 
-  const send = async () => {
-    const instruction = input.trim();
+  const send = async (raw?: string) => {
+    const instruction = (raw ?? input).trim();
     if (!instruction || busy) return;
     setInput('');
     setMessages((m) => [...m, { role: 'user', content: instruction }]);
@@ -149,20 +158,36 @@ export function AIPanel() {
       </div>
 
       {/* 输入区 */}
-      <div className="flex h-12 shrink-0 items-center gap-1.5 border-t border-border px-3">
-        <Input
-          placeholder={busy ? 'AI 执行中…' : '输入指令，回车发送'}
-          value={input}
-          disabled={busy}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onInputKeyDown}
-        />
-        <IconButton
-          label="发送"
-          icon={<Send size={15} />}
-          disabled={busy || !input.trim()}
-          onClick={() => void send()}
-        />
+      <div className="flex flex-col gap-1 border-t border-border px-3 py-2">
+        {/* T4.4 快捷技能条 */}
+        <div className="flex flex-wrap gap-1">
+          {QUICK_SKILLS.map((skill) => (
+            <button
+              key={skill.label}
+              type="button"
+              disabled={busy}
+              onClick={() => void send(skill.instruction)}
+              className="rounded-full border border-border px-2 py-0.5 text-tiny text-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
+            >
+              {skill.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex h-9 items-center gap-1.5">
+          <Input
+            placeholder={busy ? 'AI 执行中…' : '输入指令，回车发送'}
+            value={input}
+            disabled={busy}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onInputKeyDown}
+          />
+          <IconButton
+            label="发送"
+            icon={<Send size={15} />}
+            disabled={busy || !input.trim()}
+            onClick={() => void send()}
+          />
+        </div>
       </div>
     </aside>
   );
