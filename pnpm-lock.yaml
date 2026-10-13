@@ -178,6 +178,9 @@ importers:
       '@jareking/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@jareking/pdf':
+        specifier: workspace:*
+        version: link:../../packages/pdf
       '@jareking/presentation':
         specifier: workspace:*
         version: link:../../packages/presentation

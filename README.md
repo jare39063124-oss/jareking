@@ -7,6 +7,7 @@
 
 - 产品规格：[`docs/spec.md`](docs/spec.md)（v1.1）
 - 开发 Todolist：[`docs/todo.md`](docs/todo.md)（Phase 0-8）
+- 使用说明书：[`docs/manual.md`](docs/manual.md)（功能与操作指南）
 
 ## 目录结构
 
@@ -37,6 +38,16 @@ corepack pnpm build
 # 测试
 corepack pnpm test
 ```
+
+## 已实现功能（痛点攻坚批次）
+
+- **Writer 排版工具箱**（离线、本地确定性执行，零成本）：一键整理、千分符、四套格式模板（政府公文 GB/T 9704 / 毕业论文 / 通用报告 / 商务汇报）、参考文档格式克隆
+- **AI 自然语言助手**：用户自配任意 BaseURL+Key（OpenAI 兼容 / Claude / Gemini / Ollama），自带 Key 不扣积分、DPAPI 加密存储；LLM-as-Planner 规划操作、本地 Executor 确定性落地
+- **AI 数据可视化**：自然语言触发插入柱状/折线/饼图（自绘 PNG，零依赖）
+- **存储透明**：设置面板「存储管理」展示数据位置与占用，无云副本无隐藏缓存
+- 四大模块（Writer / Sheet / Presentation / PDF）基础能力 + Sheet/PPT AI
+
+详见 [`docs/manual.md`](docs/manual.md)。
 
 ## 当前进度
 

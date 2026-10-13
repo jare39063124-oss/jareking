@@ -318,8 +318,17 @@ async function main() {
       req.on('data', (c) => (body += c));
       req.on('end', () => {
         const plan = JSON.stringify({
-          operations: [{ op: 'insertText', text: 'AI 插入成功' }],
-          explanation: '在光标处插入验证文本',
+          operations: [
+            { op: 'insertText', text: 'AI 插入成功' },
+            {
+              op: 'insertChart',
+              chartType: 'bar',
+              title: '季度营收对比',
+              labels: ['Q1', 'Q2'],
+              series: [{ name: '营收', values: [1200000, 1580000] }],
+            },
+          ],
+          explanation: '插入验证文本并生成季度营收对比图表',
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -377,7 +386,10 @@ async function main() {
     `document.querySelector('.ProseMirror')?.textContent.includes('AI 插入成功') ?? false`,
   );
   results.aiSummaryShown = await cdp.eval(
-    `document.body.textContent.includes('1 个操作成功')`,
+    `document.body.textContent.includes('操作成功')`,
+  );
+  results.aiChartInserted = await cdp.eval(
+    `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('<img') && h.includes('季度营收对比'); })()`,
   );
   // 清理配置
   await cdp.eval(
@@ -579,7 +591,7 @@ async function main() {
   if (!results.pdfToolboxVisible) failed = true;
 
 
-  if (results.aiPanelSent !== 'sent' || !results.aiDocChanged || !results.aiSummaryShown) failed = true;
+  if (results.aiPanelSent !== 'sent' || !results.aiDocChanged || !results.aiSummaryShown || !results.aiChartInserted) failed = true;
   if (
     results.aiSave !== 'ok' ||
     !results.aiResolveNonEmpty ||
