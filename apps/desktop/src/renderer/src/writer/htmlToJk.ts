@@ -261,6 +261,8 @@ function parseCellBlocks(el: Element, ctx: ParseCtx): Block[] {
       blocks.push(parseParagraph(child, ctx));
     } else if (tag === 'table') {
       blocks.push(parseTable(child, ctx));
+    } else if (tag === 'hr') {
+      blocks.push({ type: 'paragraph', runs: [{ type: 'break', breakType: 'page' }] });
     }
     // 列表/其它容器在单元格内扁平化为段落（v1 简化）
   });
@@ -320,6 +322,14 @@ export function htmlToJk(html: string): JkDocument {
     }
     if (tag === 'table') {
       blocks.push(parseTable(el, ctx));
+      return;
+    }
+    if (tag === 'hr') {
+      // 分页符（jkToHtml 把 Break(page) 渲染为 <hr>；TipTap HorizontalRule 同形）→ 保留为分页 Run
+      blocks.push({
+        type: 'paragraph',
+        runs: [{ type: 'break', breakType: 'page' }],
+      });
       return;
     }
     // 其它根级元素忽略

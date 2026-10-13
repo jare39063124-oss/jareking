@@ -37,6 +37,7 @@ import {
   List,
   ListOrdered,
   Redo2,
+  SeparatorHorizontal,
   Strikethrough,
   Table as TableIcon,
   TextAlignCenter,
@@ -448,6 +449,12 @@ export function WriterEditor() {
           onClick={() =>
             editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
           }
+        />
+        <ToolBtn
+          icon={<SeparatorHorizontal size={15} />}
+          label="插入分页符"
+          disabled={!canFormat}
+          onClick={() => editor?.chain().focus().setHorizontalRule().run()}
         />
 
         <span className="mx-1 h-5 w-px bg-border" />

@@ -70,7 +70,8 @@
   - 转换层补齐：jkToHtml 输出 font-family 的 span + 图片 data URL；htmlToJk 解析 span 内 color/font-size/font-family，并把 `<img>` 的 data URL 解码为媒体字节登记 image 关系
   - 数据层补齐图片二进制：JkDocument 新增 `media` 载体；parser 从 zip 取出图片字节回填 `media`，exporter 把 `media` 写入 `word/media/*` 并建立 image 关系；writer 新增图片 round-trip 测试（导出包含 media、再解析字节一致）
   - 回归测试追加 2 条（T1.6 describe）：字体/颜色/字号/超链接「编辑→保存→再解析」稳定保留；与 T1.4 合计桌面 4/4、writer 15/15（含图片测试）
-  - **暂缓（非 M1 阻塞，排入后续）**：样式面板（命名样式下拉）、分页符/分节符按钮、页面设置面板、Word 级快捷键体系对标（目前 Ctrl+B/I/U/Z/Y 由 StarterKit 提供，删除线/字体快捷键待补）
+  - **暂缓（非 M1 阻塞，排入后续）**：样式面板（命名样式下拉）、分节符按钮、页面设置面板、Word 级快捷键体系对标（目前 Ctrl+B/I/U/Z/Y 由 StarterKit 提供，删除线/字体快捷键待补）
+  - 补充（2026-10-13 晚）：**分页符闭环修复**——发现 htmlToJk 丢弃 `<hr>`（分页符）导致含分页符的 docx 保存后丢失分页；已修复（hr → Break(page) Run，根级与单元格内均处理），并加「插入分页符」工具栏按钮（StarterKit HorizontalRule）+ 回归测试（hr → Break(page) → hr 形态稳定）；桌面 5/5
 - [ ] **T1.7** 高级特性：目录自动生成、批注、查找替换、拼写检查
   - **状态：暂缓**（2026-10-13 决策）
   - 查找替换：官方 `@tiptap/extension-find-and-replace` 仅发布 v3（全量 3.29~3.31），与当前 TipTap v2.27 主栈不兼容；升级到 v3 属破坏性迁移（命令/API 变更），风险高，不在本阶段做；待 Phase 1 稳定后单独评估 v3 升级或自研 ProseMirror 查找高亮插件

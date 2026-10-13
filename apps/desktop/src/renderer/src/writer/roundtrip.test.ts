@@ -124,5 +124,22 @@ describe('T1.6 字体/颜色/字号/超链接 编辑后保存不丢', () => {
     const rel = reparsed.relationships.find((x) => x.target === 'https://jareking.cn');
     expect(rel).toBeDefined();
   });
+
+  it('分页符（<hr>）保存后不丢失', async () => {
+    const doc = htmlToJk('<p>前页内容</p><hr /><p>后页内容</p>');
+    const exported = await exportDocx(doc);
+    const reparsed = await parseDocx(exported);
+
+    const pageBreaks = (reparsed.body ?? []).flatMap((b) =>
+      b.type === 'paragraph'
+        ? b.runs.filter((r) => r.type === 'break' && r.breakType === 'page')
+        : [],
+    );
+    expect(pageBreaks.length).toBe(1);
+
+    // 再走一次 jkToHtml，hr 形态稳定（hr → Break(page) → hr）
+    const html2 = jkToHtml(reparsed);
+    expect(html2).toContain('<hr');
+  });
 });
 
