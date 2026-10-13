@@ -143,7 +143,10 @@
 - [x] **T4.4** Writer AI 技能：格式指令、内容指令、润色/续写/翻译/摘要；选中浮动工具条
   - 完成（2026-10-13，核心部分）：AIPanel 快捷技能条（润色选区/续写/翻译为英文/总结全文/插入表格）——预设指令走同一条 Planner→Executor 管道；自由指令并行支持
   - **后续迭代**：选中浮动工具条（选区上方浮出 AI 按钮，更贴近 Word 体验）
-- [ ] **T4.5** Sheet AI 技能：公式生成（自然语言 → 公式）、数据汇总、图表生成、数据洞察
+- [x] **T4.5** Sheet AI 技能：公式生成（自然语言 → 公式）、数据汇总、图表生成、数据洞察
+  - 完成（2026-10-13）：Sheet ops 协议（setFormula/setValue/setValues，A1 记法，zod 判别联合）+ createSheetPlanner（表格 CSV 节选作上下文，数据问题类指令直接在 explanation 回答）+ sheetOpsExecutor（Univer 门面确定性执行）；SheetEditor 工具栏加 AI 输入（公式生成/数据写入/数据问答）
+  - **排掉两个 Univer 深坑**（写入被静默拦截，弹「范围已保护」对话框）：① sheet 配置键必须用 Univer 默认 id（sheet-01…），自造键名与权限点注册错位；② 创建后需逐表调 getWorksheetPermission().unprotect() 解除默认创建者保护（文档的 FPermission.removeWorksheetPermission 在 1.0.4 未实现）
+  - 全链路 GUI 冒烟：mock LLM → AI 输入 → ops 执行 → 快照断言 F1 值真实写入，0 控制台错误；图表生成/数据洞察随 T2.5 图表能力
 - [ ] **T4.6** Presentation AI 技能：大纲 → 成稿、一键生成 PPT
 - [x] **T4.7** 侧边栏对话：多轮对话、文档上下文注入（当前文档/选中区域）、历史会话
   - 完成（2026-10-13，核心部分）：文档上下文注入（全文节选 1500 字 + 当前选区）已在 Planner prompt；侧边栏对话 UI 已实现（消息列表/忙碌态/错误反馈）

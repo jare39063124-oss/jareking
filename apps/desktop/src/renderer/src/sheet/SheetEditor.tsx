@@ -25,11 +25,15 @@ import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import { exportXlsx, parseXlsx, sheetToCsv, type JkWorkbook } from '@jareking/sheet';
 import type { FUniver } from '@univerjs/core';
-import { Download, FileSpreadsheet, FolderOpen, RefreshCw } from 'lucide-react';
+import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
+import { Download, FileSpreadsheet, FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
 
 import { Button } from '../components/Button';
+import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
+import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
+import { applySheetOps } from './sheetOpsExecutor';
 
 /** 首载演示工作簿（体现 值/公式/合并/列宽 四类能力） */
 function demoWorkbook(): JkWorkbook {
@@ -64,50 +68,88 @@ function demoWorkbook(): JkWorkbook {
   };
 }
 
+/** 创建工作簿并解除 Univer v1.0 默认的整表保护（否则所有写入被权限系统静默拦截） */
+async function createWb(api: FUniver, wb: JkWorkbook): Promise<void> {
+  const fwb = api.createWorkbook(jkToUniverData(wb) as Parameters<typeof api.createWorkbook>[0]);
+  try {
+    // 1.0.4 实际 API：工作表权限模型上的 unprotect()——删除整表保护规则并重置全部权限点为可编辑
+    // （文档中的 FPermission.removeWorksheetPermission 在 1.0.4 尚未实现，勿用）
+    for (const sheet of fwb.getSheets?.() ?? []) {
+      await sheet.getWorksheetPermission?.().unprotect?.();
+    }
+  } catch {
+    // 权限 API 异常不阻断工作簿创建
+  }
+}
+
 export function SheetEditor() {
   const containerRef = useRef<HTMLDivElement>(null);
   // univerAPI 持有在 ref（非 state）：实例方法不参与渲染
   const apiRef = useRef<FUniver | null>(null);
   const [ready, setReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const aiInputRef = useRef<HTMLInputElement>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  const [aiInstruction, setAiInstruction] = useState('');
+  // Enter 处理器读 ref 而非 state：避免 React 批处理导致读到旧值
+  const aiInstructionRef = useRef('');
+  const configs = useAiStore((s) => s.configs);
+  const aiLoaded = useAiStore((s) => s.loaded);
+  const loadAiConfigs = useAiStore((s) => s.load);
+  const resolveKey = useAiStore((s) => s.resolveKey);
+
+  useEffect(() => {
+    if (!aiLoaded) void loadAiConfigs();
+  }, [aiLoaded, loadAiConfigs]);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || apiRef.current) return;
 
-    const { univer, univerAPI } = createUniver({
-      // 注意：locale key 必须用 Univer LocaleType 枚举值（'zhCN'），
-      // 字符串 'zh-CN' 会导致内部 LOCALE_META 查表 undefined 而抛错
-      locale: LocaleType.ZH_CN,
-      locales: {
-        [LocaleType.ZH_CN]: Object.assign(
-          {},
-          UniverZhCN as Record<string, string>,
-          SortZhCN as Record<string, string>,
-          FilterZhCN as Record<string, string>,
-          CfZhCN as Record<string, string>,
-          DvZhCN as Record<string, string>,
-        ),
-      },
-      theme: defaultTheme,
-      presets: [
-        UniverSheetsCorePreset({ container: el }),
-        // T2.4 数据功能：排序 / 筛选 / 条件格式 / 数据验证
-        UniverSheetsSortPreset(),
-        UniverSheetsFilterPreset(),
-        UniverSheetsConditionalFormattingPreset(),
-        UniverSheetsDataValidationPreset(),
-      ],
-    });
-    void univer;
-    univerAPI.createWorkbook(jkToUniverData(demoWorkbook()) as Parameters<
-      typeof univerAPI.createWorkbook
-    >[0]);
-    apiRef.current = univerAPI;
-    setReady(true);
+    let disposed = false;
+    let univerRef: ReturnType<typeof createUniver>['univer'] | null = null;
+
+    const init = async () => {
+      const { univer, univerAPI } = createUniver({
+        // 注意：locale key 必须用 Univer LocaleType 枚举值（'zhCN'），
+        // 字符串 'zh-CN' 会导致内部 LOCALE_META 查表 undefined 而抛错
+        locale: LocaleType.ZH_CN,
+        locales: {
+          [LocaleType.ZH_CN]: Object.assign(
+            {},
+            UniverZhCN as Record<string, string>,
+            SortZhCN as Record<string, string>,
+            FilterZhCN as Record<string, string>,
+            CfZhCN as Record<string, string>,
+            DvZhCN as Record<string, string>,
+          ),
+        },
+        theme: defaultTheme,
+        presets: [
+          UniverSheetsCorePreset({ container: el }),
+          // T2.4 数据功能：排序 / 筛选 / 条件格式 / 数据验证
+          UniverSheetsSortPreset(),
+          UniverSheetsFilterPreset(),
+          UniverSheetsConditionalFormattingPreset(),
+          UniverSheetsDataValidationPreset(),
+        ],
+      });
+      void univer;
+      await createWb(univerAPI, demoWorkbook());
+      if (disposed) {
+        univer.dispose();
+        return;
+      }
+      univerRef = univer;
+      apiRef.current = univerAPI;
+      setReady(true);
+    };
+    void init();
 
     return () => {
-      univer.dispose();
+      disposed = true;
+      univerRef?.dispose();
       apiRef.current = null;
       setReady(false);
     };
@@ -122,14 +164,115 @@ export function SheetEditor() {
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
       const wb = await parseXlsx(buf);
-      apiRef.current?.createWorkbook(jkToUniverData(wb) as Parameters<
-        NonNullable<typeof apiRef.current>['createWorkbook']
-      >[0]);
+      await createWb(apiRef.current!, wb);
       toast.success(`已打开 ${file.name}`);
     } catch {
       toast.warning('打开失败：文件可能不是有效的 .xlsx');
     }
   };
+
+  /** T4.5：自然语言 → Sheet ops（公式/数据写入）→ 确定性执行 */
+  const runSheetAi = async (instruction: string) => {
+    const api = apiRef.current;
+    if (!api || aiBusy) return;
+    const config = configs.find((c) => c.enabled);
+    if (!config) {
+      toast.warning('请先在「设置 → AI 服务商」配置并启用一个服务商');
+      return;
+    }
+    setAiBusy(true);
+    setAiNote('AI 规划中…');
+    try {
+      const key = await resolveKey(config.id);
+      const adapter = createAiAdapter(config, key);
+      const planner = createSheetPlanner({ adapter });
+
+      // 上下文：活动表转 CSV 节选
+      const workbook = api.getActiveWorkbook();
+      if (!workbook) throw new Error('无活动工作簿');
+      const snapshot = (workbook as unknown as { save: () => Record<string, unknown> }).save();
+      const jk = univerSnapshotToJk(snapshot as Record<string, never>);
+      const activeId = workbook.getActiveSheet()?.getSheetId();
+      const activeIdx = Math.max(0, Object.keys(snapshot.sheets ?? {}).indexOf(activeId ?? ''));
+      const sheet = jk.sheets[activeIdx] ?? jk.sheets[0];
+
+      const plan: SheetPlanned = await planner.planSheet(instruction, {
+        name: sheet.name,
+        csvSample: sheetToCsv(sheet).slice(0, 1200),
+      });
+
+      if (!plan.ops.length) {
+        // 数据问题类指令：LLM 直接在 explanation 回答
+        setAiNote(plan.explanation || '（无操作）');
+        toast.info(plan.explanation || '无需修改表格');
+        return;
+      }
+      const result = applySheetOps(api, plan.ops);
+      setAiNote(
+        `${plan.explanation || '已执行'} · ✅${result.applied.length}${result.skipped.length ? ` · ⚠️跳过${result.skipped.length}` : ''}`,
+      );
+      toast.success(`AI 已执行 ${result.applied.length} 个操作`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAiNote(`失败：${msg}`);
+      toast.warning(`AI 执行失败：${msg}`);
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** 调试钩子（自动化冒烟 / 开发检查）：主进程以 --jk-debug 或开发模式启用
+   *  runSheetAi 经 ref 间接持有，保证钩子始终调用最新闭包 */
+  const aiRunRef = useRef(runSheetAi);
+  aiRunRef.current = runSheetAi;
+  useEffect(() => {
+    if (ready && new URLSearchParams(window.location.search).has('jk-debug')) {
+      (window as unknown as Record<string, unknown>).__jkDebug = {
+        snapshot: () => apiRef.current?.getActiveWorkbook()?.save() ?? null,
+        runSheetAi: (instruction: string) => aiRunRef.current(instruction),
+        activeSheet: () => {
+          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+          return s ? { id: s.getSheetId(), name: s.getSheetName() } : null;
+        },
+        directSet: () => {
+          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+          if (!s) return 'no-sheet';
+          s.getRange('H1').setValue('DIRECT');
+          return 'ok';
+        },
+        readCell: (a1: string) => {
+          const v = apiRef.current?.getActiveWorkbook()?.getActiveSheet()?.getRange(a1)?.getValue();
+          return v === undefined || v === null ? null : v;
+        },
+        // 数字重载对照测试（T4.5 排查 getRange 字符串重载是否失效）
+        setValueAt: (row: number, col: number, v: unknown) => {
+          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+          if (!s) return 'no-sheet';
+          s.getRange(row, col).setValue(v);
+          return 'ok';
+        },
+        getValueAt: (row: number, col: number) => {
+          const v = apiRef.current?.getActiveWorkbook()?.getActiveSheet()?.getRange(row, col)?.getValue();
+          return v === undefined || v === null ? null : v;
+        },
+        probeProtect: async () => {
+          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+          if (!s) return 'no-sheet';
+          const proto = Object.getPrototypeOf(s);
+          const methods = Object.getOwnPropertyNames(proto).filter((n) => n.toLowerCase().includes('protect'));
+          const before = typeof s.hasProtection === 'function' ? s.hasProtection() : 'n/a';
+          await s.unprotect?.();
+          const after = typeof s.hasProtection === 'function' ? s.hasProtection() : 'n/a';
+          await s.getRange('I1').setValue('AFTER-UNPROTECT');
+          const readBack = s.getRange('I1').getValue();
+          return JSON.stringify({ methods, before, after, readBack });
+        },
+        // 暴露原始对象供探针深度内省（仅 jk-debug 模式）
+        fws: () => apiRef.current?.getActiveWorkbook()?.getActiveSheet(),
+        funiver: () => apiRef.current,
+      };
+    }
+  }, [ready]);
 
   /** 当前 Univer 工作簿快照 → JkWorkbook（保存侧共用） */
   const currentJkWorkbook = (): JkWorkbook | null => {
@@ -187,9 +330,7 @@ export function SheetEditor() {
   };
 
   const onReset = () => {
-    apiRef.current?.createWorkbook(jkToUniverData(demoWorkbook()) as Parameters<
-      NonNullable<typeof apiRef.current>['createWorkbook']
-    >[0]);
+    void createWb(apiRef.current!, demoWorkbook());
   };
 
   return (
@@ -208,7 +349,32 @@ export function SheetEditor() {
         <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={onReset}>
           重置示例
         </Button>
-        <span className="ml-2 text-xs text-text-secondary">
+        <span className="mx-1 h-5 w-px bg-border" />
+        <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
+        <Input
+          className="w-64"
+          placeholder="AI：如「在D2算B列合计」"
+          disabled={aiBusy || !ready}
+          value={aiInstruction}
+          onChange={(e) => {
+            aiInstructionRef.current = e.target.value;
+            setAiInstruction(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing && aiInstructionRef.current.trim()) {
+              e.preventDefault();
+              void runSheetAi(aiInstructionRef.current.trim());
+              aiInstructionRef.current = '';
+              setAiInstruction('');
+            }
+          }}
+        />
+        {aiNote && (
+          <span className="max-w-72 truncate text-tiny text-muted" title={aiNote}>
+            {aiNote}
+          </span>
+        )}
+        <span className="ml-auto text-xs text-text-secondary">
           Univer 表格引擎 · 公式/合并/多 Sheet 开箱即用
         </span>
       </div>

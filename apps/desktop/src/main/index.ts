@@ -150,7 +150,9 @@ function createWindow(): void {
   if (isDev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+    // jk-debug=1：启用渲染层调试钩子（自动化冒烟 / 开发检查用）
+    const debugQuery = isDev || process.argv.includes('--jk-debug') ? 'jk-debug=1' : undefined;
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'), debugQuery ? { search: debugQuery } : undefined);
   }
 }
 

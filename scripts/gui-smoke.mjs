@@ -353,6 +353,112 @@ async function main() {
     true,
   );
   llm.close();
+
+  // 6. T4.5 Sheet AI：mock LLM（返回 setValues 计划）→ Sheet AI 输入 → 快照断言
+  const llm2 = http.createServer((req, res) => {
+    if (req.url?.endsWith('/chat/completions')) {
+      console.log('[smoke-mock2] HIT');
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const plan = JSON.stringify({
+          operations: [{ op: 'setValues', startCell: 'F1', values: [['AI', '写入']] }],
+          explanation: '在 F1 写入验证数据',
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          choices: [{ message: { content: plan }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 60, completion_tokens: 15 },
+        }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => llm2.listen(0, '127.0.0.1', r));
+  const llm2Base = `http://127.0.0.1:${llm2.address().port}/v1`;
+
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sheet'));
+    if (btn) btn.click();
+  })()`);
+  await sleep(3500);
+  await cdp.eval(
+    `(async () => {
+      await window.jareking.invoke('ai:config:save', {
+        name: 'Sheet冒烟', kind: 'openai-compatible', baseUrl: '${llm2Base}',
+        model: 'sheet-model', apiKey: 'sk-sheet', enabled: true,
+      });
+      return 'ok';
+    })()`,
+    true,
+  );
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('Sheet'));
+    if (btn) btn.click();
+  })()`);
+  // 等 Univer 就绪（输入框非 disabled）
+  for (let t = 0; t < 15; t++) {
+    const st = await cdp.eval(
+      `(() => { const i = document.querySelector('input[placeholder="AI：如「在D2算B列合计」"]'); return i ? (i.disabled ? 'disabled' : 'ready') : 'no-input'; })()`,
+    );
+    if (st === 'ready') break;
+    await sleep(1000);
+  }
+  // 等 Univer 就绪（输入框非 disabled）后经调试钩子触发 AI（打字路径已由 Writer 冒烟证明）
+  for (let t = 0; t < 15; t++) {
+    const st = await cdp.eval(
+      `(() => { const i = document.querySelector('input[placeholder="AI：如「在D2算B列合计」"]'); return i ? (i.disabled ? 'disabled' : 'ready') : 'no-input'; })()`,
+    );
+    if (st === 'ready') break;
+    await sleep(1000);
+  }
+  results.sheetAiSent = await cdp.eval(
+    `(() => {
+      if (!window.__jkDebug?.runSheetAi) return 'no-hook';
+      window.__jkDebug.runSheetAi('在F1写入验证数据');
+      return 'sent';
+    })()`,
+  );
+  await sleep(400);
+  results.sheetAiEarlyNote = await cdp.eval(
+    `[...document.querySelectorAll('span')].map((x) => x.textContent).find((t) => t?.includes('AI 规划中') || t?.includes('失败') || t?.includes('已执行')) ?? '(none)'`,
+  );
+  results.sheetAiConfigs = await cdp.eval(
+    `(async () => { const l = await window.jareking.invoke('ai:config:list'); return JSON.stringify(l.map((c) => ({ n: c.name, b: c.baseUrl, e: c.enabled }))); })()`,
+    true,
+  );
+  await sleep(4000);
+  results.sheetAiNote = await cdp.eval(
+    `(() => { const s = [...document.querySelectorAll('span')].map((x) => x.textContent).find((t) => t && (t.includes('AI 已执行') || t.includes('AI 规划中') || t.startsWith('失败') || t.includes('跳过'))); return s?.slice(0, 80) ?? '(无状态行)'; })()`,
+  );
+  results.sheetAiCell = await cdp.eval(
+    `(async () => {
+      const snap = await window.__jkDebug.snapshot();
+      const found = [];
+      for (const [sid, sheet] of Object.entries(snap?.sheets ?? {})) {
+        for (const [r, row] of Object.entries(sheet?.cellData ?? {})) {
+          for (const [c, cell] of Object.entries(row)) {
+            if (JSON.stringify(cell).includes('AI')) found.push(sid + ' ' + r + ',' + c + '=' + JSON.stringify(cell));
+          }
+        }
+      }
+      return JSON.stringify({ found, sheetIds: Object.keys(snap?.sheets ?? {}) });
+    })()`,
+    true,
+  );
+  await cdp.eval(
+    `window.jareking.invoke('ai:config:list').then((list) =>
+      Promise.all(list.filter((c) => c.name === 'Sheet冒烟').map((c) => window.jareking.invoke('ai:config:delete', { id: c.id }))))`,
+    true,
+  );
+  llm2.close();
+  if (results.sheetAiSent !== 'sent' || !String(results.sheetAiCell).includes('"found":["')) failed = true;
   if (results.aiPanelSent !== 'sent' || !results.aiDocChanged || !results.aiSummaryShown) failed = true;
   if (
     results.aiSave !== 'ok' ||

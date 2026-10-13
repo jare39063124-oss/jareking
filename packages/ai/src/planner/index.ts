@@ -12,11 +12,18 @@ import {
   type ParsedWriterPlan,
   type WriterOp,
 } from './writerOps.js';
+import {
+  buildSheetPlannerPrompt,
+  parseSheetPlan,
+  type SheetOp,
+} from './sheetOps.js';
 
 export type { WriterOp, DocContextSummary, ParsedWriterPlan } from './writerOps.js';
 export { parseWriterPlan, buildWriterPlannerPrompt } from './writerOps.js';
+export type { SheetOp } from './sheetOps.js';
+export { parseSheetPlan, buildSheetPlannerPrompt } from './sheetOps.js';
 
-export type PlannerModule = 'writer';
+export type PlannerModule = 'writer' | 'sheet';
 
 export interface AiPlannerDeps {
   adapter: AiAdapter;
@@ -30,6 +37,21 @@ export interface WriterPlanned extends AiPlan {
 
 export interface WriterAiPlanner {
   planWriter(instruction: string, ctx?: DocContextSummary): Promise<WriterPlanned>;
+}
+
+/** Sheet 上下文：表名 + CSV 节选 */
+export interface SheetContext {
+  name: string;
+  csvSample: string;
+}
+
+export interface SheetPlanned extends AiPlan {
+  ops: SheetOp[];
+  rejected: { index: number; reason: string }[];
+}
+
+export interface SheetAiPlanner {
+  planSheet(instruction: string, ctx: SheetContext): Promise<SheetPlanned>;
 }
 
 /** 创建 Writer Planner（推荐） */
@@ -53,3 +75,25 @@ export function createWriterPlanner(deps: AiPlannerDeps): WriterAiPlanner {
     },
   };
 }
+
+/** 创建 Sheet Planner（T4.5） */
+export function createSheetPlanner(deps: AiPlannerDeps): SheetAiPlanner {
+  return {
+    async planSheet(instruction: string, ctx: SheetContext): Promise<SheetPlanned> {
+      const { system, user } = buildSheetPlannerPrompt(instruction, ctx);
+      const res = await deps.adapter.chat([
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ]);
+      const parsed = parseSheetPlan(res.content);
+      return {
+        operations: parsed.operations as AiPlan['operations'],
+        explanation: parsed.explanation,
+        estimatedPoints: parsed.operations.length,
+        ops: parsed.operations,
+        rejected: parsed.rejected,
+      };
+    },
+  };
+}
+

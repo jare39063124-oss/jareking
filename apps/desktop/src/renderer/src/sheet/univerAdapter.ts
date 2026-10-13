@@ -74,10 +74,12 @@ function sheetToUniver(sheet: JkSheet): Record<string, any> {
 export function jkToUniverData(wb: JkWorkbook): Record<string, any> {
   const sheets: Record<string, any> = {};
   (wb.sheets ?? []).forEach((s, i) => {
-    sheets[`sheet-${i}`] = sheetToUniver(s);
+    // 关键：sheet 键必须用 Univer 默认命名（sheet-01…），否则权限点注册与实际
+    // sheetId 错位，导致所有写入被权限系统静默拦截（弹「范围已保护」对话框）
+    sheets[`sheet-${String(i + 1).padStart(2, '0')}`] = sheetToUniver(s);
   });
   if (!Object.keys(sheets).length) {
-    sheets['sheet-0'] = sheetToUniver({
+    sheets['sheet-01'] = sheetToUniver({
       name: 'Sheet1',
       rowCount: DEFAULT_ROWS,
       colCount: DEFAULT_COLS,
