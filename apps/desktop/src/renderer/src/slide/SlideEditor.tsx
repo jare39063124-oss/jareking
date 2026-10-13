@@ -20,13 +20,17 @@ import {
   ImageIcon,
   Play,
   Plus,
+  Sparkles,
   Square,
   Trash2,
   Type,
 } from 'lucide-react';
+import { createAiAdapter, createPresentationPlanner, type PresentationOp } from '@jareking/ai';
 import { exportPptx, parsePptx, type JkPresentation, type JkShape, type JkSlide } from '@jareking/presentation';
 import { Button } from '../components/Button';
+import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
+import { useAiStore } from '../stores/aiStore';
 import { SlideshowOverlay } from './SlideshowOverlay';
 
 /** 舞台像素宽（画布 EMU 宽按比例缩放） */
@@ -181,6 +185,18 @@ export function SlideEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
   const [playing, setPlaying] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  const [aiInstruction, setAiInstruction] = useState('');
+  const aiInstructionRef = useRef('');
+  const configs = useAiStore((st) => st.configs);
+  const aiLoaded = useAiStore((st) => st.loaded);
+  const loadAiConfigs = useAiStore((st) => st.load);
+  const resolveKey = useAiStore((st) => st.resolveKey);
+
+  useEffect(() => {
+    if (!aiLoaded) void loadAiConfigs();
+  }, [aiLoaded, loadAiConfigs]);
 
   // F5 放映（拦截浏览器默认刷新）
   useEffect(() => {
@@ -319,6 +335,92 @@ export function SlideEditor() {
     setPres((prev) => ({ ...prev, slides: prev.slides.filter((_, i) => i !== slideIdx) }));
     setSlideIdx((i) => Math.max(0, i - 1));
   };
+
+  /** T4.6：大纲 → 成稿（Presentation Planner → addSlide ops → 追加幻灯片） */
+  const runPresentationAi = async (instruction: string) => {
+    if (!instruction || aiBusy) return;
+    const config = configs.find((c) => c.enabled);
+    if (!config) {
+      toast.warning('请先在「设置 → AI 服务商」配置并启用一个服务商');
+      return;
+    }
+    setAiBusy(true);
+    setAiNote('AI 生成中…');
+    try {
+      const key = await resolveKey(config.id);
+      const adapter = createAiAdapter(config, key);
+      const planner = createPresentationPlanner({ adapter });
+      const plan = await planner.planPresentation(instruction, {
+        slideCount: pres.slides.length,
+        outline: pres.slides
+          .map((sl, i) => `第${i + 1}页：${sl.shapes.find((x) => x.type === 'text' && (x as JkShape & { paragraphs?: unknown }).paragraphs)?.name ?? ''}`)
+          .join('；'),
+      });
+      if (!plan.ops.length) {
+        setAiNote(plan.explanation || '（无生成内容）');
+        return;
+      }
+      const newSlides = plan.ops
+        .filter((o): o is Extract<PresentationOp, { op: 'addSlide' }> => o.op === 'addSlide')
+        .map(buildSlideFromOp);
+      setPres((prev) => ({ ...prev, slides: [...prev.slides, ...newSlides] }));
+      setSlideIdx(pres.slides.length);
+      setAiNote(`${plan.explanation || '已生成'} · 新增 ${newSlides.length} 页`);
+      toast.success(`AI 已生成 ${newSlides.length} 页幻灯片`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAiNote(`失败：${msg}`);
+      toast.warning(`AI 生成失败：${msg}`);
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** 调试钩子（--jk-debug）：供自动化冒烟断言与触发 */
+  const aiRunRef = useRef(runPresentationAi);
+  aiRunRef.current = runPresentationAi;
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('jk-debug')) {
+      (window as unknown as Record<string, unknown>).__jkSlideDebug = {
+        runPresentationAi: (instruction: string) => aiRunRef.current(instruction),
+        slideCount: () => pres.slides.length,
+      };
+    }
+  });
+
+  /** T4.6：addSlide op → 排版为标题 + 要点文本框 */
+  const buildSlideFromOp = (op: Extract<PresentationOp, { op: 'addSlide' }>): JkSlide => ({
+    shapes: [
+      {
+        type: 'text',
+        id: nextId(),
+        name: op.title.slice(0, 12) || '标题',
+        x: 914400,
+        y: 457200,
+        w: 7315200,
+        h: 914400,
+        paragraphs: [{ runs: [{ text: op.title, bold: true, fontSize: 32, color: '#1F3864' }], align: 'center' }],
+      },
+      ...(op.bullets.length
+        ? [
+            {
+              type: 'text' as const,
+              id: nextId(),
+              name: '要点',
+              x: 1143000,
+              y: 1828800,
+              w: 6858000,
+              h: 3657600,
+              paragraphs: op.bullets.map((b) => ({
+                runs: [{ text: b, fontSize: 20 }],
+                level: 1,
+                bullet: true,
+              })),
+            },
+          ]
+        : []),
+    ],
+  });
 
   const onOpenFile = () => fileInputRef.current?.click();
 
@@ -503,6 +605,31 @@ export function SlideEditor() {
           <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} disabled={!selectedId} onClick={deleteSelected}>
             删除
           </Button>
+          <span className="mx-1 h-5 w-px bg-border" />
+          <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
+          <Input
+            className="w-64"
+            placeholder="AI：如「生成一份产品发布会 PPT」"
+            disabled={aiBusy}
+            value={aiInstruction}
+            onChange={(e) => {
+              aiInstructionRef.current = e.target.value;
+              setAiInstruction(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing && aiInstructionRef.current.trim()) {
+                e.preventDefault();
+                void runPresentationAi(aiInstructionRef.current.trim());
+                aiInstructionRef.current = '';
+                setAiInstruction('');
+              }
+            }}
+          />
+          {aiNote && (
+            <span className="max-w-64 truncate text-tiny text-muted" title={aiNote}>
+              {aiNote}
+            </span>
+          )}
           <span className="mx-1 h-5 w-px bg-border" />
           <Button variant="secondary" size="sm" icon={<Play size={13} />} onClick={() => setPlaying(true)} title="F5">
             放映

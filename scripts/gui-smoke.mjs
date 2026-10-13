@@ -459,6 +459,73 @@ async function main() {
   );
   llm2.close();
   if (results.sheetAiSent !== 'sent' || !String(results.sheetAiCell).includes('"found":["')) failed = true;
+
+  // 7. T4.6 Presentation AI：mock LLM（返回 addSlide 计划）→ 调试钩子触发 → 页数断言
+  const llm3 = http.createServer((req, res) => {
+    if (req.url?.endsWith('/chat/completions')) {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const plan = JSON.stringify({
+          operations: [{ op: 'addSlide', title: 'AI 生成页', bullets: ['要点一', '要点二'] }],
+          explanation: '已生成 1 页',
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          choices: [{ message: { content: plan }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 70, completion_tokens: 25 },
+        }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => llm3.listen(0, '127.0.0.1', r));
+  const llm3Base = `http://127.0.0.1:${llm3.address().port}/v1`;
+
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('演示'));
+    if (btn) btn.click();
+  })()`);
+  await sleep(2500);
+  await cdp.eval(
+    `(async () => {
+      await window.jareking.invoke('ai:config:save', {
+        name: 'PPT冒烟', kind: 'openai-compatible', baseUrl: '${llm3Base}',
+        model: 'ppt-model', apiKey: 'sk-ppt', enabled: true,
+      });
+      return 'ok';
+    })()`,
+    true,
+  );
+  await cdp.eval(`location.reload()`, true).catch(() => {});
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('演示'));
+    if (btn) btn.click();
+  })()`);
+  await sleep(2500);
+  results.pptAiSent = await cdp.eval(
+    `(() => {
+      if (!window.__jkSlideDebug?.runPresentationAi) return 'no-hook';
+      window.__jkSlideDebug.runPresentationAi('生成一页 AI 生成页');
+      return 'sent';
+    })()`,
+  );
+  await sleep(4000);
+  results.pptAiSlideCount = await cdp.eval(`window.__jkSlideDebug?.slideCount?.() ?? -1`);
+  await cdp.eval(
+    `window.jareking.invoke('ai:config:list').then((list) =>
+      Promise.all(list.filter((c) => c.name === 'PPT冒烟').map((c) => window.jareking.invoke('ai:config:delete', { id: c.id }))))`,
+    true,
+  );
+  llm3.close();
+  if (results.pptAiSent !== 'sent' || results.pptAiSlideCount !== 3) failed = true;
+
+
   if (results.aiPanelSent !== 'sent' || !results.aiDocChanged || !results.aiSummaryShown) failed = true;
   if (
     results.aiSave !== 'ok' ||

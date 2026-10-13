@@ -17,13 +17,20 @@ import {
   parseSheetPlan,
   type SheetOp,
 } from './sheetOps.js';
+import {
+  buildPresentationPlannerPrompt,
+  parsePresentationPlan,
+  type PresentationOp,
+} from './presentationOps.js';
 
 export type { WriterOp, DocContextSummary, ParsedWriterPlan } from './writerOps.js';
 export { parseWriterPlan, buildWriterPlannerPrompt } from './writerOps.js';
 export type { SheetOp } from './sheetOps.js';
 export { parseSheetPlan, buildSheetPlannerPrompt } from './sheetOps.js';
+export type { PresentationOp } from './presentationOps.js';
+export { parsePresentationPlan, buildPresentationPlannerPrompt } from './presentationOps.js';
 
-export type PlannerModule = 'writer' | 'sheet';
+export type PlannerModule = 'writer' | 'sheet' | 'presentation';
 
 export interface AiPlannerDeps {
   adapter: AiAdapter;
@@ -97,3 +104,38 @@ export function createSheetPlanner(deps: AiPlannerDeps): SheetAiPlanner {
   };
 }
 
+/** Presentation 上下文 */
+export interface PresentationContext {
+  slideCount: number;
+  outline: string;
+}
+
+export interface PresentationPlanned extends AiPlan {
+  ops: PresentationOp[];
+  rejected: { index: number; reason: string }[];
+}
+
+export interface PresentationAiPlanner {
+  planPresentation(instruction: string, ctx: PresentationContext): Promise<PresentationPlanned>;
+}
+
+/** 创建 Presentation Planner（T4.6：大纲 → 成稿） */
+export function createPresentationPlanner(deps: AiPlannerDeps): PresentationAiPlanner {
+  return {
+    async planPresentation(instruction: string, ctx: PresentationContext): Promise<PresentationPlanned> {
+      const { system, user } = buildPresentationPlannerPrompt(instruction, ctx);
+      const res = await deps.adapter.chat([
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ]);
+      const parsed = parsePresentationPlan(res.content);
+      return {
+        operations: parsed.operations as AiPlan['operations'],
+        explanation: parsed.explanation,
+        estimatedPoints: parsed.operations.length,
+        ops: parsed.operations,
+        rejected: parsed.rejected,
+      };
+    },
+  };
+}
