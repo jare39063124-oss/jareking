@@ -11,4 +11,5 @@
 
 export * from './model/index.js';
 export * from './parser/docxParser.js';
+export * from './formatProfile.js';
 export * from './exporter/index.js';

@@ -29,6 +29,7 @@ export type { SheetOp } from './sheetOps.js';
 export { parseSheetPlan, buildSheetPlannerPrompt } from './sheetOps.js';
 export type { PresentationOp } from './presentationOps.js';
 export { parsePresentationPlan, buildPresentationPlannerPrompt } from './presentationOps.js';
+export { FORMAT_TEMPLATES, getTemplate, TEMPLATE_IDS, type FormatTemplate } from './templates.js';
 
 export type PlannerModule = 'writer' | 'sheet' | 'presentation';
 

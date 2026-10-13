@@ -16,6 +16,8 @@ export const IPC = {
   AI_CONFIG_SAVE: 'ai:config:save',
   AI_CONFIG_DELETE: 'ai:config:delete',
   AI_KEY_RESOLVE: 'ai:key:resolve',
+  SYSTEM_STORAGE_INFO: 'system:storageInfo',
+  SYSTEM_OPEN_DATA_DIR: 'system:openDataDir',
 } as const;
 
 /** 允许通过 db:query 执行的操作名（白名单，杜绝任意 SQL 注入） */

@@ -60,6 +60,54 @@ export const InsertRuleOpSchema = z.object({
 export const UndoOpSchema = z.object({ op: z.literal('undo') });
 export const RedoOpSchema = z.object({ op: z.literal('redo') });
 
+/* ---- 痛点驱动：文档整理 ops（用户反馈 1：换行空格排版/千分符/格式不统一/表格不匹配） ---- */
+
+/** 一键整理：全文段落格式统一（确定性本地执行，LLM 只选参数） */
+export const TidyDocumentOpSchema = z.object({
+  op: z.literal('tidyDocument'),
+  /** 正文首行缩进（字符数，0=不缩进） */
+  firstLineIndent: z.number().min(0).max(4).default(2),
+  /** 行距：倍数（1.5）或固定磅值（"28pt"） */
+  lineSpacing: z.string().default('1.5'),
+  /** 正文对齐 */
+  bodyAlign: z.enum(['justify', 'left']).default('justify'),
+  /** 正文字号（pt） */
+  bodyFontSize: z.number().min(8).max(36).optional(),
+  /** 正文字体名 */
+  bodyFontFamily: z.string().optional(),
+  /** 是否清理连续空段 */
+  collapseBlankLines: z.boolean().default(true),
+});
+
+/** 套用格式模板（公文/论文/报告…）——模板定义在 templates.ts */
+export const ApplyTemplateOpSchema = z.object({
+  op: z.literal('applyTemplate'),
+  templateId: z.string().min(1),
+});
+
+/** 数字千分符（金额/统计数据可读性） */
+export const FormatNumbersOpSchema = z.object({
+  op: z.literal('formatNumbers'),
+  /** 作用范围 */
+  scope: z.enum(['all', 'selection']).default('all'),
+});
+
+/** 插入图表（AI 识别文中对比数据 → 可视化） */
+export const InsertChartOpSchema = z.object({
+  op: z.literal('insertChart'),
+  chartType: z.enum(['bar', 'line', 'pie']),
+  title: z.string().default(''),
+  labels: z.array(z.string()).min(1),
+  series: z
+    .array(
+      z.object({
+        name: z.string().default(''),
+        values: z.array(z.number()).min(1),
+      }),
+    )
+    .min(1),
+});
+
 /** Writer op 全集（判别联合） */
 export const WriterOpSchema = z.discriminatedUnion('op', [
   InsertTextOpSchema,
@@ -72,6 +120,10 @@ export const WriterOpSchema = z.discriminatedUnion('op', [
   InsertRuleOpSchema,
   UndoOpSchema,
   RedoOpSchema,
+  TidyDocumentOpSchema,
+  ApplyTemplateOpSchema,
+  FormatNumbersOpSchema,
+  InsertChartOpSchema,
 ]);
 
 export type WriterOp = z.infer<typeof WriterOpSchema>;
@@ -97,6 +149,12 @@ const OPS_MANUAL = `可用操作（op 字段必须精确匹配，参数见说明
 7. {"op":"clearFormatting"} —— 清除选区格式
 8. {"op":"insertHorizontalRule"} —— 插入分隔线
 9. {"op":"undo"} / {"op":"redo"} —— 撤销/重做
+10. {"op":"tidyDocument","firstLineIndent":2,"lineSpacing":"1.5","bodyAlign":"justify","bodyFontSize":12,"bodyFontFamily":"宋体","collapseBlankLines":true} —— 一键整理全文排版（首行缩进/行距/对齐/正文字体字号，清理连续空段）
+11. {"op":"applyTemplate","templateId":"gov-doc|thesis|report|business"} —— 套用预设格式模板（政府公文/毕业论文/通用报告/商务报告）
+12. {"op":"formatNumbers","scope":"all"} —— 为文中数字添加千分符（金额/统计数据）
+13. {"op":"insertChart","chartType":"bar|line|pie","title":"图表标题","labels":["类别1","类别2"],"series":[{"name":"系列名","values":[数值...]}]} —— 插入数据图表
+
+数据敏感度要求：当指令涉及对比、趋势、占比、统计（如"把这段数据做成图表""可视化""更直观"），或文中出现成组的对比数字时，优先提取数据并用 insertChart 生成图表；数据适合表格呈现时用 insertTable。
 
 规则：operations 按执行顺序排列；只使用以上操作；文本用用户的语言。`;
 

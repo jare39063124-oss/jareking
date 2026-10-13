@@ -5,9 +5,10 @@
  * createWriterPlanner（LLM-as-Planner）→ plan → applyWriterOps 确定性执行。
  * 面板仅展示计划说明与执行结果；文档修改全部经本地 Executor。
  */
-import { useEffect, useState, type KeyboardEvent } from 'react';
-import { Bot, PanelRightClose, Send, Sparkles } from 'lucide-react';
-import { createAiAdapter, createWriterPlanner } from '@jareking/ai';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Bot, FileUp, Hash, LayoutTemplate, PanelRightClose, Send, Sparkles, Wand2 } from 'lucide-react';
+import { createAiAdapter, createWriterPlanner, FORMAT_TEMPLATES } from '@jareking/ai';
+import { extractFormatProfile } from '@jareking/writer';
 import { IconButton } from './IconButton';
 import { Input } from './Input';
 import { toast } from '../stores/toastStore';
@@ -30,6 +31,22 @@ const QUICK_SKILLS: { label: string; instruction: string }[] = [
   { label: '插入表格', instruction: '在光标处插入一个 3 行 3 列的表格' },
 ];
 
+/** 排版工具箱（用户反馈 1）——本地确定性执行，不调用 AI、离线可用、即时生效 */
+const TIDY_TOOLS: { label: string; title: string; icon: typeof Wand2; op: () => Parameters<typeof applyWriterOps>[1][number] }[] = [
+  {
+    label: '一键整理',
+    title: '统一首行缩进 2 字符、1.5 倍行距、两端对齐、清理连续空段',
+    icon: Wand2,
+    op: () => ({ op: 'tidyDocument', firstLineIndent: 2, lineSpacing: '1.5', bodyAlign: 'justify', collapseBlankLines: true }),
+  },
+  {
+    label: '千分符',
+    title: '为全文数字添加千分符（金额/统计数据可读性）',
+    icon: Hash,
+    op: () => ({ op: 'formatNumbers', scope: 'all' }),
+  },
+];
+
 export function AIPanel() {
   const toggleAiPanel = useUiStore((state) => state.toggleAiPanel);
   const configs = useAiStore((s) => s.configs);
@@ -40,10 +57,50 @@ export function AIPanel() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!loaded) void loadConfigs();
   }, [loaded, loadConfigs]);
+
+  /** 排版工具（本地执行，无需 AI） */
+  const runTidy = (op: Parameters<typeof applyWriterOps>[1][number]) => {
+    const editor = getActiveEditor();
+    if (!editor) {
+      toast.warning('请先打开一个文字文档');
+      return;
+    }
+    const result = applyWriterOps(editor, [op]);
+    if (result.applied.length) toast.success('排版已应用（可 Ctrl+Z 撤销）');
+    else toast.warning(result.skipped[0]?.reason ?? '无需整理');
+  };
+
+  /** 参考文档格式：选一份 .docx → 提取格式档案 → 套用到当前文档 */
+  const runReferenceFormat = async (file: File) => {
+    const editor = getActiveEditor();
+    if (!editor) {
+      toast.warning('请先打开一个文字文档');
+      return;
+    }
+    const profile = await extractFormatProfile(new Uint8Array(await file.arrayBuffer()));
+    if (!profile) {
+      toast.warning('无法读取参考文档的格式（请确认是 .docx 文件）');
+      return;
+    }
+    const result = applyWriterOps(editor, [
+      {
+        op: 'tidyDocument',
+        firstLineIndent: profile.firstLineIndent ?? 2,
+        lineSpacing: profile.lineSpacing ?? '1.5',
+        bodyAlign: profile.bodyAlign ?? 'justify',
+        bodyFontSize: profile.bodyFontSize,
+        bodyFontFamily: profile.bodyFontFamily,
+        collapseBlankLines: true,
+      },
+    ]);
+    if (result.applied.length) toast.success(`已套用「${file.name}」的格式：${profile.summary}`);
+    else toast.warning(result.skipped[0]?.reason ?? '套用失败');
+  };
 
   const send = async (raw?: string) => {
     const instruction = (raw ?? input).trim();
@@ -124,6 +181,66 @@ export function AIPanel() {
           icon={<PanelRightClose size={15} />}
           onClick={toggleAiPanel}
         />
+      </div>
+
+      {/* 排版工具箱（用户反馈 1）：本地确定性执行，不调用 AI、离线可用 */}
+      <div className="shrink-0 border-b border-border px-3 py-2">
+        <div className="mb-1.5 flex items-center gap-1.5 text-tiny font-medium text-muted">
+          <LayoutTemplate size={12} aria-hidden="true" />
+          排版工具箱
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {TIDY_TOOLS.map((tool) => (
+            <button
+              key={tool.label}
+              type="button"
+              title={tool.title}
+              className="flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-tiny text-fg transition-colors hover:border-accent hover:text-accent"
+              onClick={() => runTidy(tool.op())}
+            >
+              <tool.icon size={12} aria-hidden="true" />
+              {tool.label}
+            </button>
+          ))}
+          <select
+            className="rounded-sm border border-border bg-surface px-1.5 py-1 text-tiny text-fg"
+            defaultValue=""
+            onChange={(e) => {
+              const id = e.target.value;
+              e.target.value = '';
+              if (id) runTidy({ op: 'applyTemplate', templateId: id });
+            }}
+          >
+            <option value="" disabled>
+              套用模板…
+            </option>
+            {FORMAT_TEMPLATES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            title="选择一份 Word 文档，提取它的正文格式（字体/字号/行距/缩进/对齐）并套用到当前文档"
+            className="flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-tiny text-fg transition-colors hover:border-accent hover:text-accent"
+            onClick={() => referenceInputRef.current?.click()}
+          >
+            <FileUp size={12} aria-hidden="true" />
+            参考文档格式
+          </button>
+          <input
+            ref={referenceInputRef}
+            type="file"
+            accept=".docx"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) void runReferenceFormat(f);
+            }}
+          />
+        </div>
       </div>
 
       {/* 对话区 */}

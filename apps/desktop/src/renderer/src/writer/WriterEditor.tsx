@@ -18,7 +18,7 @@ import TextStyle from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Link from '@tiptap/extension-link';
-import TextAlign from '@tiptap/extension-text-align';
+import { ParagraphTextAlign } from './paragraphLayout';
 import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
@@ -120,7 +120,7 @@ export function WriterEditor() {
         autolink: true,
         HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
       }),
-      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      ParagraphTextAlign.configure({ types: ['heading', 'paragraph'] }),
       Table.configure({ resizable: true }),
       TableRow,
       TableHeader,
@@ -165,6 +165,20 @@ export function WriterEditor() {
   useEffect(() => {
     return () => {
       editor?.destroy();
+    };
+  }, [editor]);
+
+  // 调试钩子（自动化冒烟 / 开发检查）：--jk-debug 启动时暴露 HTML 快照与排版能力
+  useEffect(() => {
+    if (!editor) return;
+    if (new URLSearchParams(window.location.search).has('jk-debug')) {
+      (window as unknown as Record<string, unknown>).__jkWriterDebug = {
+        html: () => editor.getHTML(),
+        text: () => editor.getText(),
+      };
+    }
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__jkWriterDebug;
     };
   }, [editor]);
 

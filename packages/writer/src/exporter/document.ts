@@ -261,7 +261,13 @@ function serializeTblPr(tp?: TableProperties): string {
   if (tp.width !== undefined) {
     const w = emuToTwips(tp.width);
     if (w !== undefined) parts.push(`<w:tblW w:w="${w}" w:type="dxa"/>`);
+  } else {
+    // 无显式宽度（auto）：按页宽 100% 自适应 + autofit 布局。
+    // 旧实现误写为 dxa 绝对值导致表格比例异常（用户反馈：表格与内容不匹配）；
+    // pct 5000 = 50%×2 = 100%，由 Word/WPS 按内容与页宽自动分配列宽。
+    parts.push('<w:tblW w:w="5000" w:type="pct"/>');
   }
+  parts.push('<w:tblLayout w:type="autofit"/>');
   if (tp.borders) {
     const b = serializeTableBorders(tp.borders, 'tblBorders');
     if (b) parts.push(b);
@@ -285,7 +291,12 @@ function serializeTblGrid(t: Table): string {
       cols.push(w);
     }
   }
-  if (!cols.length) return '<w:tblGrid/>';
+  if (!cols.length || cols.every((c) => c === 0)) {
+    // 列宽缺失时按页宽（约 9026 twips ≈ A4 减边距）均分，避免 0 宽表格
+    const n = t.rows[0]?.cells.length ?? 1;
+    const w = Math.floor(9026 / Math.max(1, n));
+    cols = Array.from({ length: n }, () => w);
+  }
   return `<w:tblGrid>${cols.map((c) => `<w:gridCol w:w="${c}"/>`).join('')}</w:tblGrid>`;
 }
 

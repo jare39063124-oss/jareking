@@ -167,6 +167,35 @@ async function main() {
   );
   if (!results.proseMirror || results.writerTextLen < 10) failed = true;
 
+  // 2b. 排版工具箱（用户反馈 1）：真实点击「一键整理」→ HTML 断言排版属性落地
+  await cdp.eval(
+    `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '一键整理'); if (btn) btn.click(); return !!btn; })()`,
+  );
+  await sleep(600);
+  results.tidyApplied = await cdp.eval(
+    `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('text-indent: 2em') && h.includes('line-height: 1.5') && h.includes('text-align: justify'); })()`,
+  );
+  // 千分符：真实输入一段含大数字的文字 → 点击「千分符」→ 断言文本变为 1,234,567
+  await cdp.eval(
+    `(() => {
+      const pm = document.querySelector('.ProseMirror');
+      if (!pm) return false;
+      pm.focus();
+      document.execCommand('insertText', false, '\\n本月营收 1234567 元，同比新增 45600。');
+      return true;
+    })()`,
+  );
+  await sleep(300);
+  results.numberBefore = await cdp.eval(`window.__jkWriterDebug?.text?.()?.includes('1234567') ?? false`);
+  await cdp.eval(
+    `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '千分符'); if (btn) btn.click(); return !!btn; })()`,
+  );
+  await sleep(500);
+  results.tidyNumbers = await cdp.eval(
+    `(() => { const t = window.__jkWriterDebug?.text?.() ?? ''; return t.includes('1,234,567') && t.includes('45,600'); })()`,
+  );
+  if (!results.tidyApplied || !results.tidyNumbers) failed = true;
+
   // 3. Slide：再次刷新回空状态，点击演示模块
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);

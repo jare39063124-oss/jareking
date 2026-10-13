@@ -103,6 +103,31 @@ function registerIpcHandlers(): void {
   // 更新：手动触发检查（仅打包模式生效）
   ipcMain.handle(IPC.UPDATER_CHECK, async () => checkForUpdates());
 
+  // 存储管理（对标 WPS「C 盘垃圾不透明」痛点）：数据位置与占用一目了然
+  ipcMain.handle(IPC.SYSTEM_STORAGE_INFO, async () => {
+    const { app } = await import('electron');
+    const dataDir = app.getPath('userData');
+    let bytes = 0;
+    const walk = async (dir: string): Promise<void> => {
+      const { readdir } = await import('node:fs/promises');
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const e of entries) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) await walk(p);
+        else {
+          const { stat } = await import('node:fs/promises');
+          bytes += (await stat(p).catch(() => ({ size: 0 }))).size;
+        }
+      }
+    };
+    await walk(dataDir);
+    return { dataDir, bytes, platform: process.platform };
+  });
+  ipcMain.handle(IPC.SYSTEM_OPEN_DATA_DIR, async () => {
+    const { app, shell } = await import('electron');
+    await shell.openPath(app.getPath('userData'));
+  });
+
   // AI 配置：列表 / 保存（含密钥加密）/ 删除 / 明文 Key 解析（单次调用注入）
   ipcMain.handle(IPC.AI_CONFIG_LIST, () => ai.list());
   ipcMain.handle(IPC.AI_CONFIG_SAVE, (_event, payload?: AiConfigSaveInput) => {

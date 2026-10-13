@@ -1,9 +1,55 @@
-import { Moon, Sun } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FolderOpen, HardDrive, Moon, Sun } from 'lucide-react';
 import { Modal } from './Modal';
 import { Select } from './Select';
 import { AiConfigSection } from './AiConfigSection';
+import { Button } from './Button';
 import { toast } from '../stores/toastStore';
 import { useUiStore, type ThemeMode } from '../stores/uiStore';
+
+/** 存储管理（对标 WPS「缓存占 C 盘且不透明」痛点）：数据位置与占用透明可见 */
+function StorageSection() {
+  const [info, setInfo] = useState<{ dataDir: string; bytes: number } | null>(null);
+  useEffect(() => {
+    void window.jareking
+      .invoke('system:storageInfo')
+      .then((r) => setInfo(r as { dataDir: string; bytes: number }))
+      .catch(() => undefined);
+  }, []);
+  const mb = info ? (info.bytes / 1024 / 1024).toFixed(1) : '-';
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="flex items-center gap-1.5 text-ui font-medium text-fg">
+        <HardDrive size={14} className="text-accent" aria-hidden="true" />
+        存储管理
+      </h3>
+      <p className="text-tiny leading-relaxed text-muted">
+        jareking 所有数据（账户、文档记录、AI 配置）都集中保存在这一个文件夹，无云备份副本、无隐藏缓存——
+        占用一目了然，卸载时删除该文件夹即彻底清理。
+      </p>
+      <div className="rounded-sm border border-border bg-muted-bg/50 px-3 py-2 text-tiny text-fg">
+        <div className="flex justify-between">
+          <span className="text-muted">数据位置</span>
+          <span className="max-w-64 truncate font-mono" title={info?.dataDir}>
+            {info?.dataDir ?? '读取中…'}
+          </span>
+        </div>
+        <div className="mt-1 flex justify-between">
+          <span className="text-muted">当前占用</span>
+          <span>{mb} MB</span>
+        </div>
+      </div>
+      <Button
+        variant="secondary"
+        size="sm"
+        icon={<FolderOpen size={13} />}
+        onClick={() => void window.jareking.invoke('system:openDataDir').catch(() => toast.warning('打开失败'))}
+      >
+        打开数据文件夹
+      </Button>
+    </section>
+  );
+}
 
 /** 主题分段按钮（浅色 / 深色） */
 function ThemeSegmented({
@@ -53,6 +99,9 @@ export function SettingsPanel() {
       <div className="flex flex-col gap-6">
         {/* AI 服务商配置（T4.2） */}
         <AiConfigSection />
+
+        {/* 存储管理（数据透明，对标 WPS C 盘痛点） */}
+        <StorageSection />
 
         {/* 外观：主题 */}
         <section className="flex flex-col gap-2">

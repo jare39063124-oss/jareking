@@ -230,6 +230,45 @@ function readAlign(el: Element): 'left' | 'center' | 'right' | 'justify' | undef
   return undefined;
 }
 
+/** 默认正文字号（pt），用于把 em 缩进换算为 EMU */
+const DEFAULT_BODY_PT = 12;
+
+/**
+ * 从元素 style 读取 text-indent → ind.firstLine（EMU）。
+ * 支持 "2em"（按本段字号换算）与 px/pt 绝对值。
+ */
+function readFirstLineIndent(el: Element): number | undefined {
+  const style = el.getAttribute('style') ?? '';
+  const m = /(?:^|;)\s*text-indent:\s*([\d.]+)\s*(em|px|pt)/.exec(style);
+  if (!m) return undefined;
+  const value = Number(m[1]);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  if (m[2] === 'em') {
+    // 优先取本段内联字号；缺省按小四（12pt）估算
+    const fs = /(?:^|;)\s*font-size:\s*([\d.]+)\s*(pt|px)/.exec(style);
+    const pt = fs ? (fs[2] === 'px' ? Number(fs[1]) * 0.75 : Number(fs[1])) : DEFAULT_BODY_PT;
+    return Math.round(value * pt * 12700);
+  }
+  return Math.round(value * (m[2] === 'px' ? 9525 : 12700));
+}
+
+/**
+ * 从元素 style 读取 line-height → spacing.line/lineRule。
+ * 无单位倍数（1.5 → 360/auto）；带 pt 绝对值（28pt → 560/exact）。
+ */
+function readLineHeight(el: Element): Paragraph['pPr']['spacing'] | undefined {
+  const style = el.getAttribute('style') ?? '';
+  const m = /(?:^|;)\s*line-height:\s*([\d.]+)\s*(pt|px)?/.exec(style);
+  if (!m) return undefined;
+  const value = Number(m[1]);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  if (m[2]) {
+    const pt = m[2] === 'px' ? value * 0.75 : value;
+    return { line: Math.round(pt * 20), lineRule: 'exact' };
+  }
+  return { line: Math.round(value * 240), lineRule: 'auto' };
+}
+
 /** 解析一个段落/标题元素 → Paragraph */
 function parseParagraph(el: Element, ctx: ParseCtx, numId?: string): Paragraph {
   const tag = el.tagName.toLowerCase();
@@ -241,6 +280,10 @@ function parseParagraph(el: Element, ctx: ParseCtx, numId?: string): Paragraph {
   if (hm) pPr.outlineLvl = Number(hm[1]) - 1;
   const jc = readAlign(el);
   if (jc) pPr.jc = jc;
+  const firstLine = readFirstLineIndent(el);
+  if (firstLine !== undefined) pPr.ind = { ...(pPr.ind ?? {}), firstLine };
+  const lineSpacing = readLineHeight(el);
+  if (lineSpacing) pPr.spacing = { ...(pPr.spacing ?? {}), ...lineSpacing };
   if (numId) pPr.numPr = { numId, ilvl: 0 };
 
   return {
