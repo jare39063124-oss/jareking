@@ -119,6 +119,11 @@ async function main() {
     await sleep(500);
   }
   if (!results.appRoot) failed = true;
+
+  // 0b. 首页「最近使用」区（WPS 对齐 N5）
+  results.recentDocsSection = await cdp.eval(
+    `document.body.textContent.includes('最近使用') && (document.body.textContent.includes('暂无最近文档') || document.body.textContent.includes('加载中'))`,
+  );
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
   // 清空历史 AI 配置（此前失败运行可能遗留指向死端口的配置，面板取首个启用配置会踩中）

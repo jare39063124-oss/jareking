@@ -35,6 +35,7 @@ import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
 import { parseInWorker } from '../lib/parseClient';
+import { takePendingOpen } from '../stores/pendingOpenStore';
 
 /** 首载演示工作簿（体现 值/公式/合并/列宽 四类能力） */
 function demoWorkbook(): JkWorkbook {
@@ -242,6 +243,30 @@ export function SheetEditor() {
    *  runSheetAi 经 ref 间接持有，保证钩子始终调用最新闭包 */
   const aiRunRef = useRef(runSheetAi);
   aiRunRef.current = runSheetAi;
+
+  /** 最近文档直达（WPS 对齐 N5）：消费首页「最近使用」点击 */
+  useEffect(() => {
+    if (!ready) return;
+    const p = takePendingOpen();
+    if (!p || p.module !== 'sheet' || !/\.xlsx$/i.test(p.path)) return;
+    void (async () => {
+      try {
+        const bytes = await window.jareking.invoke<Uint8Array | null>('doc:read-file', { path: p.path });
+        if (!bytes) {
+          toast.warning('文件已不存在或无法读取');
+          return;
+        }
+        const wb = await parseInWorker('xlsx', new Uint8Array(bytes));
+        const api = apiRef.current;
+        if (!api) return;
+        await createWb(api, wb);
+        toast.success(`已打开 ${p.name}`);
+      } catch (err) {
+        toast.warning(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
+  }, [ready]);
+
   useEffect(() => {
     if (ready && new URLSearchParams(window.location.search).has('jk-debug')) {
       (window as unknown as Record<string, unknown>).__jkDebug = {

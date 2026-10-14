@@ -1,12 +1,112 @@
-import { BookOpen, Cloud, FolderOpen, Plus } from 'lucide-react';
+import { BookOpen, Cloud, FolderOpen, History, Pin, Plus } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Button } from './Button';
 import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
 import { toast } from '../stores/toastStore';
+import { setPendingOpen } from '../stores/pendingOpenStore';
 import { SheetEditor } from '../sheet/SheetEditor';
 import { SlideEditor } from '../slide/SlideEditor';
 import { WriterEditor } from '../writer/WriterEditor';
+
+interface RecentFileRow {
+  document: {
+    id: string;
+    module: string;
+    title: string;
+    filePath: string | null;
+    format: string | null;
+  };
+  lastOpenedAt: number | string | null;
+  pinned: number;
+}
+
+/** 最近使用（WPS 首页体验）：点击直达打开，悬停可定位到系统文件管理器 */
+function RecentDocs() {
+  const openTab = useTabStore((state) => state.openTab);
+  const [items, setItems] = useState<RecentFileRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await window.jareking.invoke<RecentFileRow[]>('doc:recent:list');
+        if (!cancelled) {
+          setItems((list ?? []).filter((r) => !!r.document?.filePath).slice(0, 8));
+        }
+      } catch {
+        if (!cancelled) setItems([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const open = (row: RecentFileRow) => {
+    const module = row.document.module as DocModule;
+    if (!['writer', 'sheet', 'presentation'].includes(module) || !row.document.filePath) {
+      toast.warning('该文件暂不支持直接打开，请用「打开」按钮手动选择');
+      return;
+    }
+    setPendingOpen({
+      module,
+      path: row.document.filePath,
+      name: row.document.title,
+    });
+    openTab(module, row.document.title);
+  };
+
+  const reveal = (e: React.MouseEvent, path: string) => {
+    e.stopPropagation();
+    void window.jareking.invoke('doc:reveal', { path });
+  };
+
+  return (
+    <div className="w-[340px] shrink-0 border-l border-border p-4">
+      <div className="mb-2 flex items-center gap-1.5 text-ui font-medium text-fg">
+        <History size={14} className="text-muted" aria-hidden="true" />
+        最近使用
+      </div>
+      {loading ? (
+        <p className="text-tiny text-muted">加载中…</p>
+      ) : items.length === 0 ? (
+        <p className="text-tiny leading-relaxed text-muted">
+          暂无最近文档。打开本地文件后会自动出现在这里（内置示例除外）。
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-0.5">
+          {items.map((r) => (
+            <li key={r.document.id}>
+              <button
+                type="button"
+                title={`${r.document.filePath}\n打开后可「在文件夹中显示」`}
+                className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-hover"
+                onClick={() => open(r)}
+              >
+                <FolderOpen size={13} className="shrink-0 text-muted" aria-hidden="true" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-fg">{r.document.title}</span>
+                  <span className="block truncate text-tiny text-muted">{r.document.format ?? ''}</span>
+                </span>
+                <Pin
+                  size={12}
+                  className="shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100"
+                  aria-hidden="true"
+                  onClick={(e) => reveal(e, r.document.filePath!)}
+                />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 /** 云文件占位数据（右侧树） */
 const CLOUD_FILES: TreeNode[] = [
@@ -77,7 +177,9 @@ function EmptyState() {
         </div>
       </div>
 
-      {/* 右：云文件（占位） */}
+      {/* 右：最近使用（本地文档库）+ 云文件（占位） */}
+      <div className="flex shrink-0">
+        <RecentDocs />
       <div className="w-64 shrink-0 overflow-auto border-l border-border bg-surface p-3">
         <div className="mb-2 flex items-center gap-1.5 px-1 text-ui font-medium text-fg">
           <Cloud size={14} className="text-muted" aria-hidden="true" />
@@ -87,6 +189,7 @@ function EmptyState() {
           nodes={CLOUD_FILES}
           onSelect={(node) => toast.info(`打开「${node.label}」功能建设中`)}
         />
+        </div>
       </div>
     </div>
   );

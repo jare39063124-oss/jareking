@@ -35,6 +35,7 @@ import { renderChartToPng, type ChartType } from '../writer/chartRenderer';
 import { Modal } from '../components/Modal';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { parseInWorker } from '../lib/parseClient';
+import { takePendingOpen } from '../stores/pendingOpenStore';
 import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
 import { SlideshowOverlay } from './SlideshowOverlay';
@@ -469,6 +470,31 @@ export function SlideEditor() {
   aiRunRef.current = runPresentationAi;
   const addChartRunRef = useRef(addChart);
   addChartRunRef.current = addChart;
+
+  /** 最近文档直达（WPS 对齐 N5）：消费首页「最近使用」点击 */
+  useEffect(() => {
+    const p = takePendingOpen();
+    if (!p || p.module !== 'presentation' || !/\.pptx$/i.test(p.path)) return;
+    void (async () => {
+      try {
+        setFileLoading(true);
+        const bytes = await window.jareking.invoke<Uint8Array | null>('doc:read-file', { path: p.path });
+        if (!bytes) {
+          toast.warning('文件已不存在或无法读取');
+          return;
+        }
+        const loaded = await parseInWorker('pptx', new Uint8Array(bytes));
+        setPres({ ...loaded, slides: loaded.slides.map(withIds) });
+        setSlideIdx(0);
+        toast.success(`已打开 ${p.name}`);
+      } catch (err) {
+        toast.warning(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setFileLoading(false);
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has('jk-debug')) {
       (window as unknown as Record<string, unknown>).__jkSlideDebug = {

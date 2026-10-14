@@ -9,6 +9,8 @@ export const IPC = {
   ACCOUNT_POINTS: 'account:points',
   DOC_RECENT_LIST: 'doc:recent:list',
   DOC_RECENT_PIN: 'doc:recent:pin',
+  DOC_READ_FILE: 'doc:read-file',
+  DOC_REVEAL: 'doc:reveal',
   DOC_AUTOSAVE_SAVE: 'doc:autosave:save',
   DOC_AUTOSAVE_PENDING: 'doc:autosave:pending',
   UPDATER_CHECK: 'updater:check',

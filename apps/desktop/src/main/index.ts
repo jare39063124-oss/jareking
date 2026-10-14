@@ -128,6 +128,27 @@ function registerIpcHandlers(): void {
     await shell.openPath(app.getPath('userData'));
   });
 
+  // 读取文档文件字节（首页最近文档点击直达：主进程读盘 → 渲染进程解析）
+  ipcMain.handle(IPC.DOC_READ_FILE, async (_event, payload?: { path?: string }) => {
+    if (!payload?.path) return null;
+    const { readFile } = await import('node:fs/promises');
+    try {
+      const buf = await readFile(payload.path);
+      // 返回 Uint8Array（structured clone 可跨进程传递）
+      return new Uint8Array(buf);
+    } catch {
+      return null; // 文件已被移动/删除：返回 null 由渲染层提示
+    }
+  });
+
+  // 在系统文件管理器中定位文件（最近列表悬停「定位」）
+  ipcMain.handle(IPC.DOC_REVEAL, async (_event, payload?: { path?: string }) => {
+    if (!payload?.path) return false;
+    const { shell } = await import('electron');
+    shell.showItemInFolder(payload.path);
+    return true;
+  });
+
   // AI 配置：列表 / 保存（含密钥加密）/ 删除 / 明文 Key 解析（单次调用注入）
   ipcMain.handle(IPC.AI_CONFIG_LIST, () => ai.list());
   ipcMain.handle(IPC.AI_CONFIG_SAVE, (_event, payload?: AiConfigSaveInput) => {

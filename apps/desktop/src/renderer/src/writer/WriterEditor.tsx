@@ -16,6 +16,7 @@ import { FloatingAiBar } from "./FloatingAiBar";
 import { FONT_GROUPS } from "./fonts";
 import { FindReplaceBar, EditorStatusBar } from "./FindReplaceBar";
 import { buildTocEntries, buildTocContent } from "./tocBuilder";
+import { takePendingOpen, peekPendingOpen } from "../stores/pendingOpenStore";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -301,9 +302,10 @@ export function WriterEditor() {
     }
   };
 
-  // 首次加载示例文档
+  // 首次加载示例文档（若有「最近文档待打开」则跳过，避免异步竞态覆盖）
   useEffect(() => {
     if (!editor) return;
+    if (peekPendingOpen()) return;
     let cancelled = false;
 
     (async () => {
@@ -324,6 +326,36 @@ export function WriterEditor() {
       }
     })();
 
+    return () => {
+      cancelled = true;
+    };
+  }, [editor]);
+
+  // 最近文档直达（WPS 对齐 N5）：消费首页「最近使用」点击（挂载后一次性）
+  useEffect(() => {
+    if (!editor) return;
+    const p = takePendingOpen();
+    if (!p || p.module !== 'writer' || !/\.docx$/i.test(p.path)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        setDocLoading(true);
+        const bytes = await window.jareking.invoke<Uint8Array | null>('doc:read-file', { path: p.path });
+        if (cancelled) return;
+        if (!bytes) {
+          toast.warning('文件已不存在或无法读取');
+          return;
+        }
+        const jk = await parseDocx(new Uint8Array(bytes));
+        if (cancelled) return;
+        loadDocument(jk);
+        toast.success(`已打开 ${p.name}`);
+      } catch (err) {
+        if (!cancelled) toast.warning(`打开失败：${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        if (!cancelled) setDocLoading(false);
+      }
+    })();
     return () => {
       cancelled = true;
     };
