@@ -201,6 +201,13 @@ function serializeInline(inline: Inline, ctx: Ctx = { imageId: 0 }): string {
     case 'footnoteRef':
       // footnoteReference 必须位于 w:r 内（OOXML 约束），包裹后导出
       return `<w:r><w:footnoteReference w:id="${escapeXmlAttr(inline.id ?? '')}"/></w:r>`;
+    case 'field': {
+      // Word 域：以 fldSimple 还原，Word/WPS 打开后按指令重算（PAGE/NUMPAGES/DATE/TOC…）
+      const result = inline.result
+        ? `<w:r><w:t xml:space="preserve">${escapeXmlText(inline.result)}</w:t></w:r>`
+        : '';
+      return `<w:fldSimple w:instr="${escapeXmlAttr(inline.instr)}">${result}</w:fldSimple>`;
+    }
     default:
       return '';
   }

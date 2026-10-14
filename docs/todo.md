@@ -226,3 +226,23 @@
 - [x] Spec v1.1 修订（2026-10-12，按 6 条开放问题答复）—— **待审批**
 - [ ] Spec 审批通过
 - [ ] Phase 0 启动（T0.0 品牌占位可立即人工执行）
+
+---
+
+## 对抗性复检后续（2026-10-15，来源：首轮复检 #46/#47/#48）
+
+> 复检发现的高危项已逐步处理，分级与结果见 `docs/agent-guide.md` 第 6 节。此处登记**已落地**与**暂缓但不丢项**的清单，供后续迭代不遗漏。
+
+### ✅ 已落地（本次）
+- **#47 Sheet 样式回写断裂 —— 根治**：`apps/desktop/src/renderer/src/sheet/univerAdapter.ts` 实现 `JkCellStyle ↔ IStyleData` 双向映射 + `StyleRegistry` 去重；`univerAdapter.test.ts` 7/7 通过。保存 Univer 编辑出的填充/字体/边框/对齐不再丢失。
+- **#48 Writer 域降级 —— 建模**：`packages/writer` 模型/解析/导出/编辑器链路全贯通 `field`（简单 `fldSimple` + 复杂 `fldChar`/`instrText` 状态机，含 `w:r` 内嵌套）；`test/field.test.ts` 3/3 通过。跨程序（Word/WPS）打开后页码/目录/公式按指令重算。
+- **#46 大文件稳定性 —— 安全降级缓解**：`lib/largeFile.ts` 统一阈值与文案；`WriterEditor`/`SlideEditor` 加 `LoadingOverlay`（解析不冻结 UI）+ 可关闭大文件横幅 + PPT 缩略图虚拟化（DOM 节点数恒定）。交互不卡死、不崩溃。
+
+### ⏸ 暂缓（深层架构债，明确不丢项，排入 M3 性能专项前）
+- **#46-A Writer 文档级虚拟化/分页**：当前 `setContent(jkToHtml(jk))` 整篇合成一个 HTML 交给 ProseMirror，无分页/虚拟化。大文档仍有内存压力。→ 接入分块加载或虚拟滚动。
+- **#46-B 图片 Blob URL 化**：当前 `media`（图片二进制）经 base64 data URL 进入 HTML，等于内存双倍占用。→ 改为 `URL.createObjectURL` + 生命周期管理。
+- **#46-C Sheet/PPT 超大文件分块解析**：`docxParser`/`xlsxParser`/`pptxParser` 全量入内存。→ 流式/分块解析（如 worker 解析 + 增量提交）。
+- 上述三项已记入 `lib/largeFile.ts` 文件头注释，M3（T8.3 性能专项）优先处理。
+
+### 复查澄清（非缺口，留痕避免重复排查）
+- **命名样式**：复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已完整贯通 Word 命名样式（Heading 1 等），并非真实缺口。

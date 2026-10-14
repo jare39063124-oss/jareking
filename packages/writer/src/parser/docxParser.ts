@@ -112,12 +112,13 @@ function hasFlag(node: any, tag: string): boolean {
   return Boolean(v);
 }
 
-/** 拼接某标签下所有文本节点（兼容 t 为字符串与 { "#text": ... } 两种形态，处理多个 t） */
+/** 拼接某标签下所有文本节点（兼容 t 为字符串/数字与 { "#text": ... } 两种形态，处理多个 t） */
 function childText(node: any, tag: string): string {
   const arr = ensureArray(node?.[tag]);
   return arr
     .map((c: any) => {
       if (typeof c === 'string') return c;
+      if (typeof c === 'number') return String(c);
       if (c && typeof c === 'object') {
         const t = c['#text'];
         return t === undefined ? '' : String(t);
@@ -664,19 +665,105 @@ function parseBreak(br: any): Break {
   return { type: 'break', breakType: bt };
 }
 
+/** 深度拼接节点内所有文本（兼容 #text、数字节点与 t 子元素，处理多段文本/嵌套） */
+function deepText(node: any): string {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(deepText).join('');
+  if (typeof node === 'object') {
+    let s = '';
+    if (typeof node['#text'] === 'string') s += node['#text'];
+    else if (typeof node['#text'] === 'number') s += String(node['#text']);
+    for (const k of Object.keys(node)) {
+      if (k.startsWith('@') || k.startsWith('#') || k.startsWith('?')) continue;
+      s += deepText(node[k]);
+    }
+    return s;
+  }
+  return '';
+}
+
 function parseContainerInlines(
   container: any,
   unsupported?: UnsupportedFeature[],
 ): Inline[] {
   const inlines: Inline[] = [];
   if (!container || typeof container !== 'object') return inlines;
+  // 复杂域状态机：fldChar(begin) → instrText… → fldChar(separate) → 结果 runs… → fldChar(end)
+  let field: { instr: string[]; result: string[]; separated: boolean } | null = null;
   for (const tag of Object.keys(container)) {
     if (tag.startsWith('@') || tag.startsWith('#') || tag.startsWith('?')) continue;
     if (INLINE_IGNORE.has(tag)) continue;
     const items = ensureArray(container[tag]);
     for (const item of items) {
-      if (tag === 'r') inlines.push(parseRunOrImage(item));
-      else if (tag === 'hyperlink') inlines.push(parseHyperlink(item));
+      if (tag === 'fldSimple') {
+        // 简单域：指令在 @_instr，内部缓存文本作为结果
+        const instr = (getAttr(item, '@_instr') ?? '').replace(/[{}]/g, '').trim();
+        const result = deepText(item).trim();
+        inlines.push({ type: 'field', instr, result: result || undefined, data: { __raw: item } });
+        continue;
+      }
+      if (tag === 'fldChar') {
+        const t = getAttr(item, '@_fldCharType');
+        if (t === 'begin') field = { instr: [], result: [], separated: false };
+        else if (t === 'separate') {
+          if (field) field.separated = true;
+        } else if (t === 'end') {
+          if (field) {
+            inlines.push({
+              type: 'field',
+              instr: field.instr.join(' ').replace(/\s+/g, ' ').trim(),
+              result: field.result.join('').trim() || undefined,
+              data: { __raw: item },
+            });
+            field = null;
+          }
+        }
+        continue;
+      }
+      if (tag === 'instrText') {
+        if (field && !field.separated) field.instr.push(deepText(item));
+        continue;
+      }
+      if (tag === 'r') {
+        // 真实 OOXML 中 fldChar / instrText 都包裹在 w:r 内（而非段落直子级）。
+        // 优先识别「域 run」驱动复杂域状态机；否则按普通 run 处理。
+        const fldCharType = getAttr(item?.fldChar, '@_fldCharType');
+        if (fldCharType) {
+          if (fldCharType === 'begin') field = { instr: [], result: [], separated: false };
+          else if (fldCharType === 'separate') {
+            if (field) field.separated = true;
+          } else if (fldCharType === 'end') {
+            if (field) {
+              inlines.push({
+                type: 'field',
+                instr: field.instr.join(' ').replace(/\s+/g, ' ').trim(),
+                result: field.result.join('').trim() || undefined,
+                data: { __raw: item },
+              });
+              field = null;
+            }
+          }
+          continue;
+        }
+        const instrText = ensureArray(item?.instrText)
+          .map((n: any) => deepText(n))
+          .join('')
+          .trim();
+        if (instrText) {
+          if (field && !field.separated) field.instr.push(instrText);
+          continue;
+        }
+        if (field) {
+          // 处于域中（已 separate）：结果文本收集进字段，不作为独立 run 入栈
+          if (field.separated) field.result.push(childText(item, 't'));
+          continue;
+        }
+        inlines.push(parseRunOrImage(item));
+        continue;
+      }
+      if (tag === 'hyperlink') inlines.push(parseHyperlink(item));
       else if (tag === 'br') inlines.push(parseBreak(item));
       else if (tag === 'cr') inlines.push({ type: 'break', breakType: 'textWrapping' });
       else if (tag === 'footnoteReference')

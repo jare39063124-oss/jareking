@@ -175,6 +175,12 @@ function renderInline(
       return inline.breakType === 'page' ? '<hr />' : '<br />';
     case 'footnoteRef':
       return '';
+    case 'field': {
+      // 域：以带 data-jk-field / data-jk-field-result 的 span 呈现，编辑器（jkField 节点）保留其语义
+      const instr = escapeHtml((inline as { instr?: string }).instr ?? '');
+      const result = escapeHtml((inline as { result?: string }).result ?? '');
+      return `<span data-jk-field="${instr}" data-jk-field-result="${result}" style="background:#EEF2FF;color:#3730A3;padding:0 2px;border-radius:2px">${result}</span>`;
+    }
     default:
       return '';
   }

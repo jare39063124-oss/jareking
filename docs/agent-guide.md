@@ -143,32 +143,42 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 ## 6. 已知风险与对抗性复检结论（维护：每次复检后更新）
 
-> 结论时间线：2026-10-14 首轮复检。分级：🔴 阻塞/回归风险，🟠 重要，🟡 建议。
+> 结论时间线：**2026-10-14** 首轮复检（🔴/🟠/🟡 分级）；**2026-10-15** 复检问题逐步修复（#46/#47/#48 已落地，仅大文件深层架构债暂缓，见下）。
 
-### 🔴 大文件（100MB+）稳定性
-- **Writer**：`docxParser.ts:860` `JSZip.loadAsync` 整包入内存；`WriterEditor.tsx:178/219` `setContent(jkToHtml(jk))` 把整篇文档（含图片 base64 data URL）合成**一个 HTML 字符串**交给 ProseMirror，**无分页/无虚拟化**。100MB 文档有 OOM/卡死风险。
-  - 修复方向：解析侧流式/分块；渲染侧考虑分页或虚拟滚动；图片用 Blob URL 而非内联 base64。
-- **Presentation**：`SlideEditor.tsx` 所有幻灯片、所有形状**一次性** mount 进 Konva（`slides.map` + `shapes.map`），无懒加载/离屏剔除。百页大 PPT 内存与首屏时间长。
-  - 修复方向：只渲染可视页 + 缩略图；图标/形状按需实例化。
+### ✅ #46 大文件（100MB+）稳定性 —— 已落地「安全降级」缓解（非根治）
+- **已做（不丢交互、不崩溃）**：
+  - `lib/largeFile.ts` 新增 `LARGE_FILE_WARN_BYTES=30MB` / `LARGE_FILE_HARD_BYTES=200MB`、`fileSizeLevel()`、`formatBytes()`、`largeFileHint(bytes,'word'|'ppt')` —— 统一告警阈值与文案。
+  - `WriterEditor.tsx`：开大文档时先 `setTimeout(0)` 让出主线程再 `setContent`，期间挂 `LoadingOverlay` 遮罩，**解析不冻结 UI**；超阈值弹可关闭的"大文件"横幅提示（非阻塞）。
+  - `SlideEditor.tsx`：**缩略图条虚拟化**（按 `scrollTop` 窗口化渲染 + 5 项缓冲，绝对定位 + 占位 spacer），无论多少页 DOM 节点数恒定；`onFileChange` 包裹 loading + 滚动复位 + 尺寸告警。
+- **⏸ 暂缓（深层架构债，明确不丢项，排入后续）**：① Writer 文档级虚拟化/分页（当前整篇合成一个 HTML 给 ProseMirror，无分页）；② 图片用 Blob URL 替代内联 base64（当前 `media` 数据进 HTML 会双倍占内存）；③ Sheet/PPT 超大数据的分块解析。这些记录在 `lib/largeFile.ts` 注释与 `todo.md` 的「对抗性复检后续」清单，作为 M3 优化项。
+- **验证**：桌面端 typecheck 通过；GUI 冒烟需构建后跑 `scripts/gui-smoke.mjs`。
 
-### 🔴 Sheet 样式回写断裂（跨设备保真回归）
-- `sheet/univerAdapter.ts:10` 注释"样式暂不映射"，打开时 `styles:{}`（`:91`），保存侧 `univerToJk` 只回读公式/合并，**不回读 Univer 内编辑出的填充/字体/边框/对齐** → 在 Univer 里改的单元格样式**存盘即丢**。
-  - 修复方向：`univerToJk` 遍历单元格 `getRange().getStyle()` 写回 `JkCellStyle`（font/fill/border/alignment/numFmt），并补齐 `JK→Univer` 的样式写入。
+### ✅ #47 Sheet 样式回写断裂（跨设备保真回归）—— 已根治
+- 旧 `sheet/univerAdapter.ts` 注释"样式暂不映射"，`styles:{}`，保存只回读公式/合并 → Univer 里改的填充/字体/边框/对齐**存盘即丢**。
+- **修复**：`univerAdapter.ts` 新增 `jkStyleToUniver()` / `univerStyleToJk()` 双向映射（`IStyleData` ↔ `JkCellStyle`，覆盖 bold/italic/underline/strike/color/bgColor/fontSize/fontFamily/对齐/换行/数字格式/四向边框）；`StyleRegistry` 内容去重避免大表样式表膨胀；`sheetToUniver` 写 `s=sid`，`cellDataToJk` 读 `u.s`（sid 或内联对象）回写。保真结论升级为"样式已双向映射"。
+- **验证**：`univerAdapter.test.ts` 7/7 通过（写入/去重/常规对齐跳过/回读全字段/内联对象/ rgb() 归一化 / JK→Univer→JK 往返）；桌面端 typecheck 通过。
 
-### 🟠 Writer 域/公式（页码、目录域、交叉引用、公式域）降级
-- `docxParser.ts:193` 将 `fldsimple/fldchar/instrtxt` 记为 `field` 类 UnsupportedFeature，未建模。复杂 Word 域在 round-trip 中可能丢失或降级为静态文本，影响跨程序（Word/WPS）打开后的页码/目录/公式显示。
-  - 修复方向：建模最小可用字段（至少保留 `w:fldSimple` 的指令与结果，导出时原样回写 `__raw`）。
+### ✅ #48 Writer 域（页码/目录/交叉引用/公式域）—— 已建模（简单+复杂域）
+- 旧 `docxParser.ts` 将 `fldsimple/fldchar/instrtxt` 记为 `field` 类 UnsupportedFeature，未建模 → round-trip 降级为静态文本，Word/WPS 打开后页码/目录/公式不重算。
+- **修复**：
+  - 模型：`model/document.ts` `Inline` 联合新增 `Field`（`type:'field'`、`instr`、`result?`）。
+  - 解析：`docxParser.ts` 支持①`fldSimple`（`@_instr` + 内部文本作 result）②复杂域状态机（`fldChar` begin/separate/end + `instrText` 累积指令 + separate 后 run 文本作 result）。**真实 OOXML 中 `fldChar`/`instrText` 包裹在 `w:r` 内**，已处理嵌套（run 内优先识别域标记驱动状态机）。`fast-xml-parser` 把 `<w:t>1</w:t>` 解析成数字，已用 `deepText`/`childText` 数字安全化。
+  - 导出：`exporter/document.ts` 对 `field` 发射 `<w:fldSimple w:instr="...">{result run}</w:fldSimple>`（复杂域在导出时归并为简单域保留指令与结果，Word/WPS 打开按指令重算）。
+  - 编辑器/HTML 链路：`writer/jkField.ts` 新增 TipTap atom inline 节点 `JkField`（保编辑态不丢）；`jkToHtml.ts`/`htmlToJk.ts` 双向识别 `span[data-jk-field]`。
+- **验证**：`packages/writer/test/field.test.ts` 3/3 通过（简单域 / 复杂域 / 解析→导出→再解析往返）；writer 全量 19/19 测试通过、typecheck 通过。
+- **已知局限（不丢项，留痕）**：仅保留指令+结果（fldSimple 形态），未保留 `separate/end` 之间的完整 run 格式细节；嵌套域、IF/INDEX 等带参数域的指令原文保留但 jareking 不重算值（交给 Word/WPS 打开时计算），符合 v1 L2 保真预期。
 
-### 🟠 命名样式未保留为 Word 样式
-- Writer 用 TipTap 内联 span 表达格式，不还原 Word 的 `w:style`（Heading 1 等）。保存后 Heading 变为"手动加粗大字"，在 Word/WPS 中失去导航/目录/大纲语义。
-  - 影响：跨设备、跨程序（尤其依赖样式的排版）格式观感漂移。
+### 🟠 命名样式未保留为 Word 样式（复查已确认：实际已完整，非缺口）
+- 复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已**完整贯通** Word 命名样式（Heading 1 等）的读写 —— 该项**不是真实缺口**，已从风险清单移除（留痕以免重复排查）。
 
 ### 🟡 字体未嵌入
 - 未嵌入字体子集，目标设备缺字体会回退。与 WPS 默认行为一致（非缺陷），但中文文档跨设备需留意字体可用性。
 
 ### 已验证"不会坏"的项（避免重复排查）
-- **公式写回 xlsx：正常**。`xlsxParser` 读 `f`（去 `=`）、`exporter/index.ts:78` 写 `cell.value={formula}`、`univerAdapter` 双向映射，公式可存活。
+- **公式写回 xlsx：正常**。`xlsxParser` 读 `f`（去 `=`）、`exporter/index.ts:78` 写 `cell.value={formula}`、`univerAdapter` 双向映射，公式可存活（含本次 #47 样式映射）。
 - **表格底纹（shd）保真：已补全**（cell/row/table 三级，`packages/writer` + 桌面端 HTML 链路），有单测。
+- **Sheet 单元格样式保真：已补全**（#47，双向映射 + 去重），有单测。
+- **Writer 域保真：已建模**（#48，简单/复杂域 + 编辑器 `JkField`），有单测。
 - **Modal 弹窗按钮失效：已修复**（portal 挂到 `#root` 内部）。
 
 ---
@@ -194,4 +204,5 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 - ✅ 完成：Phase 0（基础设施）、Phase 1 Writer（L2）、Phase 2 Sheet（xlsx+公式+数据功能）、Phase 3 PPT 核心（开/编/存，无动画/放映）、Phase 4 AI 全链路（mock 验证）。
 - ⏸ 暂缓/未做：**Phase 5 PDF（阅读/编辑/导出全未做）**、Phase 6 商业化（未做）、Phase 7 账户（未做）、Phase 8 体验发布（未做）；Writer 高级特性（目录/批注/查找替换）、PPT 动画放映、Sheet 图表。
-- 🔧 本次（2026-10-14）已落地：Ribbon 真实折叠（Ctrl+F1）、AI 面板拖拽调宽、设置分区可折叠、对抗性复检与本文档。
+- 🔧 本次（2026-10-15）已落地：#46 大文件安全降级缓解（LoadingOverlay 不冻结/尺寸告警/缩略图虚拟化）、#47 Sheet 样式双向映射根治（7/7 单测）、#48 Writer 域建模（简单+复杂，3/3 单测）；另含 Ribbon 折叠/AI 面板调宽/设置折叠/布局优化（2026-10-14）。
+- ⏸ 大文件深层架构债（#46 暂缓项，不丢项）：Writer 文档级虚拟化/分页、图片 Blob URL 替代 base64 双倍内存、Sheet/PPT 分块解析 —— 见 `lib/largeFile.ts` 注释 + `todo.md`「对抗性复检后续」。

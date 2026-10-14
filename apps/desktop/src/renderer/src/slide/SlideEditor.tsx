@@ -33,12 +33,17 @@ import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
 import { renderChartToPng, type ChartType } from '../writer/chartRenderer';
 import { Modal } from '../components/Modal';
+import { LoadingOverlay } from '../components/LoadingOverlay';
+import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
 import { SlideshowOverlay } from './SlideshowOverlay';
 
 /** 舞台像素宽（画布 EMU 宽按比例缩放） */
 const STAGE_W = 896;
 const STAGE_H = 504;
+
+/** 缩略图列表项高度（含间距），用于虚拟滚动窗口化 */
+const THUMB_ITEM_H = 66;
 
 /** 便捷构造：带唯一 id */
 let idSeq = 0;
@@ -197,6 +202,9 @@ export function SlideEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
   const [playing, setPlaying] = useState(false);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [thumbScrollTop, setThumbScrollTop] = useState(0);
+  const thumbScrollRef = useRef<HTMLDivElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [aiInstruction, setAiInstruction] = useState('');
@@ -510,14 +518,23 @@ export function SlideEditor() {
     e.target.value = '';
     if (!file) return;
     try {
+      setFileLoading(true);
+      // 让遮罩先绘制，避免大文件解析期间 UI 冻结错觉
+      await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
       const loaded = await parsePptx(buf);
       setPres({ ...loaded, slides: loaded.slides.map(withIds) });
       setSlideIdx(0);
       setSelectedId(null);
+      setThumbScrollTop(0);
+      if (thumbScrollRef.current) thumbScrollRef.current.scrollTop = 0;
+      const hint = largeFileHint(file.size, 'ppt');
+      if (hint) toast.warning(hint);
       toast.success(`已打开 ${file.name}`);
     } catch {
       toast.warning('打开失败：文件可能不是有效的 .pptx');
+    } finally {
+      setFileLoading(false);
     }
   };
 
@@ -628,30 +645,60 @@ export function SlideEditor() {
   };
 
   return (
-    <div className="flex h-full w-full min-h-0">
-      {/* 左：幻灯片列表 */}
-      <div className="flex w-40 shrink-0 flex-col overflow-auto border-r border-border bg-surface p-2">
+    <div className="relative flex h-full w-full min-h-0">
+      {/* 左：幻灯片列表（缩略图虚拟滚动，避免上千页时 DOM 爆炸） */}
+      <div className="flex w-40 shrink-0 flex-col border-r border-border bg-surface p-2">
         <div className="mb-1 flex items-center justify-between px-1">
           <span className="text-tiny text-muted">幻灯片</span>
           <button type="button" className="rounded p-1 hover:bg-muted" title="新增幻灯片" onClick={addSlide}>
             <Plus size={14} />
           </button>
         </div>
-        {pres.slides.map((s, i) => (
-          <button
-            key={i}
-            type="button"
-            className={`mb-1 flex h-[62px] w-full items-center justify-center rounded border text-tiny ${
-              i === slideIdx ? 'border-accent bg-accent/10 text-accent' : 'border-border text-muted hover:bg-muted'
-            }`}
-            onClick={() => {
-              setSlideIdx(i);
-              setSelectedId(null);
-            }}
-          >
-            第 {i + 1} 页
-          </button>
-        ))}
+        <div
+          ref={thumbScrollRef}
+          className="min-h-0 flex-1 overflow-auto"
+          onScroll={(e) => setThumbScrollTop(e.currentTarget.scrollTop)}
+        >
+          <div style={{ position: 'relative', height: pres.slides.length * THUMB_ITEM_H }}>
+            {(() => {
+              const viewportH = thumbScrollRef.current?.clientHeight ?? 480;
+              const buffer = 5;
+              const start = Math.max(0, Math.floor(thumbScrollTop / THUMB_ITEM_H) - buffer);
+              const end = Math.min(
+                pres.slides.length,
+                Math.ceil((thumbScrollTop + viewportH) / THUMB_ITEM_H) + buffer,
+              );
+              const items: React.ReactNode[] = [];
+              for (let i = start; i < end; i++) {
+                items.push(
+                  <button
+                    key={i}
+                    type="button"
+                    className={`flex w-full items-center justify-center rounded border text-tiny ${
+                      i === slideIdx
+                        ? 'border-accent bg-accent/10 text-accent'
+                        : 'border-border text-muted hover:bg-muted'
+                    }`}
+                    style={{
+                      position: 'absolute',
+                      top: i * THUMB_ITEM_H,
+                      left: 0,
+                      right: 0,
+                      height: THUMB_ITEM_H - 4,
+                    }}
+                    onClick={() => {
+                      setSlideIdx(i);
+                      setSelectedId(null);
+                    }}
+                  >
+                    第 {i + 1} 页
+                  </button>,
+                );
+              }
+              return items;
+            })()}
+          </div>
+        </div>
         <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} onClick={deleteSlide} className="mt-1">
           删除本页
         </Button>
@@ -827,6 +874,8 @@ export function SlideEditor() {
           </p>
         </div>
       </Modal>
+
+      {fileLoading && <LoadingOverlay text="正在加载演示文稿…" />}
     </div>
   );
 }

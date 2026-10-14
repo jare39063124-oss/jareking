@@ -193,6 +193,14 @@ function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: Pars
   const tag = el.tagName.toLowerCase();
   const childRPr = deriveRPr(tag, el, rPr);
 
+  // Word 域 span（data-jk-field）：保留为 field 行内元素，避免降级为纯文本
+  if (tag === 'span' && el.getAttribute('data-jk-field')) {
+    const instr = el.getAttribute('data-jk-field') ?? '';
+    const result = el.textContent ?? '';
+    out.push({ type: 'field', instr, result: result || undefined });
+    return;
+  }
+
   if (tag === 'a') {
     const url = el.getAttribute('href') ?? '#';
     const runs: Inline[] = [];

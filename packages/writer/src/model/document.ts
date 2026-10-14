@@ -112,7 +112,7 @@ export interface ParagraphBreak extends BlockBase {
  * =========================================================================
  * 对应 w:p 内可出现的行内内容：文本 Run、超链接、图片、换行符、脚注引用。
  */
-export type Inline = Run | Hyperlink | Image | Break | FootnoteRef;
+export type Inline = Run | Hyperlink | Image | Break | FootnoteRef | Field;
 
 /** 行内节点基础标记（供联合收窄与兜底扩展） */
 export interface InlineBase extends ModelExtra {
@@ -164,6 +164,20 @@ export interface FootnoteRef extends InlineBase {
   type: 'footnoteRef';
   /** 脚注 id（对应 w:footnoteReference@w:id） */
   id?: string;
+}
+
+/**
+ * Word 域（对应 w:fldSimple / w:fldChar + w:instrText 序列）：
+ * PAGE / NUMPAGES / DATE / TIME / TOC / 页码 / 目录等。
+ * jareking 内部以静态结果文本展示，导出时还原为 w:fldSimple，Word/WPS 打开后重算，
+ * 从而跨程序保真（否则域会被降级为静态文本而丢失语义）。
+ */
+export interface Field extends InlineBase {
+  type: 'field';
+  /** 域指令（去掉外层花括号），如 "PAGE"、"NUMPAGES"、"DATE \\@ \"yyyy-MM-dd\"" */
+  instr: string;
+  /** 缓存的显示结果文本（导出时作为占位文本落盘，Word/WPS 打开后重算覆盖） */
+  result?: string;
 }
 
 /* =========================================================================

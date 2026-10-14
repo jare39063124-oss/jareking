@@ -9,7 +9,7 @@
  *  - 健壮性：所有解析/导出用 try/catch + toast，失败不白屏
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor } from "@tiptap/react";
 import { setActiveEditor } from "./editorRef";
 import StarterKit from '@tiptap/starter-kit';
@@ -51,10 +51,13 @@ import {
 
 import { Button } from '../components/Button';
 import { IconButton } from '../components/IconButton';
+import { LoadingOverlay } from '../components/LoadingOverlay';
 import { toast } from '../stores/toastStore';
 import { htmlToJk } from './htmlToJk';
 import { jkToHtml } from './jkToHtml';
 import { FontSize } from './fontSize';
+import { JkField } from './jkField';
+import { largeFileHint } from '../lib/largeFile';
 
 /** 常用字体（中文办公场景），FontFamily 扩展按名应用 */
 const FONT_FAMILIES = [
@@ -102,6 +105,8 @@ function ToolBtn({
 
 export function WriterEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [docLoading, setDocLoading] = useState(false);
+  const [largeHint, setLargeHint] = useState<string | null>(null);
 
   // 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
   // 必须显式加 backgroundColor 属性，才能在编辑器内渲染并在 getHTML 时回写 style，
@@ -151,6 +156,7 @@ export function WriterEditor() {
       TableHeaderWithBg,
       TableCellWithBg,
       Image,
+      JkField,
     ],
     content: '',
     editorProps: {
@@ -170,14 +176,20 @@ export function WriterEditor() {
 
     (async () => {
       try {
+        setDocLoading(true);
+        // 让遮罩先绘制，避免大文件解析期间 UI 冻结错觉
+        await new Promise((r) => setTimeout(r, 0));
         const res = await fetch(sampleDocxUrl);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = new Uint8Array(await res.arrayBuffer());
         const jk = await parseDocx(buf);
         if (cancelled) return;
-        editor.commands.setContent(jkToHtml(jk));
+        const html = jkToHtml(jk);
+        editor.commands.setContent(html, false); // 不触发更新广播，降低加载开销
       } catch {
         if (!cancelled) toast.warning('示例文档加载失败，已创建空白文档');
+      } finally {
+        if (!cancelled) setDocLoading(false);
       }
     })();
 
@@ -214,12 +226,19 @@ export function WriterEditor() {
     e.target.value = ''; // 允许重复选择同一文件
     if (!file || !editor) return;
     try {
+      setDocLoading(true);
+      // 让遮罩先绘制，避免大文件解析期间 UI 冻结错觉
+      await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
       const jk = await parseDocx(buf);
-      editor.commands.setContent(jkToHtml(jk));
+      const html = jkToHtml(jk);
+      editor.commands.setContent(html, false); // 不触发更新广播，降低加载开销
+      setLargeHint(largeFileHint(file.size, 'word'));
       toast.success(`已打开 ${file.name}`);
     } catch {
       toast.warning('打开失败：文件可能不是有效的 .docx');
+    } finally {
+      setDocLoading(false);
     }
   };
 
@@ -310,7 +329,7 @@ export function WriterEditor() {
   };
 
   return (
-    <div className="flex h-full w-full min-h-0 flex-col">
+    <div className="relative flex h-full w-full min-h-0 flex-col">
       {/* 工具栏 */}
       <div className="flex h-10 shrink-0 flex-wrap items-center gap-0.5 border-b border-border bg-surface px-2">
         {/* 字体族 / 字号 */}
@@ -527,6 +546,24 @@ export function WriterEditor() {
         </Button>
       </div>
 
+      {/* 大文件非阻塞提示横幅 */}
+      {largeHint && (
+        <div
+          className="flex items-center justify-between gap-2 border-b px-3 py-1.5 text-tiny"
+          style={{ background: '#FEF3C7', color: '#92400E', borderColor: '#FCD34D' }}
+        >
+          <span>{largeHint}</span>
+          <button
+            type="button"
+            className="rounded px-1 leading-none hover:bg-black/5"
+            onClick={() => setLargeHint(null)}
+            title="关闭提示"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* 纸张区 */}
       <div className="min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-8">
         <div className="mx-auto my-0 w-[794px] min-h-[1123px] rounded-sm bg-surface px-16 py-16 shadow-card">
@@ -549,6 +586,8 @@ export function WriterEditor() {
         className="hidden"
         onChange={onImageChange}
       />
+
+      {docLoading && <LoadingOverlay text="正在加载文档…" />}
     </div>
   );
 }
