@@ -1,60 +1,115 @@
+/**
+ * Ribbon —— 功能区（对标 WPS 布局）。
+ *
+ * 与初版骨架的区别：这里不再是"占位图标"，而是真正驱动编辑器的命令面板：
+ *  - 按钮经 `runEditorCommand(id)` 走命令总线（writer/editorCommands.ts），
+ *    由当前挂载的编辑器（WriterEditor）执行；未注册说明当前模块无该能力 → 占位提示；
+ *  - 控件的取值/激活态经 `getEditorCommandState(id)` 实时读取，并用
+ *    `useEditorRevision()` 订阅编辑器的事务通知（加粗高亮、字体下拉值实时刷新）；
+ *  - 「PDF 工具」升级为一级标签页（用户诉求：PDF 是卖点，不该藏在「文件」里）。
+ */
+
 import {
-  AArrowDown,
   AlignCenter,
   AlignLeft,
+  AlignJustify,
   AlignRight,
   BarChart3,
   Bold,
   BookOpen,
   Bookmark,
   ChevronDown,
+  ChevronUp,
   ClipboardPaste,
+  Combine,
   Columns2,
   Copy,
   Droplet,
+  FileCog,
   FileDown,
+  FileImage,
+  FileInput,
+  FileOutput,
   FilePlus2,
+  FileSpreadsheet,
+  FileText,
+  FileType,
   FolderOpen,
   Footprints,
   Grid2x2,
+  Hash,
+  Heading1,
+  Heading2,
+  Heading3,
   Image as ImageIcon,
   Italic,
   Layout,
   Link2,
   List,
   ListOrdered,
+  ListTree,
   Lock,
   Maximize,
   MessageSquare,
+  Minimize2,
   PaintBucket,
+  PanelsTopLeft,
   Printer,
+  Presentation,
+  Redo2,
   Replace,
+  RotateCcw,
+  RotateCw,
   Save,
+  ScanText,
   Scissors,
+  Search,
+  SeparatorHorizontal,
   Shapes,
   ShieldCheck,
+  ShieldOff,
+  Sigma,
+  Split,
   SquarePen,
+  Stamp,
+  Strikethrough,
   Table2,
   TextCursorInput,
+  Trash2,
   Type,
   Underline,
+  Undo2,
   ZoomIn,
   ZoomOut,
-  FileCog,
-  ChevronUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect } from 'react';
 import { Tabs } from './Tabs';
 import { toastNotImplemented } from '../stores/toastStore';
-import { useUiStore, type RibbonTabId } from '../stores/uiStore';
+import {
+  useUiStore,
+  type PdfToolboxMode,
+  type RibbonTabId,
+} from '../stores/uiStore';
+import {
+  getEditorCommandState,
+  hasEditorCommand,
+  runEditorCommand,
+  useEditorRevision,
+  type EditorCommandState,
+} from '../stores/editorCommands';
+import { FONT_GROUPS, FONT_SIZES } from '../writer/fonts';
 
-/** Ribbon 占位工具按钮 */
-interface RibbonTool {
-  id: string;
-  label: string;
-  icon: LucideIcon;
-}
+/**
+ * 工具项类型：
+ *  - button：普通按钮（图标 + 文字）
+ *  - fontFamily / fontSize / color：取值型控件（供「字体」组第一排使用）
+ */
+type RibbonTool =
+  | { kind: 'button'; id: string; label: string; icon: LucideIcon; pdfMode?: PdfToolboxMode }
+  | { kind: 'fontFamily'; id: 'font-family'; label: '字体' }
+  | { kind: 'fontSize'; id: 'font-size'; label: '字号' }
+  | { kind: 'color'; id: 'font-color'; label: '字体颜色' };
 
 /** Ribbon 工具组（组名显示在组底部，对标 WPS） */
 interface RibbonToolGroup {
@@ -68,7 +123,14 @@ interface RibbonTabDef {
   groups: RibbonToolGroup[];
 }
 
-/** 菜单标签与占位工具定义（布局对标 WPS：文件/开始/插入/页面布局/引用/视图/审阅） */
+/** 合法的 #rrggbb 颜色（字体颜色控件只接受该格式，其余按黑色兜底） */
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * 菜单标签与工具定义（布局对标 WPS）。
+ * 说明：`pdfMode` 表示该按钮直达 PDF 工具箱的某个模式（已实现能力）；
+ * 未标注且命令总线中也未注册的按钮点击后给出「功能建设中」提示。
+ */
 const RIBBON_TABS: RibbonTabDef[] = [
   {
     id: 'file',
@@ -77,21 +139,21 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: '文档',
         tools: [
-          { id: 'new', label: '新建', icon: FilePlus2 },
-          { id: 'open', label: '打开', icon: FolderOpen },
-          { id: 'save', label: '保存', icon: Save },
+          { kind: 'button', id: 'new', label: '新建', icon: FilePlus2 },
+          { kind: 'button', id: 'open', label: '打开', icon: FolderOpen },
+          { kind: 'button', id: 'save', label: '保存', icon: Save },
         ],
       },
       {
         name: '导出',
         tools: [
-          { id: 'export-pdf', label: '导出 PDF', icon: FileDown },
-          { id: 'print', label: '打印', icon: Printer },
+          { kind: 'button', id: 'export-pdf', label: '导出 PDF', icon: FileDown },
+          { kind: 'button', id: 'print', label: '打印', icon: Printer },
         ],
       },
       {
         name: 'PDF 工具',
-        tools: [{ id: 'pdf-toolbox', label: 'PDF 工具箱', icon: FileCog }],
+        tools: [{ kind: 'button', id: 'pdf-toolbox', label: 'PDF 工具箱', icon: FileCog, pdfMode: 'extract' }],
       },
     ],
   },
@@ -102,34 +164,50 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: '剪贴板',
         tools: [
-          { id: 'paste', label: '粘贴', icon: ClipboardPaste },
-          { id: 'cut', label: '剪切', icon: Scissors },
-          { id: 'copy', label: '复制', icon: Copy },
+          { kind: 'button', id: 'paste', label: '粘贴', icon: ClipboardPaste },
+          { kind: 'button', id: 'cut', label: '剪切', icon: Scissors },
+          { kind: 'button', id: 'copy', label: '复制', icon: Copy },
         ],
       },
       {
         name: '字体',
         tools: [
-          { id: 'font', label: '字体', icon: Type },
-          { id: 'font-size', label: '字号', icon: AArrowDown },
-          { id: 'bold', label: '加粗', icon: Bold },
-          { id: 'italic', label: '斜体', icon: Italic },
-          { id: 'underline', label: '下划线', icon: Underline },
+          { kind: 'fontFamily', id: 'font-family', label: '字体' },
+          { kind: 'fontSize', id: 'font-size', label: '字号' },
+          { kind: 'color', id: 'font-color', label: '字体颜色' },
+          { kind: 'button', id: 'bold', label: '加粗', icon: Bold },
+          { kind: 'button', id: 'italic', label: '斜体', icon: Italic },
+          { kind: 'button', id: 'underline', label: '下划线', icon: Underline },
+          { kind: 'button', id: 'strike', label: '删除线', icon: Strikethrough },
         ],
       },
       {
         name: '段落',
         tools: [
-          { id: 'align-left', label: '左对齐', icon: AlignLeft },
-          { id: 'align-center', label: '居中', icon: AlignCenter },
-          { id: 'align-right', label: '右对齐', icon: AlignRight },
-          { id: 'bullet', label: '项目符号', icon: List },
-          { id: 'numbering', label: '编号', icon: ListOrdered },
+          { kind: 'button', id: 'align-left', label: '左对齐', icon: AlignLeft },
+          { kind: 'button', id: 'align-center', label: '居中', icon: AlignCenter },
+          { kind: 'button', id: 'align-right', label: '右对齐', icon: AlignRight },
+          { kind: 'button', id: 'align-justify', label: '两端对齐', icon: AlignJustify },
+          { kind: 'button', id: 'bullet', label: '项目符号', icon: List },
+          { kind: 'button', id: 'numbering', label: '编号', icon: ListOrdered },
+        ],
+      },
+      {
+        name: '样式',
+        tools: [
+          { kind: 'button', id: 'h1', label: '标题 1', icon: Heading1 },
+          { kind: 'button', id: 'h2', label: '标题 2', icon: Heading2 },
+          { kind: 'button', id: 'h3', label: '标题 3', icon: Heading3 },
+          { kind: 'button', id: 'body', label: '正文', icon: Type },
         ],
       },
       {
         name: '编辑',
-        tools: [{ id: 'replace', label: '查找替换', icon: Replace }],
+        tools: [
+          { kind: 'button', id: 'undo', label: '撤销', icon: Undo2 },
+          { kind: 'button', id: 'redo', label: '重做', icon: Redo2 },
+          { kind: 'button', id: 'replace', label: '查找替换', icon: Replace },
+        ],
       },
     ],
   },
@@ -138,24 +216,38 @@ const RIBBON_TABS: RibbonTabDef[] = [
     label: '插入',
     groups: [
       {
+        name: '页面',
+        tools: [
+          { kind: 'button', id: 'page-break', label: '分页符', icon: SeparatorHorizontal },
+          { kind: 'button', id: 'page-number', label: '插入页码', icon: Hash },
+        ],
+      },
+      {
+        name: '目录与符号',
+        tools: [
+          { kind: 'button', id: 'toc', label: '插入目录', icon: ListTree },
+          { kind: 'button', id: 'formula', label: '插入公式', icon: Sigma },
+        ],
+      },
+      {
         name: '插图',
         tools: [
-          { id: 'picture', label: '图片', icon: ImageIcon },
-          { id: 'shape', label: '形状', icon: Shapes },
-          { id: 'chart', label: '图表', icon: BarChart3 },
+          { kind: 'button', id: 'image', label: '图片', icon: ImageIcon },
+          { kind: 'button', id: 'shape', label: '形状', icon: Shapes },
+          { kind: 'button', id: 'chart', label: '图表', icon: BarChart3 },
         ],
       },
       {
         name: '表格',
-        tools: [{ id: 'table', label: '表格', icon: Table2 }],
+        tools: [{ kind: 'button', id: 'table', label: '表格', icon: Table2 }],
       },
       {
         name: '链接',
-        tools: [{ id: 'link', label: '超链接', icon: Link2 }],
+        tools: [{ kind: 'button', id: 'link', label: '超链接', icon: Link2 }],
       },
       {
         name: '文本',
-        tools: [{ id: 'textbox', label: '文本框', icon: TextCursorInput }],
+        tools: [{ kind: 'button', id: 'textbox', label: '文本框', icon: TextCursorInput }],
       },
     ],
   },
@@ -166,15 +258,15 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: '页面设置',
         tools: [
-          { id: 'margin', label: '页边距', icon: Layout },
-          { id: 'orientation', label: '纸张方向', icon: Columns2 },
+          { kind: 'button', id: 'margin', label: '页边距', icon: Layout },
+          { kind: 'button', id: 'orientation', label: '纸张方向', icon: Columns2 },
         ],
       },
       {
         name: '页面背景',
         tools: [
-          { id: 'page-color', label: '页面颜色', icon: PaintBucket },
-          { id: 'watermark', label: '水印', icon: Droplet },
+          { kind: 'button', id: 'page-color', label: '页面颜色', icon: PaintBucket },
+          { kind: 'button', id: 'watermark', label: '水印', icon: Droplet },
         ],
       },
     ],
@@ -186,9 +278,9 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: '目录',
         tools: [
-          { id: 'toc', label: '目录', icon: BookOpen },
-          { id: 'footnote', label: '脚注', icon: Footprints },
-          { id: 'bookmark', label: '书签', icon: Bookmark },
+          { kind: 'button', id: 'toc', label: '目录', icon: BookOpen },
+          { kind: 'button', id: 'footnote', label: '脚注', icon: Footprints },
+          { kind: 'button', id: 'bookmark', label: '书签', icon: Bookmark },
         ],
       },
     ],
@@ -200,11 +292,15 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: '显示',
         tools: [
-          { id: 'gridlines', label: '网格线', icon: Grid2x2 },
-          { id: 'zoom-in', label: '放大', icon: ZoomIn },
-          { id: 'zoom-out', label: '缩小', icon: ZoomOut },
-          { id: 'fullscreen', label: '全屏', icon: Maximize },
+          { kind: 'button', id: 'zoom-out', label: '缩小', icon: ZoomOut },
+          { kind: 'button', id: 'zoom-in', label: '放大', icon: ZoomIn },
+          { kind: 'button', id: 'zoom-reset', label: '100%', icon: RotateCcw },
+          { kind: 'button', id: 'fullscreen', label: '全屏', icon: Maximize },
         ],
+      },
+      {
+        name: '显示辅助',
+        tools: [{ kind: 'button', id: 'gridlines', label: '网格线', icon: Grid2x2 }],
       },
     ],
   },
@@ -215,29 +311,198 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: '校对',
         tools: [
-          { id: 'spell', label: '拼写检查', icon: SquarePen },
-          { id: 'comment', label: '批注', icon: MessageSquare },
+          { kind: 'button', id: 'spell', label: '拼写检查', icon: SquarePen },
+          { kind: 'button', id: 'comment', label: '批注', icon: MessageSquare },
         ],
       },
       {
         name: '保护',
         tools: [
-          { id: 'protect', label: '保护文档', icon: ShieldCheck },
-          { id: 'restrict', label: '限制编辑', icon: Lock },
+          { kind: 'button', id: 'protect', label: '保护文档', icon: ShieldCheck },
+          { kind: 'button', id: 'restrict', label: '限制编辑', icon: Lock },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'pdf',
+    label: 'PDF 工具',
+    groups: [
+      {
+        name: 'PDF 转其他',
+        tools: [
+          { kind: 'button', id: 'pdf-to-word', label: 'PDF转Word', icon: FileText },
+          { kind: 'button', id: 'pdf-to-excel', label: 'PDF转Excel', icon: FileSpreadsheet },
+          { kind: 'button', id: 'pdf-to-ppt', label: 'PDF转PPT', icon: Presentation },
+          { kind: 'button', id: 'pdf-to-image', label: 'PDF转图片', icon: FileImage },
+          { kind: 'button', id: 'pdf-to-txt', label: 'PDF转TXT', icon: FileType },
+        ],
+      },
+      {
+        name: 'Office 转 PDF',
+        tools: [
+          { kind: 'button', id: 'word-to-pdf', label: 'Word转PDF', icon: FileOutput },
+          { kind: 'button', id: 'excel-to-pdf', label: 'Excel转PDF', icon: FileSpreadsheet },
+          { kind: 'button', id: 'ppt-to-pdf', label: 'PPT转PDF', icon: Presentation },
+          { kind: 'button', id: 'pdf-images', label: '图片转PDF', icon: FileImage, pdfMode: 'images' },
+        ],
+      },
+      {
+        name: '页面编辑',
+        tools: [
+          { kind: 'button', id: 'pdf-merge', label: '合并PDF', icon: Combine, pdfMode: 'merge' },
+          { kind: 'button', id: 'pdf-split', label: '拆分PDF', icon: Split, pdfMode: 'extract' },
+          { kind: 'button', id: 'pdf-extract', label: '提取页面', icon: Scissors, pdfMode: 'extract' },
+          { kind: 'button', id: 'pdf-delete', label: '删除页面', icon: Trash2, pdfMode: 'extract' },
+          { kind: 'button', id: 'pdf-rotate', label: '旋转页面', icon: RotateCw, pdfMode: 'rotate' },
+          { kind: 'button', id: 'pdf-insert', label: '插入页面', icon: FileInput, pdfMode: 'insert' },
+          { kind: 'button', id: 'pdf-replace', label: '替换页面', icon: Replace, pdfMode: 'replace' },
+          { kind: 'button', id: 'pdf-toolbox', label: 'PDF 工具箱', icon: FileCog, pdfMode: 'extract' },
+        ],
+      },
+      {
+        name: '安全与美化',
+        tools: [
+          { kind: 'button', id: 'pdf-encrypt', label: '加密PDF', icon: Lock },
+          { kind: 'button', id: 'pdf-decrypt', label: '移除密码', icon: ShieldOff },
+          { kind: 'button', id: 'pdf-watermark', label: '添加水印', icon: Stamp },
+          { kind: 'button', id: 'pdf-header-footer', label: '页眉页脚', icon: PanelsTopLeft },
+          { kind: 'button', id: 'pdf-compress', label: '压缩PDF', icon: Minimize2 },
+        ],
+      },
+      {
+        name: '阅读与批注',
+        tools: [
+          { kind: 'button', id: 'pdf-open', label: '打开PDF', icon: FolderOpen },
+          { kind: 'button', id: 'pdf-search', label: '全文搜索', icon: Search },
+          { kind: 'button', id: 'pdf-annotate', label: '批注', icon: MessageSquare },
+          { kind: 'button', id: 'pdf-ocr', label: 'OCR识别', icon: ScanText },
         ],
       },
     ],
   },
 ];
 
-/** Ribbon 工具栏骨架：菜单标签行（可切换）+ 当前标签下的占位工具组 */
+/** 字体族下拉：值来自编辑器当前选区，变更经命令总线回写 */
+function FontFamilyControl({ state, disabled }: { state: EditorCommandState; disabled: boolean }) {
+  return (
+    <select
+      aria-label="字体"
+      title="字体"
+      className="h-[24px] w-[108px] shrink-0 rounded border border-border bg-surface px-1 text-tiny text-fg outline-none disabled:opacity-50"
+      value={state.value ?? ''}
+      disabled={disabled}
+      onChange={(e) => runEditorCommand('font-family', e.target.value)}
+    >
+      <option value="">字体</option>
+      {FONT_GROUPS.map((group) => (
+        <optgroup key={group.label} label={group.label} title={group.note}>
+          {group.fonts.map((font) => (
+            <option key={font} value={font}>
+              {font}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
+/** 字号下拉（磅） */
+function FontSizeControl({ state, disabled }: { state: EditorCommandState; disabled: boolean }) {
+  return (
+    <select
+      aria-label="字号"
+      title="字号"
+      className="h-[24px] w-[54px] shrink-0 rounded border border-border bg-surface px-1 text-tiny text-fg outline-none disabled:opacity-50"
+      value={state.value ?? ''}
+      disabled={disabled}
+      onChange={(e) => runEditorCommand('font-size', e.target.value)}
+    >
+      <option value="">字号</option>
+      {FONT_SIZES.map((size) => (
+        <option key={size} value={String(size)}>
+          {size}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** 字体颜色取色器：色块显示当前颜色，点击弹出系统取色面板 */
+function FontColorControl({ state, disabled }: { state: EditorCommandState; disabled: boolean }) {
+  const raw = state.value ?? '';
+  const swatch = raw || '#000000';
+  const hex = HEX_COLOR_RE.test(raw) ? raw : '#000000';
+  return (
+    <label
+      className="relative flex h-[24px] w-8 shrink-0 cursor-pointer items-center justify-center rounded border border-border disabled:opacity-50"
+      title="字体颜色"
+    >
+      <span
+        className="h-3.5 w-3.5 rounded-sm border border-border"
+        style={{ backgroundColor: swatch }}
+        aria-hidden="true"
+      />
+      <input
+        type="color"
+        aria-label="字体颜色"
+        className="absolute inset-0 cursor-pointer opacity-0"
+        value={hex}
+        disabled={disabled}
+        onChange={(e) => runEditorCommand('font-color', e.target.value)}
+      />
+    </label>
+  );
+}
+
+/** 工具按钮：图标 + 文字（compact 用于「字体」组第二排，压缩高度） */
+function ToolButton({
+  tool,
+  compact,
+  state,
+  disabled,
+  onClick,
+}: {
+  tool: Extract<RibbonTool, { kind: 'button' }>;
+  compact?: boolean;
+  state: EditorCommandState;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const active = state.active === true;
+  return (
+    <button
+      type="button"
+      // 冒烟脚本按 aria-label 匹配工具（如「加粗」「插入目录」）
+      aria-label={tool.label}
+      title={tool.label}
+      disabled={disabled}
+      className={`flex shrink-0 flex-col items-center rounded-sm text-tiny transition-colors hover:bg-active disabled:cursor-not-allowed disabled:opacity-40 ${
+        compact ? 'w-[42px] gap-0 py-0.5' : 'w-[52px] gap-0.5 p-1.5'
+      } ${active ? 'bg-accent/15 text-accent' : 'text-fg'}`}
+      onClick={onClick}
+    >
+      <tool.icon size={compact ? 14 : 18} aria-hidden="true" />
+      <span className={`w-full text-center ${compact ? 'leading-none' : 'leading-tight'}`}>{tool.label}</span>
+    </button>
+  );
+}
+
+/** Ribbon 工具栏：菜单标签行（可切换 + 双击折叠）+ 当前标签下的工具组 */
 export function Ribbon() {
   const setPdfToolboxOpen = useUiStore((state) => state.setPdfToolboxOpen);
+  const setPdfToolboxMode = useUiStore((state) => state.setPdfToolboxMode);
   const activeRibbonTab = useUiStore((state) => state.activeRibbonTab);
   const setActiveRibbonTab = useUiStore((state) => state.setActiveRibbonTab);
   const ribbonCollapsed = useUiStore((state) => state.ribbonCollapsed);
   const setRibbonCollapsed = useUiStore((state) => state.setRibbonCollapsed);
   const toggleRibbonCollapsed = useUiStore((state) => state.toggleRibbonCollapsed);
+  const writerZoom = useUiStore((state) => state.writerZoom);
+  const setWriterZoom = useUiStore((state) => state.setWriterZoom);
+
+  // 订阅命令总线修订号：编辑器事务/选区变化后重读控件取值与激活态
+  const revision = useEditorRevision();
 
   const activeTabDef = RIBBON_TABS.find((tab) => tab.id === activeRibbonTab) ?? RIBBON_TABS[1];
 
@@ -259,10 +524,38 @@ export function Ribbon() {
     if (ribbonCollapsed) setRibbonCollapsed(false);
   };
 
+  /** 工具点击：命令总线 → PDF 工具箱 → 缩放 → 占位提示 */
+  const handleToolClick = (tool: Extract<RibbonTool, { kind: 'button' }>) => {
+    // 缩放（视图标签）：真实生效，作用于 Writer 纸张区
+    if (tool.id === 'zoom-in') {
+      setWriterZoom(writerZoom + 0.1);
+      return;
+    }
+    if (tool.id === 'zoom-out') {
+      setWriterZoom(writerZoom - 0.1);
+      return;
+    }
+    if (tool.id === 'zoom-reset') {
+      setWriterZoom(1);
+      return;
+    }
+    if (runEditorCommand(tool.id)) return;
+    if (tool.pdfMode) {
+      setPdfToolboxMode(tool.pdfMode);
+      setPdfToolboxOpen(true);
+      return;
+    }
+    toastNotImplemented(tool.label);
+  };
+
   return (
     <div className="flex shrink-0 flex-col border-b border-border bg-surface">
-      {/* 菜单标签行（可切换） */}
-      <div className="flex items-center px-1 pt-0.5">
+      {/* 菜单标签行（可切换；双击标签区折叠/展开，对齐 WPS） */}
+      <div
+        className="flex items-center px-1 pt-0.5"
+        onDoubleClick={toggleRibbonCollapsed}
+        title="双击折叠/展开功能区 (Ctrl+F1)"
+      >
         <Tabs
           items={RIBBON_TABS.map((tab) => ({ id: tab.id, label: tab.label }))}
           value={activeRibbonTab}
@@ -282,32 +575,76 @@ export function Ribbon() {
 
       {/* 工具组行（折叠时隐藏，给文档更多显示空间） */}
       {!ribbonCollapsed && (
-        <div className="flex h-[86px] items-stretch gap-0.5 overflow-x-auto px-2 pb-1.5">
+        <div
+          className="flex h-[86px] items-stretch gap-0.5 overflow-x-auto px-2 pb-1.5"
+          data-editor-revision={revision}
+        >
           {activeTabDef.groups.map((group, groupIndex) => (
             <div key={group.name} className="flex items-stretch">
               {/* 组间分隔线 */}
               {groupIndex > 0 ? <div className="mx-1 w-px shrink-0 bg-border" aria-hidden="true" /> : null}
               <div className="flex flex-col items-center rounded-sm px-1.5 py-1 transition-colors hover:bg-muted-bg">
-                {/* 工具按钮 */}
-                <div className="flex flex-1 items-start gap-0.5">
-                  {group.tools.map((tool) => (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      title={tool.label}
-                      className="flex w-[52px] flex-col items-center gap-1 rounded-sm p-1.5 text-tiny text-fg transition-colors hover:bg-active"
-                      onClick={() => {
-                        if (tool.id === 'pdf-toolbox') setPdfToolboxOpen(true);
-                        else toastNotImplemented(tool.label);
-                      }}
-                    >
-                      <tool.icon size={18} aria-hidden="true" />
-                      <span className="w-full text-center leading-tight">{tool.label}</span>
-                    </button>
-                  ))}
-                </div>
+                {/* 含取值控件的组（如「字体」）分两排：控件排 + 按钮排 */}
+                {group.tools.some((tool) => tool.kind !== 'button') ? (
+                  <>
+                    <div className="flex items-center gap-1">
+                      {group.tools
+                        .filter((tool) => tool.kind !== 'button')
+                        .map((tool) => {
+                          const registered = hasEditorCommand(tool.id);
+                          const state = getEditorCommandState(tool.id) ?? {};
+                          const disabled = !registered || state.disabled === true;
+                          if (tool.kind === 'fontFamily') {
+                            return <FontFamilyControl key={tool.id} state={state} disabled={disabled} />;
+                          }
+                          if (tool.kind === 'fontSize') {
+                            return <FontSizeControl key={tool.id} state={state} disabled={disabled} />;
+                          }
+                          return <FontColorControl key={tool.id} state={state} disabled={disabled} />;
+                        })}
+                    </div>
+                    <div className="mt-0.5 flex items-start gap-0.5">
+                      {group.tools
+                        .filter((tool): tool is Extract<RibbonTool, { kind: 'button' }> => tool.kind === 'button')
+                        .map((tool) => {
+                          const state = getEditorCommandState(tool.id) ?? {};
+                          const registered = hasEditorCommand(tool.id);
+                          const disabled = registered && state.disabled === true;
+                          return (
+                            <ToolButton
+                              key={tool.id}
+                              tool={tool}
+                              compact
+                              state={state}
+                              disabled={disabled}
+                              onClick={() => handleToolClick(tool)}
+                            />
+                          );
+                        })}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-1 items-start gap-0.5">
+                    {group.tools
+                      .filter((tool): tool is Extract<RibbonTool, { kind: 'button' }> => tool.kind === 'button')
+                      .map((tool) => {
+                        const state = getEditorCommandState(tool.id) ?? {};
+                        const registered = hasEditorCommand(tool.id);
+                        const disabled = registered && state.disabled === true;
+                        return (
+                          <ToolButton
+                            key={tool.id}
+                            tool={tool}
+                            state={state}
+                            disabled={disabled}
+                            onClick={() => handleToolClick(tool)}
+                          />
+                        );
+                      })}
+                  </div>
+                )}
                 {/* 组名（底部） */}
-                <span className="select-none pt-1 text-tiny text-muted">{group.name}</span>
+                <span className="mt-auto select-none pt-1 text-tiny text-muted">{group.name}</span>
               </div>
             </div>
           ))}

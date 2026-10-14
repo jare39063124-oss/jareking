@@ -222,7 +222,8 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
 interface SlideAccum {
   partName: string;
   shapes: JkShape[];
-  transition: 'none' | 'fade';
+  /** 切换效果：与模型 JkSlide.transition 保持一致（含 slide 推送） */
+  transition: 'none' | 'fade' | 'slide';
 }
 
 /** 判断 zip 条目是否为解析需要保留的部件（其余条目数据直接丢弃，降峰值） */

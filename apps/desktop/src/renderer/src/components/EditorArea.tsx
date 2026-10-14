@@ -1,6 +1,5 @@
-import { BookOpen, Cloud, FolderOpen, History, Pin, Plus } from 'lucide-react';
+import { BookOpen, Cloud, FolderOpen, History, Pin } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Button } from './Button';
 import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
@@ -195,48 +194,29 @@ function EmptyState() {
   );
 }
 
-/** 模块占位画面：文档头（打开文件等）+ 画布 */
+/**
+ * 模块画布：直接占满编辑区（文档头已移除——入口由 TabBar 新建下拉、首页空状态、
+ * Ctrl+Shift+P 命令面板覆盖，垂直空间全部还给文档）。
+ * Sheet/Slide 用无内边距全幅容器（引擎需要真实尺寸）；其余模块居中展示。
+ */
 function ModulePlaceholder({ module }: { module: DocModule }) {
-  const meta = MODULE_META[module];
-  const openTab = useTabStore((state) => state.openTab);
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* 文档头 */}
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface px-4">
-        <div className="flex items-center gap-2 text-ui font-medium text-fg">
-          <meta.icon size={15} className="text-accent" aria-hidden="true" />
-          {meta.label}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="primary"
-            size="sm"
-            icon={<FolderOpen size={13} />}
-            onClick={() => toast.info('打开文件功能建设中')}
-          >
-            打开文件
-          </Button>
-          <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={() => openTab(module)}>
-            新建{meta.shortLabel}
-          </Button>
-        </div>
+  if (module === 'sheet') {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
+        <SheetEditor />
       </div>
-
-      {/* 画布区：Sheet/Slide 用无内边距全幅容器（引擎需要真实尺寸）；其余模块居中展示 */}
-      {module === 'sheet' ? (
-        <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
-          <SheetEditor />
-        </div>
-      ) : module === 'slide' ? (
-        <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
-          <SlideEditor />
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/40 p-8">
-          {renderCanvas(module)}
-        </div>
-      )}
+    );
+  }
+  if (module === 'slide') {
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-muted-bg/40">
+        <SlideEditor />
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/40 p-8">
+      {renderCanvas(module)}
     </div>
   );
 }

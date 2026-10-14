@@ -1,4 +1,4 @@
-import { Moon, Sun } from 'lucide-react';
+import { Minus, Moon, Plus, Sun } from 'lucide-react';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
 import { useUiStore } from '../stores/uiStore';
 
@@ -10,10 +10,12 @@ const MODULE_STATS: Record<DocModule, string> = {
   pdf: '第 1 页 / 共 1 页',
 };
 
-/** 底部状态栏：当前模块、占位页码/字数、主题指示 */
+/** 底部状态栏：当前模块、占位页码/字数、缩放控件、主题指示 */
 export function StatusBar() {
   const activeTab = useTabStore(selectActiveTab);
   const theme = useUiStore((state) => state.theme);
+  const writerZoom = useUiStore((state) => state.writerZoom);
+  const setWriterZoom = useUiStore((state) => state.setWriterZoom);
 
   return (
     <div className="flex h-6 shrink-0 items-center justify-between border-t border-border bg-muted-bg px-3 text-tiny text-muted">
@@ -22,10 +24,41 @@ export function StatusBar() {
         <span>{activeTab ? MODULE_META[activeTab.module].label : '未打开文档'}</span>
         {activeTab ? <span>{MODULE_STATS[activeTab.module]}</span> : null}
       </div>
-      {/* 右侧：主题指示 */}
-      <div className="flex items-center gap-1">
-        {theme === 'dark' ? <Moon size={12} aria-hidden="true" /> : <Sun size={12} aria-hidden="true" />}
-        <span>{theme === 'dark' ? '深色主题' : '浅色主题'}</span>
+      {/* 右侧：缩放控件（不额外吃高度，复用状态栏 24px）+ 主题指示 */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            aria-label="缩小"
+            title="缩小"
+            className="flex h-4 w-4 items-center justify-center rounded-sm transition-colors hover:bg-hover hover:text-fg"
+            onClick={() => setWriterZoom(writerZoom - 0.1)}
+          >
+            <Minus size={11} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="重置缩放"
+            title="点击重置为 100%"
+            className="min-w-9 rounded-sm px-1 text-center tabular-nums transition-colors hover:bg-hover hover:text-fg"
+            onClick={() => setWriterZoom(1)}
+          >
+            {Math.round(writerZoom * 100)}%
+          </button>
+          <button
+            type="button"
+            aria-label="放大"
+            title="放大"
+            className="flex h-4 w-4 items-center justify-center rounded-sm transition-colors hover:bg-hover hover:text-fg"
+            onClick={() => setWriterZoom(writerZoom + 0.1)}
+          >
+            <Plus size={11} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="flex items-center gap-1">
+          {theme === 'dark' ? <Moon size={12} aria-hidden="true" /> : <Sun size={12} aria-hidden="true" />}
+          <span>{theme === 'dark' ? '深色主题' : '浅色主题'}</span>
+        </div>
       </div>
     </div>
   );

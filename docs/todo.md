@@ -14,6 +14,10 @@
 - [ ] **W-批4**：批注/修订（Writer）、数据透视表（Sheet）、母版（演示）、JS 宏评估
 - [x] **字体合规**：调研完成（docs/fonts.md：红线=方正/汉仪/微软雅黑嵌入；内置白名单=OFL 清单）；批 1 已把 系统字体/开源 OFL/厂商免费商用 三组 23 款进字体下拉；批 2 待办=安装包内置思源黑体+霞鹜文楷（附 OFL.txt 与鸣谢页）；批 3 待办=字体管理器（扫描本机字体+授权提示）
 
+- [ ] **PDF↔Office 转换 + PDF 增强（2026-10-15 用户反馈登记）**：PDF转Word / PDF转Excel / PDF转PPT / PDF转图片 / PDF转TXT；Word转PDF / Excel转PDF / PPT转PDF；PDF 加密、移除密码、添加水印、页眉页脚、压缩PDF、全文搜索、批注、OCR 识别。
+  - 说明：PDF 工具已升级为功能区一级标签页（`PDF 工具`），其中**已实现** 6 个页面操作（合并/拆分/提取/删除/旋转/插入/替换）+ 图片转 PDF；上述转换与增强项点击给出「功能建设中」提示，需本机 Office/WPS COM 或自研转换管线 + pdf.js 渲染层（随 T5.1 阅读器 / T5.3 导出管线）排期。
+- [ ] **W-批2 补（2026-10-15 冒烟遗留登记）**：① `slide/SlideEditor.tsx:283`「编辑文字」仍用 `window.prompt` —— 原生弹窗会阻断 Electron CDP 自动化（与 Writer 公式/超链接同款问题，已约定一律改 Modal），随批 3 Presentation 一并改造；② `stores/editorCommands.ts`（命令总线，新增）尚无单测覆盖，补 `editorCommands.test.ts`（重点：同名命令注销语义、`notifyEditorChange` 微任务合并）；③ `pdf-open`（打开 PDF）作为阅读入口建议优先接入 T5.1 阅读器，而非停留在「功能建设中」。
+
 ## 阶段总览
 
 - **Phase 0** 基础设施 + 品牌占位（P0）

@@ -3,7 +3,10 @@
  *
  * 用法：
  *   1) 启动应用：cd apps/desktop && env -u ELECTRON_RUN_AS_NODE \
- *        ./node_modules/.bin/electron . --remote-debugging-port=9222
+ *        ./node_modules/.bin/electron . --remote-debugging-port=9222 --jk-debug
+ *      （--jk-debug 必带：Writer 调试钩子 __jkWriterDebug 仅在带该标志时挂载，
+ *       缺失会导致 tidyApplied / tocInserted / formulaInserted / ribbonBoldApplied
+ *       等依赖钩子的断言静默变 false）
  *   2) node scripts/gui-smoke.mjs [--port 9222]
  *
  * 步骤：连 CDP → 打开 Writer 标签（校验 ProseMirror + 示例文档标题）→
@@ -172,6 +175,31 @@ async function main() {
   );
   if (!results.proseMirror || results.writerTextLen < 10) failed = true;
 
+  // 2a-1. 文档区占比（观察项，不判定）：ProseMirror 最近祖先滚动容器高度 / 视口高度
+  results.docAreaRatio = await cdp.eval(`(() => {
+    const pm = document.querySelector('.ProseMirror');
+    if (!pm) return 0;
+    let el = pm.parentElement;
+    while (el) {
+      const s = getComputedStyle(el);
+      if (s.overflowY === 'auto' || s.overflowY === 'scroll') {
+        return Math.round((el.clientHeight / window.innerHeight) * 1000) / 1000;
+      }
+      el = el.parentElement;
+    }
+    return 0;
+  })()`);
+
+  // 2a-2. AI 面板默认收起（给文档更多横向空间）→ 先展开，面板内快捷技能按钮才在 DOM
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find(
+      (b) => (b.getAttribute('aria-label') || '').includes('展开 AI 助手面板'),
+    );
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(600);
+
   // 2b. 排版工具箱（用户反馈 1）：真实点击「一键整理」→ HTML 断言排版属性落地
   await cdp.eval(
     `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '一键整理'); if (btn) btn.click(); return !!btn; })()`,
@@ -201,7 +229,24 @@ async function main() {
   );
   if (!results.tidyApplied || !results.tidyNumbers) failed = true;
 
+  // 2b-2. AI 面板验证完毕 → 收起（文档区横向空间最大化，回归默认态）
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find(
+      (b) => (b.getAttribute('aria-label') || '').includes('收起 AI 助手面板'),
+    );
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(300);
+
   // 2c. WPS 对齐批2：插入目录（扫描标题→目录+TOC 域）+ 插入页码（PAGE 域）
+  //     前置：目录/页码/公式工具已在功能区「插入」标签下，先切标签
+  results.ribbonInsertTab = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '插入');
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(500);
   await cdp.eval(
     `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('插入目录')); if (btn) btn.click(); return !!btn; })()`,
   );
@@ -243,6 +288,40 @@ async function main() {
     `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('data-jk-formula') && h.includes('a^2+b^2=c^2'); })()`,
   );
   if (!results.formulaDialogOpen || !results.formulaInserted) failed = true;
+
+  // 2e. 功能区真正驱动编辑器：切回「开始」标签 → 全选 → 点「加粗」→ HTML 含 <strong>
+  results.ribbonHomeTab = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '开始');
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(400);
+  await cdp.eval(`(() => {
+    const pm = document.querySelector('.ProseMirror');
+    if (!pm) return false;
+    pm.focus();
+    document.execCommand('selectAll');
+    return true;
+  })()`);
+  await sleep(200);
+  results.ribbonBoldClicked = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === '加粗');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`);
+  await sleep(400);
+  results.ribbonBoldApplied = await cdp.eval(
+    `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('<strong>'); })()`,
+  );
+  // 还原：再点一次加粗取消加粗（避免影响后续断言）
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === '加粗');
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(300);
+  if (!results.ribbonBoldClicked || !results.ribbonBoldApplied) failed = true;
 
   // 3. Slide：再次刷新回空状态，点击演示模块
   await cdp.eval(`location.reload()`, true).catch(() => {});
@@ -438,6 +517,15 @@ async function main() {
     if (btn) btn.click();
   })()`);
   await sleep(1500);
+  // AI 面板默认收起 → 先展开，面板内的指令输入框才在 DOM
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find(
+      (b) => (b.getAttribute('aria-label') || '').includes('展开 AI 助手面板'),
+    );
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(600);
   // AI 面板输入指令并回车
   results.aiPanelSent = await cdp.eval(`(() => {
     const input = document.querySelector('input[placeholder="输入指令，回车发送"]');
@@ -674,11 +762,16 @@ async function main() {
   // 关键验证：弹窗「插入」按钮点击（UI 接线）必须真正插入图片——这是 Modal portal 修复的验收点
   if (results.pptChartRender <= 0 || results.pptChartAfterModal <= results.pptChartBefore || results.pptChartAfter <= results.pptChartBefore) failed = true;
 
-  // 8. PDF 工具箱（文件菜单入口）
+  // 8. PDF 工具箱（功能区一级标签页「PDF 工具」入口）
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);
-  results.pdfFileTab = await cdp.eval(`(() => {
-    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '文件');
+  // 8a. PDF 已升级为功能区一级标签页
+  results.pdfRibbonTab = await cdp.eval(
+    `[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'PDF 工具')`,
+  );
+  if (!results.pdfRibbonTab) failed = true;
+  results.pdfTabClicked = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'PDF 工具');
     if (btn) btn.click();
     return !!btn;
   })()`);

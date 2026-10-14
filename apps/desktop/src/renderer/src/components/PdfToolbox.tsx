@@ -1,9 +1,12 @@
 /**
  * PdfToolbox —— PDF 工具箱面板（T5，融合用户自研「PDF页面工具箱」）。
  *
- * 入口：Ribbon「文件」菜单 → PDF 工具箱（用户要求：功能区显眼位置）。
+ * 入口：Ribbon「PDF 工具」标签页（一级标签页，卖点显性化）+「文件」标签页的 PDF 工具组。
  * 能力：页面提取/删除、合并、旋转、插入页面、页面替换、图片转 PDF。
  * 全部经 @jareking/pdf 数据层（pdf-lib），本地离线处理。
+ *
+ * 当前模式由 uiStore.pdfToolboxMode 决定：Ribbon 点哪个按钮就以哪个模式打开；
+ * 关闭弹窗不重置，下次打开保留上次（或由 Ribbon 重新指定）。
  */
 import { useRef, useState } from 'react';
 import {
@@ -21,9 +24,9 @@ import { Button } from './Button';
 import { Modal } from './Modal';
 import { Select } from './Select';
 import { toast } from '../stores/toastStore';
-import { useUiStore } from '../stores/uiStore';
+import { useUiStore, type PdfToolboxMode } from '../stores/uiStore';
 
-type Mode = 'extract' | 'merge' | 'rotate' | 'images' | 'insert' | 'replace';
+type Mode = PdfToolboxMode;
 
 const MODE_LABELS: { value: Mode; label: string }[] = [
   { value: 'extract', label: '提取 / 删除页' },
@@ -55,8 +58,10 @@ const stamp = () => new Date().toISOString().slice(0, 10);
 export function PdfToolbox() {
   const open = useUiStore((s) => s.pdfToolboxOpen);
   const setOpen = useUiStore((s) => s.setPdfToolboxOpen);
+  // 模式存 uiStore：由 Ribbon 的入口按钮决定，关闭弹窗不重置（下次打开保留上次）
+  const mode = useUiStore((s) => s.pdfToolboxMode);
+  const setMode = useUiStore((s) => s.setPdfToolboxMode);
 
-  const [mode, setMode] = useState<Mode>('extract');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 

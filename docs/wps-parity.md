@@ -48,3 +48,15 @@
 - ✅ **Writer 公式（已落地）**：`packages/writer/src/omml.ts` 线性公式 → OMML（支持 ±×÷、^ 上标、a/b 分数、sqrt 根号、括号、隐式乘法、多字符函数名）；模型加 `formula` 行内元素，导出为 `m:oMath` 原生公式（Word/WPS 打开后可编辑），解析保真回读；编辑器「插入公式」对话框（实时语法校验，**不用 window.prompt** —— 原生弹窗阻断自动化）；OMML 生成器 + docx 往返单测（writer 32/32）+ gui-smoke 端到端断言。矩阵/方程组/积分上下限排 W-P2
 - ✅ **Sheet 填充**：Univer core preset 自带填充柄（拖拽右下角填充序列/复制），无需自研——**已覆盖**，待真实 Excel/WPS 大表人工验收
 - 🟡 **宏**：方案定稿 `docs/macros.md`——JS 宏 + Worker 沙箱（VBA 运行时否决：Electron 生态不成熟）；jk API 白名单（getText/setText/findReplace/applyOps/sheet.*/log）、宏文件存 userData/macros、显式点击运行。实现排入批4
+
+### PDF 卖点显性化 + 布局瘦身（2026-10-15，用户反馈直达）
+
+- ✅ **PDF 工具升级为功能区一级标签页**（原藏在「文件」标签下）：新增 `PDF 工具` 标签，五个组对标 WPS PDF / Acrobat——转换（PDF转Word/Excel/PPT/图片/TXT）、Office 转 PDF（Word/Excel/PPT/图片转PDF）、页面编辑（合并/拆分/提取/删除/旋转/插入/替换）、安全与美化（加密/移除密码/水印/页眉页脚/压缩）、阅读与批注（打开/全文搜索/批注/OCR），并保留「PDF 工具箱」总入口。
+  - **已实现 6 个页面操作 + 图片转 PDF**：合并、拆分、提取、删除、旋转、插入、替换（`@jareking/pdf` 的 mergePdfs/extractPages/deletePages/rotatePages/insertPages/replacePages/imagesToPdf）；点击直达工具箱对应模式（`uiStore.pdfToolboxMode`）。
+  - **待排期**：PDF↔Office 转换（PDF转Word/Excel/PPT、Word/Excel/PPT转PDF，需本机 Office/WPS COM 或自研转换管线）、加密、移除密码、水印、页眉页脚、压缩（需 pdf.js 渲染层）、阅读器与 OCR（T5.1）——点击给出「功能建设中」提示。
+- ✅ **布局瘦身（文档区最大化）**：
+  - 移除 WriterEditor 自带的 `h-10` 重复工具栏与 EditorArea 的 `h-10` 文档头（共 ~80px），全部能力上收功能区（新增命令总线 `stores/editorCommands.ts`：编辑器挂载时注册 `font-family/font-size/font-color/bold/.../save` 等 30 条命令，Ribbon 经 `runEditorCommand` 驱动、经 `useEditorRevision` 订阅实时激活态与控件取值）。
+  - AI 面板默认收起（`uiStore.aiPanelOpen` 默认 false，横向空间还给文档；可从 TabBar 的 Sparkles 按钮随时展开）。
+  - 新增缩放：Ribbon「视图」放大/缩小/100% + 状态栏右侧 `− / 百分比(点击重置 100%) / +`（`uiStore.writerZoom`，钳制 50%~200%）；纸张区用 `transform: scale()` + 包裹层尺寸同步实现（不用 CSS zoom，避免 ProseMirror 坐标错乱）。
+  - 纸张区内边距收紧（外层 `p-8 → p-5`、纸张 `px-16 py-16 → px-12 py-10`）；功能区标签行支持双击折叠（Ctrl+F1 保留）。
+- **禁止 `window.prompt`**：超链接输入改为 Modal + Input（原生弹窗会阻断 Electron CDP 自动化，见公式对话框同款写法）；确认按钮文案用「应用」避免与公式对话框的「插入」冲突。

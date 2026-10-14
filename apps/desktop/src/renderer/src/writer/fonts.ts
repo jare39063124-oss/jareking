@@ -52,6 +52,9 @@ export const FONT_GROUPS: FontGroup[] = [
 /** 全部字体名（平铺，供查找/默认值校验） */
 export const ALL_FONT_NAMES = FONT_GROUPS.flatMap((g) => g.fonts);
 
+/** 常用字号（磅），字号下拉选项（Ribbon 与编辑器共用同一份数据） */
+export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72];
+
 /**
  * 字数统计（对齐 WPS 口径）：
  * - 「字数」= 中日韩字符按 1 字计 + 连续西文/数字串按 1 词计；
