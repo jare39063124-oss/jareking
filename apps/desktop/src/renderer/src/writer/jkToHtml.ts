@@ -111,8 +111,8 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
-/** 图片扩展名 → MIME */
-function extToMime(ext: string): string {
+/** 图片扩展名 → MIME（导出供 MediaRegistry / WriterEditor 复用） */
+export function extToMime(ext: string): string {
   switch (ext.toLowerCase()) {
     case 'png':
       return 'image/png';
@@ -169,7 +169,8 @@ function renderInline(
     case 'image': {
       const alt = inline.alt ? escapeHtml(inline.alt) : '';
       const src = mediaMap.get(inline.embed) ?? '';
-      return `<img src="${escapeHtml(src)}" alt="${alt}" />`;
+      // data-jk-media 保留 relId，使 Blob URL 图片在保存时仍可凭注册表取回字节
+      return `<img src="${escapeHtml(src)}" data-jk-media="${escapeHtml(inline.embed)}" alt="${alt}" />`;
     }
     case 'break':
       return inline.breakType === 'page' ? '<hr />' : '<br />';
@@ -257,8 +258,13 @@ function renderTable(
 /**
  * 主入口：JkDocument → HTML 字符串。
  * 遍历 body 块；连续带相同 numId 的编号段落合并为单一 <ol>/<ul>。
+ *
+ * @param mediaMap 可选。调用方注入的 `relId → src` 映射（如 Blob URL 注册表）。
+ *   提供时图片使用该 src（短句柄，省内存）；不提供时回退为纯函数语义——
+ *   二进制直接 base64 内联（保持测试/无 DOM 环境兼容）。两种情况下图片均输出
+ *   `data-jk-media="relId"` 属性，供 htmlToJk 在保存时凭 relId 取回字节（#46-B）。
  */
-export function jkToHtml(doc: JkDocument): string {
+export function jkToHtml(doc: JkDocument, mediaMap?: Map<string, string>): string {
   const relMap = new Map<string, string>();
   for (const rel of doc.relationships ?? []) {
     if (rel.targetMode === 'external' || /^https?:\/\//i.test(rel.target)) {
@@ -266,14 +272,17 @@ export function jkToHtml(doc: JkDocument): string {
     }
   }
 
-  // 图片二进制 → data URL（编辑器可直接显示）
-  const mediaMap = new Map<string, string>();
-  for (const rel of doc.relationships ?? []) {
-    if (rel.type !== 'image') continue;
-    const bytes = doc.media?.[rel.id];
-    if (!bytes) continue;
-    const ext = (rel.target.split('.').pop() ?? 'png').toLowerCase();
-    mediaMap.set(rel.id, `data:${extToMime(ext)};base64,${bytesToBase64(bytes)}`);
+  // 图片显示源：优先用调用方注入的 mediaMap（如 Blob URL 注册表，省内存）；
+  // 否则回退为纯函数语义——二进制直接 base64 内联（保持测试/无 DOM 环境兼容）。
+  if (!mediaMap) {
+    mediaMap = new Map<string, string>();
+    for (const rel of doc.relationships ?? []) {
+      if (rel.type !== 'image') continue;
+      const bytes = doc.media?.[rel.id];
+      if (!bytes) continue;
+      const ext = (rel.target.split('.').pop() ?? 'png').toLowerCase();
+      mediaMap.set(rel.id, `data:${extToMime(ext)};base64,${bytesToBase64(bytes)}`);
+    }
   }
 
   const blocks: Block[] = doc.body ?? [];

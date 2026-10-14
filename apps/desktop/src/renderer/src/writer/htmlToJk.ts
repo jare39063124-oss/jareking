@@ -116,6 +116,8 @@ interface ParseCtx {
   /** 图片二进制载体（data URL 解码后按 rId 存放），随文档返回供导出写入 zip */
   media: Record<string, Uint8Array>;
   mediaSeq: number;
+  /** #46-B：Blob URL 图片的 relId → 字节（来自 MediaRegistry），保存时据此取回 */
+  mediaBytes?: Map<string, Uint8Array>;
 }
 
 /** data: URL → { bytes, ext }；非 data URL 返回 null */
@@ -225,17 +227,29 @@ function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: Pars
   if (tag === 'img') {
     const src = el.getAttribute('src') ?? '';
     const alt = el.getAttribute('alt') ?? undefined;
+    const relId = el.getAttribute('data-jk-media') ?? undefined;
+    // 优先：来自注册表的 Blob URL 图片——凭 relId 直接取回模型字节，保留 relId 不新建
+    if (relId && ctx.mediaBytes && ctx.mediaBytes.has(relId)) {
+      const bytes = ctx.mediaBytes.get(relId)!;
+      const ext = (relId.split('.').pop() ?? 'png').toLowerCase();
+      ctx.media[relId] = bytes;
+      if (!ctx.relationships.some((r) => r.id === relId)) {
+        ctx.relationships.push({ id: relId, type: 'image', target: `media/${relId}.${ext}` });
+      }
+      out.push({ type: 'image', embed: relId, alt });
+      return;
+    }
     const decoded = decodeDataUrl(src);
     if (decoded) {
-      // 内嵌图片：解码为二进制并登记为 image 关系 + media 载体
-      const relId = `rIdMedia${++ctx.mediaSeq}`;
-      ctx.media[relId] = decoded.bytes;
+      // 内嵌图片（新插入的 data URL）：解码为二进制并登记为 image 关系 + media 载体
+      const newRelId = `rIdMedia${++ctx.mediaSeq}`;
+      ctx.media[newRelId] = decoded.bytes;
       ctx.relationships.push({
-        id: relId,
+        id: newRelId,
         type: 'image',
-        target: `media/${relId}.${decoded.ext}`,
+        target: `media/${newRelId}.${decoded.ext}`,
       });
-      out.push({ type: 'image', embed: relId, alt });
+      out.push({ type: 'image', embed: newRelId, alt });
     } else {
       // 非 data URL（如外链/占位）：保留 src 作为 embed（导出时若无字节将降级）
       out.push({ type: 'image', embed: src, alt });
@@ -381,11 +395,15 @@ function parseTable(el: Element, ctx: ParseCtx): JkTable {
 /**
  * 主入口：HTML 字符串 → JkDocument。
  * 仅浏览器可用（依赖 DOMParser）。
+ *
+ * @param mediaBytes 可选。调用方注入的 `relId → 字节` 映射（MediaRegistry）。
+ *   当 `<img>` 带 `data-jk-media="relId"` 且该映射含此 relId 时，直接取回模型字节，
+ *   避免 Blob URL 不可还原导致保存后图片丢失（#46-B）。不提供时回退 base64 解码。
  */
-export function htmlToJk(html: string): JkDocument {
+export function htmlToJk(html: string, mediaBytes?: Map<string, Uint8Array>): JkDocument {
   const parser = new DOMParser();
   const dom = parser.parseFromString(html, 'text/html');
-  const ctx: ParseCtx = { relationships: [], relSeq: 0, media: {}, mediaSeq: 0 };
+  const ctx: ParseCtx = { relationships: [], relSeq: 0, media: {}, mediaSeq: 0, mediaBytes };
   const blocks: Block[] = [];
 
   dom.body.childNodes.forEach((node) => {

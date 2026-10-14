@@ -23,7 +23,6 @@ import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
-import Image from '@tiptap/extension-image';
 import { exportDocx, parseDocx } from '@jareking/writer';
 import {
   Bold,
@@ -54,10 +53,27 @@ import { IconButton } from '../components/IconButton';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { toast } from '../stores/toastStore';
 import { htmlToJk } from './htmlToJk';
-import { jkToHtml } from './jkToHtml';
+import { jkToHtml, extToMime } from './jkToHtml';
 import { FontSize } from './fontSize';
 import { JkField } from './jkField';
+import { JkImage } from './jkImage';
+import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
+
+/** 从解析后的文档登记图片字节并构建 relId → Blob URL 映射（#46-B） */
+function buildMediaMap(jk: import('@jareking/writer').JkDocument, reg: MediaRegistry): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const rel of jk.relationships ?? []) {
+    if (rel.type !== 'image') continue;
+    const bytes = jk.media?.[rel.id];
+    if (!bytes) continue;
+    const ext = (rel.target.split('.').pop() ?? 'png').toLowerCase();
+    reg.set(rel.id, bytes, extToMime(ext));
+    const url = reg.blobUrl(rel.id);
+    if (url) map.set(rel.id, url);
+  }
+  return map;
+}
 
 /** 常用字体（中文办公场景），FontFamily 扩展按名应用 */
 const FONT_FAMILIES = [
@@ -108,6 +124,10 @@ export function WriterEditor() {
   const [docLoading, setDocLoading] = useState(false);
   const [largeHint, setLargeHint] = useState<string | null>(null);
 
+  // 图片 Blob URL 注册表（#46-B）：加载时登记字节 + 创建 Blob URL，卸载/换文档时 revoke
+  const mediaRegistryRef = useRef<MediaRegistry>();
+  if (!mediaRegistryRef.current) mediaRegistryRef.current = new MediaRegistry();
+
   // 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
   // 必须显式加 backgroundColor 属性，才能在编辑器内渲染并在 getHTML 时回写 style，
   // 进而被 htmlToJk 读回模型（否则底纹在打开→编辑→保存后丢失）。
@@ -155,7 +175,7 @@ export function WriterEditor() {
       TableRowWithBg,
       TableHeaderWithBg,
       TableCellWithBg,
-      Image,
+      JkImage,
       JkField,
     ],
     content: '',
@@ -184,7 +204,9 @@ export function WriterEditor() {
         const buf = new Uint8Array(await res.arrayBuffer());
         const jk = await parseDocx(buf);
         if (cancelled) return;
-        const html = jkToHtml(jk);
+        const reg = mediaRegistryRef.current!;
+        reg.clear(); // 释放上一文档的 Blob URL，避免泄漏
+        const html = jkToHtml(jk, buildMediaMap(jk, reg));
         editor.commands.setContent(html, false); // 不触发更新广播，降低加载开销
       } catch {
         if (!cancelled) toast.warning('示例文档加载失败，已创建空白文档');
@@ -198,10 +220,11 @@ export function WriterEditor() {
     };
   }, [editor]);
 
-  // 卸载时销毁编辑器
+  // 卸载时销毁编辑器并释放 Blob URL
   useEffect(() => {
     return () => {
       editor?.destroy();
+      mediaRegistryRef.current?.revokeAll();
     };
   }, [editor]);
 
@@ -231,7 +254,9 @@ export function WriterEditor() {
       await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
       const jk = await parseDocx(buf);
-      const html = jkToHtml(jk);
+      const reg = mediaRegistryRef.current!;
+      reg.clear(); // 释放上一文档的 Blob URL，避免泄漏
+      const html = jkToHtml(jk, buildMediaMap(jk, reg));
       editor.commands.setContent(html, false); // 不触发更新广播，降低加载开销
       setLargeHint(largeFileHint(file.size, 'word'));
       toast.success(`已打开 ${file.name}`);
@@ -246,7 +271,10 @@ export function WriterEditor() {
     if (!editor) return;
     try {
       const html = editor.getHTML();
-      const jk = htmlToJk(html);
+      // 凭注册表字节还原 Blob URL 图片（#46-B），新插入的 data URL 图片由 htmlToJk 解码
+      const mediaBytes = new Map<string, Uint8Array>();
+      for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
+      const jk = htmlToJk(html, mediaBytes);
       const buf = await exportDocx(jk);
       const blob = new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
