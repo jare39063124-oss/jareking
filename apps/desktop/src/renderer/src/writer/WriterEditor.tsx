@@ -13,6 +13,8 @@ import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor } from "@tiptap/react";
 import { setActiveEditor } from "./editorRef";
 import { FloatingAiBar } from "./FloatingAiBar";
+import { FONT_GROUPS } from "./fonts";
+import { FindReplaceBar, EditorStatusBar } from "./FindReplaceBar";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -92,18 +94,8 @@ function buildMediaMap(
   return map;
 }
 
-/** 常用字体（中文办公场景），FontFamily 扩展按名应用 */
-const FONT_FAMILIES = [
-  '宋体',
-  '黑体',
-  '微软雅黑',
-  '楷体',
-  '仿宋',
-  'Times New Roman',
-  'Arial',
-  'Calibri',
-  'Cambria',
-];
+/** 常用字体（版权合规分组，见 docs/fonts.md 与 writer/fonts.ts） */
+// FONT_FAMILIES 已迁移至 writer/fonts.ts 的 FONT_GROUPS（系统/OFL/厂商免费商用 三组）
 
 /** 常用字号（磅），字号下拉选项 */
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72];
@@ -215,6 +207,28 @@ export function WriterEditor() {
     if (editor) setActiveEditor(editor);
     return () => setActiveEditor(null);
   }, [editor]);
+
+  // 查找/替换（T1.7 自研落地）：Ctrl+F 查找、Ctrl+H 替换
+  const [showFind, setShowFind] = useState(false);
+  const [findMode, setFindMode] = useState<'find' | 'replace'>('find');
+  useEffect(() => {
+    if (!editor) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setFindMode('find');
+        setShowFind(true);
+      } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
+        e.preventDefault();
+        setFindMode('replace');
+        setShowFind(true);
+      } else if (e.key === 'Escape' && showFind) {
+        setShowFind(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editor, showFind]);
 
   // #46-A 分块编辑核心：完整文档在内存作真源，编辑器只渲染 body 的一个切片
   /** 把当前编辑器内容解析并写回整文对应切片（切换/保存前调用） */
@@ -493,10 +507,14 @@ export function WriterEditor() {
           title="字体"
         >
           <option value="">字体</option>
-          {FONT_FAMILIES.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
+          {FONT_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label} title={group.note}>
+              {group.fonts.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
         <select
@@ -756,11 +774,18 @@ export function WriterEditor() {
       )}
 
       {/* 纸张区 */}
-      <div className="min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-8">
+      <div className="relative min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-8">
+        {/* Ctrl+F/H 查找替换条 */}
+        {editor && showFind && (
+          <FindReplaceBar editor={editor} initialMode={findMode} onClose={() => setShowFind(false)} />
+        )}
         <div className="mx-auto my-0 w-[794px] min-h-[1123px] rounded-sm bg-surface px-16 py-16 shadow-card">
           <EditorContent editor={editor} />
         </div>
       </div>
+
+      {/* 状态栏：字数统计（WPS 口径） */}
+      {editor && <EditorStatusBar editor={editor} />}
 
       {/* T4.4 选中浮动 AI 工具条（选区非空时浮出） */}
       {editor && <FloatingAiBar editor={editor} />}
