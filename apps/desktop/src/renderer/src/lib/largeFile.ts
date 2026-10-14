@@ -10,7 +10,10 @@
  *  - Writer 整文挂 DOM（#46-A）：已通过 `writer/chunking.ts` 分块编辑化解——
  *    完整文档留内存作真源，编辑器只渲染 body 切片（节点数受 `WRITER_CHUNK_SIZE` 约束），
  *    仅大文档（body 块数 > `WRITER_CHUNK_BLOCK_THRESHOLD`）启用，普通文档零回归。
- *  - 仅剩 Sheet/PPT 超大文件分块解析（#46-C）仍属后续专项（见 todo.md / agent-guide.md）。
+ *  - Sheet/PPT 解析期峰值（#46-C）：已落地（2026-10-15）——解析迁移 Web Worker
+ *    （`lib/parseClient.ts` + `parse.worker.ts`：主线程不冻结 + worker 崩溃隔离 + 超时重建），
+ *    PPT 侧改用 fflate 流式逐条目解压（幻灯片 XML 解析后即丢弃、无关条目不驻留，峰值降低）。
+ *  - 剩余：exceljs 不支持流式读，真正流式 xlsx 解析排入 M3（T8.3）性能专项（见 todo.md）。
  */
 
 /** 超过此体积触发「大文件」非阻塞提示（默认 30MB） */

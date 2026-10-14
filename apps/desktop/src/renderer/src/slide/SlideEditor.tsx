@@ -27,13 +27,14 @@ import {
   BarChart3,
 } from 'lucide-react';
 import { createAiAdapter, createPresentationPlanner, type PresentationOp } from '@jareking/ai';
-import { exportPptx, parsePptx, type JkPresentation, type JkShape, type JkSlide } from '@jareking/presentation';
+import { exportPptx, type JkPresentation, type JkShape, type JkSlide } from '@jareking/presentation';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
 import { renderChartToPng, type ChartType } from '../writer/chartRenderer';
 import { Modal } from '../components/Modal';
 import { LoadingOverlay } from '../components/LoadingOverlay';
+import { parseInWorker } from '../lib/parseClient';
 import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
 import { SlideshowOverlay } from './SlideshowOverlay';
@@ -522,7 +523,7 @@ export function SlideEditor() {
       // 让遮罩先绘制，避免大文件解析期间 UI 冻结错觉
       await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
-      const loaded = await parsePptx(buf);
+      const loaded = await parseInWorker('pptx', buf);
       setPres({ ...loaded, slides: loaded.slides.map(withIds) });
       setSlideIdx(0);
       setSelectedId(null);
@@ -531,7 +532,8 @@ export function SlideEditor() {
       const hint = largeFileHint(file.size, 'ppt');
       if (hint) toast.warning(hint);
       toast.success(`已打开 ${file.name}`);
-    } catch {
+    } catch (err) {
+      console.error('打开 pptx 失败:', err);
       toast.warning('打开失败：文件可能不是有效的 .pptx');
     } finally {
       setFileLoading(false);

@@ -23,7 +23,7 @@ import CfZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN
 import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
 import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
-import { exportXlsx, parseXlsx, sheetToCsv, type JkWorkbook } from '@jareking/sheet';
+import { exportXlsx, sheetToCsv, type JkWorkbook } from '@jareking/sheet';
 import type { FUniver } from '@univerjs/core';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
 import { Download, FileSpreadsheet, FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
@@ -34,6 +34,7 @@ import { toast } from '../stores/toastStore';
 import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
+import { parseInWorker } from '../lib/parseClient';
 
 /** 首载演示工作簿（体现 值/公式/合并/列宽 四类能力） */
 function demoWorkbook(): JkWorkbook {
@@ -70,6 +71,15 @@ function demoWorkbook(): JkWorkbook {
 
 /** 创建工作簿并解除 Univer v1.0 默认的整表保护（否则所有写入被权限系统静默拦截） */
 async function createWb(api: FUniver, wb: JkWorkbook): Promise<void> {
+  // 先卸载旧工作簿：jkToUniverData 固定 unit id 'jareking-sheet'，重复创建
+  // （demo 首建后再打开文件 / 连续打开两个文件）会撞 UniverInstanceService 同 id 校验
+  // 而抛 "cannot create a unit with the same unit id"。
+  try {
+    const currentId = api.getActiveWorkbook?.()?.getId?.();
+    if (currentId) api.disposeUnit(currentId);
+  } catch {
+    // 卸载失败不阻断新工作簿创建
+  }
   const fwb = api.createWorkbook(jkToUniverData(wb) as Parameters<typeof api.createWorkbook>[0]);
   try {
     // 1.0.4 实际 API：工作表权限模型上的 unprotect()——删除整表保护规则并重置全部权限点为可编辑
@@ -163,10 +173,11 @@ export function SheetEditor() {
     if (!file) return;
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
-      const wb = await parseXlsx(buf);
+      const wb = await parseInWorker('xlsx', buf);
       await createWb(apiRef.current!, wb);
       toast.success(`已打开 ${file.name}`);
-    } catch {
+    } catch (err) {
+      console.error('打开 xlsx 失败:', err);
       toast.warning('打开失败：文件可能不是有效的 .xlsx');
     }
   };
