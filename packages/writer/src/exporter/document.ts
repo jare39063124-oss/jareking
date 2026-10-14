@@ -208,6 +208,10 @@ function serializeInline(inline: Inline, ctx: Ctx = { imageId: 0 }): string {
         : '';
       return `<w:fldSimple w:instr="${escapeXmlAttr(inline.instr)}">${result}</w:fldSimple>`;
     }
+    case 'formula': {
+      // OMML 原生公式：线性文本装入 m:oMath，Word/WPS 打开后为可编辑公式对象
+      return `<m:oMath><m:r><m:t xml:space="preserve">${escapeXmlText(inline.text)}</m:t></m:r></m:oMath>`;
+    }
     default:
       return '';
   }
@@ -474,7 +478,7 @@ export function serializeDocumentXml(doc: JkDocument): string {
   const ctx: Ctx = { imageId: 0 };
   const body = serializeBody(doc, ctx);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
   <w:body>${body}</w:body>
 </w:document>`;
 }

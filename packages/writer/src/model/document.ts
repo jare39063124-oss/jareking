@@ -112,7 +112,18 @@ export interface ParagraphBreak extends BlockBase {
  * =========================================================================
  * 对应 w:p 内可出现的行内内容：文本 Run、超链接、图片、换行符、脚注引用。
  */
-export type Inline = Run | Hyperlink | Image | Break | FootnoteRef | Field;
+export type Inline = Run | Hyperlink | Image | Break | FootnoteRef | Field | Formula;
+
+/**
+ * 公式（OMML，WPS 对齐）
+ * v1 以线性文本承载（可读、可再编辑），导出为 m:oMath 原生公式对象，
+ * Word/WPS 打开后可继续编辑；矩阵/方程组等高级结构登记 W-P2。
+ */
+export interface Formula extends InlineBase {
+  type: 'formula';
+  /** 线性公式文本（如 "x^2+y^2=z^2"） */
+  text: string;
+}
 
 /** 行内节点基础标记（供联合收窄与兜底扩展） */
 export interface InlineBase extends ModelExtra {

@@ -203,6 +203,13 @@ function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: Pars
     return;
   }
 
+  // 公式 span（data-jk-formula）：保留为 formula 行内元素（导出为 OMML 原生公式）
+  if (tag === 'span' && el.getAttribute('data-jk-formula')) {
+    const text = el.getAttribute('data-jk-formula') ?? el.textContent ?? '';
+    if (text.trim()) out.push({ type: 'formula', text: text.trim() });
+    return;
+  }
+
   if (tag === 'a') {
     const url = el.getAttribute('href') ?? '#';
     const runs: Inline[] = [];

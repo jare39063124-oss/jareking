@@ -42,3 +42,9 @@
 1. **Univer/TipTap 自带能力优先**（工具栏/右键已覆盖大量 WPS 功能，补的是入口显性化与 UI 缺口）
 2. **每批必须可自动化验收**（GUI 冒烟/单测），不引入「人工才算完成」的项
 3. **不做 WPS 的云服务耦合功能**（云文档/协作）——与 spec 的单机优先一致
+
+### 公式 / 填充 / 宏（2026-10-15 用户点名 → 专项）
+
+- ✅ **Writer 公式（已落地）**：`packages/writer/src/omml.ts` 线性公式 → OMML（支持 ±×÷、^ 上标、a/b 分数、sqrt 根号、括号、隐式乘法、多字符函数名）；模型加 `formula` 行内元素，导出为 `m:oMath` 原生公式（Word/WPS 打开后可编辑），解析保真回读；编辑器「插入公式」对话框（实时语法校验，**不用 window.prompt** —— 原生弹窗阻断自动化）；OMML 生成器 + docx 往返单测（writer 32/32）+ gui-smoke 端到端断言。矩阵/方程组/积分上下限排 W-P2
+- ✅ **Sheet 填充**：Univer core preset 自带填充柄（拖拽右下角填充序列/复制），无需自研——**已覆盖**，待真实 Excel/WPS 大表人工验收
+- 🟡 **宏**：方案定稿 `docs/macros.md`——JS 宏 + Worker 沙箱（VBA 运行时否决：Electron 生态不成熟）；jk API 白名单（getText/setText/findReplace/applyOps/sheet.*/log）、宏文件存 userData/macros、显式点击运行。实现排入批4

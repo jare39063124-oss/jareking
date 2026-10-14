@@ -182,6 +182,11 @@ function renderInline(
       const result = escapeHtml((inline as { result?: string }).result ?? '');
       return `<span data-jk-field="${instr}" data-jk-field-result="${result}" style="background:#EEF2FF;color:#3730A3;padding:0 2px;border-radius:2px">${result}</span>`;
     }
+    case 'formula': {
+      // 公式：以 data-jk-formula span 呈现（编辑器 jkFormula 原子节点），导出为 OMML
+      const text = escapeHtml((inline as { text?: string }).text ?? '');
+      return `<span data-jk-formula="${text}" style="font-family:Cambria Math,serif;font-style:italic;background:#F0FDF4;color:#166534;padding:0 3px;border-radius:2px">${text}</span>`;
+    }
     default:
       return '';
   }

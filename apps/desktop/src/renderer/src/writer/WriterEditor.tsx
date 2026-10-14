@@ -17,6 +17,10 @@ import { FONT_GROUPS } from "./fonts";
 import { FindReplaceBar, EditorStatusBar } from "./FindReplaceBar";
 import { buildTocEntries, buildTocContent } from "./tocBuilder";
 import { takePendingOpen, peekPendingOpen } from "../stores/pendingOpenStore";
+import { JkFormula } from "./jkFormula";
+import { linearToOmml, validateLinearFormula } from "@jareking/writer";
+import { Modal } from "../components/Modal";
+import { Input } from "../components/Input";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -56,6 +60,7 @@ import {
   ListTree,
   Redo2,
   SeparatorHorizontal,
+  Sigma,
   Strikethrough,
   Table as TableIcon,
   TextAlignCenter,
@@ -200,6 +205,7 @@ export function WriterEditor() {
       TableCellWithBg,
       JkImage,
       JkField,
+      JkFormula,
     ],
     content: '',
     editorProps: {
@@ -214,6 +220,10 @@ export function WriterEditor() {
 
   // 查找/替换（T1.7 自研落地）：Ctrl+F 查找、Ctrl+H 替换
   const [showFind, setShowFind] = useState(false);
+  /** 插入公式对话框（WPS 对齐：公式）—— 用 Modal 而非 window.prompt（原生弹窗阻断自动化） */
+  const [formulaOpen, setFormulaOpen] = useState(false);
+  const [formulaInput, setFormulaInput] = useState('x^2+y^2=z^2');
+  const [formulaError, setFormulaError] = useState<string | null>(null);
   const [findMode, setFindMode] = useState<'find' | 'replace'>('find');
   useEffect(() => {
     if (!editor) return;
@@ -753,6 +763,16 @@ export function WriterEditor() {
             toast.success(`已插入目录（${entries.length} 个条目）`);
           }}
         />
+        <ToolBtn
+          icon={<Sigma size={15} />}
+          label="插入公式"
+          disabled={!canFormat}
+          onClick={() => {
+            if (!editor) return;
+            setFormulaOpen(true);
+            setFormulaInput('x^2+y^2=z^2');
+          }}
+        />
 
         <span className="mx-1 h-5 w-px bg-border" />
 
@@ -852,6 +872,76 @@ export function WriterEditor() {
 
       {/* T4.4 选中浮动 AI 工具条（选区非空时浮出） */}
       {editor && <FloatingAiBar editor={editor} />}
+
+      {/* 插入公式对话框：实时校验 + 生成 OMML */}
+      <Modal
+        open={formulaOpen}
+        onClose={() => setFormulaOpen(false)}
+        title="插入公式"
+        width={420}
+        footer={
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Sigma size={13} />}
+            onClick={() => {
+              if (!editor) return;
+              const text = formulaInput.trim();
+              if (!text) return;
+              const check = validateLinearFormula(text);
+              if (!check.ok) {
+                setFormulaError(check.error ?? '公式语法错误');
+                return;
+              }
+              // 生成器校验可产出合法 OMML（模型存线性文本，导出时落 m:oMath）
+              linearToOmml(text);
+              editor
+                .chain()
+                .focus()
+                .insertContent({ type: 'jkFormula', attrs: { text } })
+                .run();
+              setFormulaOpen(false);
+              setFormulaError(null);
+              toast.success('已插入公式（Word/WPS 中可编辑）');
+            }}
+          >
+            插入
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-2 p-1">
+          <Input
+            autoFocus
+            placeholder="线性公式，如 x^2+y^2=z^2、a/b、sqrt(x)"
+            value={formulaInput}
+            onChange={(e) => {
+              setFormulaInput(e.target.value);
+              setFormulaError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                // 复用插入逻辑：点击等价（简化：回车触发校验并插入）
+                const text = formulaInput.trim();
+                if (!editor || !text) return;
+                const check = validateLinearFormula(text);
+                if (!check.ok) {
+                  setFormulaError(check.error ?? '公式语法错误');
+                  return;
+                }
+                linearToOmml(text);
+                editor.chain().focus().insertContent({ type: 'jkFormula', attrs: { text } }).run();
+                setFormulaOpen(false);
+                toast.success('已插入公式（Word/WPS 中可编辑）');
+              }
+            }}
+          />
+          <p className="text-tiny text-muted">
+            支持 ＋ − × ÷、^ 上标（a^b）、a/b 分数、sqrt() 根号、括号；保存后为 Word/WPS 原生公式对象。
+          </p>
+          {formulaError && <p className="text-tiny text-warning">语法错误：{formulaError}</p>}
+        </div>
+      </Modal>
 
       {/* 隐藏的文件选择器 */}
       <input

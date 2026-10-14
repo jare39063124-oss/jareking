@@ -218,6 +218,32 @@ async function main() {
   );
   if (!results.tocInserted || !results.pageFieldInserted) failed = true;
 
+  // 2d. 插入公式（WPS 对齐：公式）：点按钮 → 弹窗 → 输入线性公式 → 插入 → html 含 data-jk-formula
+  await cdp.eval(
+    `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('插入公式')); if (btn) btn.click(); return !!btn; })()`,
+  );
+  await sleep(500);
+  results.formulaDialogOpen = await cdp.eval(
+    `(() => { const d = document.querySelector('[role="dialog"]'); return !!d && d.textContent.includes('插入公式'); })()`,
+  );
+  if (results.formulaDialogOpen) {
+    await cdp.eval(`(() => {
+      const d = document.querySelector('[role="dialog"]');
+      const input = d?.querySelector('input');
+      if (!input) return;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'a^2+b^2=c^2');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const btn = [...d.querySelectorAll('button')].find((b) => b.textContent.trim() === '插入');
+      if (btn) btn.click();
+    })()`);
+    await sleep(500);
+  }
+  results.formulaInserted = await cdp.eval(
+    `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('data-jk-formula') && h.includes('a^2+b^2=c^2'); })()`,
+  );
+  if (!results.formulaDialogOpen || !results.formulaInserted) failed = true;
+
   // 3. Slide：再次刷新回空状态，点击演示模块
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);

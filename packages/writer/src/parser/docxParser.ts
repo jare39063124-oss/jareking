@@ -697,6 +697,12 @@ function parseContainerInlines(
     if (INLINE_IGNORE.has(tag)) continue;
     const items = ensureArray(container[tag]);
     for (const item of items) {
+      if (tag === 'oMath') {
+        // OMML 公式：v1 取线性文本（deepText 递归 m:t），导出时重建 m:oMath
+        const text = deepText(item).replace(/\s+/g, ' ').trim();
+        if (text) inlines.push({ type: 'formula', text, data: { __raw: item } });
+        continue;
+      }
       if (tag === 'fldSimple') {
         // 简单域：指令在 @_instr，内部缓存文本作为结果
         const instr = (getAttr(item, '@_instr') ?? '').replace(/[{}]/g, '').trim();
