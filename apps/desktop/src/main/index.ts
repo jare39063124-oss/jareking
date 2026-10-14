@@ -149,6 +149,14 @@ function registerIpcHandlers(): void {
     return true;
   });
 
+  // 打开外部链接（字体官方下载页）
+  ipcMain.handle(IPC.SYSTEM_OPEN_EXTERNAL, async (_event, payload?: { url?: string }) => {
+    if (!payload?.url || !/^https:\/\//i.test(payload.url)) return false;
+    const { shell } = await import('electron');
+    await shell.openExternal(payload.url);
+    return true;
+  });
+
   // AI 配置：列表 / 保存（含密钥加密）/ 删除 / 明文 Key 解析（单次调用注入）
   ipcMain.handle(IPC.AI_CONFIG_LIST, () => ai.list());
   ipcMain.handle(IPC.AI_CONFIG_SAVE, (_event, payload?: AiConfigSaveInput) => {

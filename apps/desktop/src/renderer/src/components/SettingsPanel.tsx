@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, FolderOpen, HardDrive, Moon, Sun } from 'lucide-react';
+import { ChevronDown, FolderOpen, HardDrive, Moon, Sun, Type } from 'lucide-react';
 import { Modal } from './Modal';
 import { Select } from './Select';
 import { AiConfigSection } from './AiConfigSection';
 import { Button } from './Button';
 import { toast } from '../stores/toastStore';
 import { useUiStore, type ThemeMode } from '../stores/uiStore';
+import { FONT_GROUPS } from '../writer/fonts';
 
 /** 可折叠设置分区（手风琴）：标题可点击展开/收起 */
 function CollapsibleSection({
@@ -38,6 +39,43 @@ function CollapsibleSection({
       </button>
       {open && <div className="flex flex-col gap-2">{children}</div>}
     </section>
+  );
+}
+
+/** 字体分区（版权合规）：推荐免费商用字体清单 + 官方下载直达（docs/fonts.md） */
+function FontSectionBody() {
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-tiny leading-relaxed text-muted">
+        jareking 字体分三层：① 系统字体（调用本机已有，不分发）② OFL 开源字体（将随安装包内置，可商用）③
+        厂商免费商用字体（下方一键前往官方下载安装）。严禁内置方正/汉仪等需授权字体。
+      </p>
+      {FONT_GROUPS.filter((g) => g.downloads).map((group) => (
+        <div key={group.label} className="flex flex-col gap-1.5">
+          <span className="text-tiny font-medium text-fg">{group.label}</span>
+          <div className="flex flex-wrap gap-1.5">
+            {group.fonts
+              .filter((f) => group.downloads?.[f])
+              .map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  title={`前往 ${f} 官方下载页`}
+                  className="flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-tiny text-fg transition-colors hover:border-accent hover:text-accent"
+                  onClick={() => {
+                    const url = group.downloads?.[f];
+                    if (!url) return;
+                    void window.jareking.invoke('system:openExternal', { url });
+                  }}
+                >
+                  <FolderOpen size={11} aria-hidden="true" />
+                  {f}
+                </button>
+              ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -130,6 +168,11 @@ export function SettingsPanel() {
         {/* AI 服务商配置（T4.2）—— 可折叠；默认展开，避免藏起核心配置 */}
         <CollapsibleSection title="AI 服务商" defaultOpen={true}>
           <AiConfigSection />
+        </CollapsibleSection>
+
+        {/* 字体（版权合规版）：推荐免费商用字体 + 官方下载直达（docs/fonts.md） */}
+        <CollapsibleSection title="字体" icon={Type}>
+          <FontSectionBody />
         </CollapsibleSection>
 
         {/* 存储管理（数据透明，对标 WPS C 盘痛点） */}

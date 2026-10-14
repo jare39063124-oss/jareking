@@ -11,6 +11,8 @@ export interface FontGroup {
   /** 组内说明（下拉 title 提示） */
   note: string;
   fonts: string[];
+  /** 官方下载页（字体名 → URL），设置页「字体」区直达用 */
+  downloads?: Record<string, string>;
 }
 
 export const FONT_GROUPS: FontGroup[] = [
@@ -23,11 +25,27 @@ export const FONT_GROUPS: FontGroup[] = [
     label: '开源字体（OFL，将随 jareking 内置）',
     note: 'SIL OFL 1.1 协议，免费商用、可随安装包分发（docs/fonts.md）',
     fonts: ['思源黑体', '思源宋体', '霞鹜文楷', '得意黑', '朱雀仿宋', '抖音美好体'],
+    downloads: {
+      思源黑体: 'https://github.com/adobe-fonts/source-han-sans/releases',
+      思源宋体: 'https://github.com/adobe-fonts/source-han-serif/releases',
+      霞鹜文楷: 'https://github.com/lxgw/LxgwWenKai/releases',
+      得意黑: 'https://github.com/atelier-anchor/smiley-sans/releases',
+      朱雀仿宋: 'https://github.com/TrionesType/zhuque',
+      抖音美好体: 'https://github.com/bytedance/fonts',
+    },
   },
   {
     label: '厂商免费商用（用户自装后可用）',
     note: '官方授权免费商用；未安装时按系统 fallback 渲染（docs/fonts.md 附官方下载源）',
     fonts: ['阿里巴巴普惠体', 'MiSans', 'HarmonyOS Sans', 'OPPO Sans', '站酷高端黑', '站酷快乐体', '京东朗正体'],
+    downloads: {
+      阿里巴巴普惠体: 'https://www.alibabafonts.com/',
+      MiSans: 'https://hyperos.mi.com/font/zh/download/',
+      'HarmonyOS Sans': 'https://developer.harmonyos.com/cn/design/resource/',
+      'OPPO Sans': 'https://open.oppomobile.com/',
+      站酷高端黑: 'https://www.zcool.com.cn/special/zcoolfonts/',
+      站酷快乐体: 'https://www.zcool.com.cn/special/zcoolfonts/',
+    },
   },
 ];
 

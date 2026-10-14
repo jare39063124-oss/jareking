@@ -20,6 +20,7 @@ export const IPC = {
   AI_KEY_RESOLVE: 'ai:key:resolve',
   SYSTEM_STORAGE_INFO: 'system:storageInfo',
   SYSTEM_OPEN_DATA_DIR: 'system:openDataDir',
+  SYSTEM_OPEN_EXTERNAL: 'system:openExternal',
 } as const;
 
 /** 允许通过 db:query 执行的操作名（白名单，杜绝任意 SQL 注入） */
