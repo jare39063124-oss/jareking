@@ -467,6 +467,8 @@ export function SlideEditor() {
     if (new URLSearchParams(window.location.search).has('jk-debug')) {
       (window as unknown as Record<string, unknown>).__jkSlideDebug = {
         runPresentationAi: (instruction: string) => aiRunRef.current(instruction),
+        // #46-C 压测钩子：解析级直调（transfer 会 neuter buf.buffer）
+        parseInWorker: (kind: 'xlsx' | 'pptx', buf: Uint8Array) => parseInWorker(kind, buf),
         slideCount: () => pres.slides.length,
         imageCount: () =>
           pres.slides.flatMap((s) => s.shapes).filter((sh) => sh.type === 'image').length,

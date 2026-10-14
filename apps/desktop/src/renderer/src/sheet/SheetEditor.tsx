@@ -241,6 +241,8 @@ export function SheetEditor() {
       (window as unknown as Record<string, unknown>).__jkDebug = {
         snapshot: () => apiRef.current?.getActiveWorkbook()?.save() ?? null,
         runSheetAi: (instruction: string) => aiRunRef.current(instruction),
+        // #46-C 压测钩子：解析级直调（transfer 会 neuter buf.buffer）
+        parseInWorker: (kind: 'xlsx' | 'pptx', buf: Uint8Array) => parseInWorker(kind, buf),
         activeSheet: () => {
           const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
           return s ? { id: s.getSheetId(), name: s.getSheetName() } : null;
