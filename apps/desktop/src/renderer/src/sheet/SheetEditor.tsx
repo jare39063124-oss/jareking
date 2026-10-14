@@ -101,6 +101,9 @@ export function SheetEditor() {
   const aiInputRef = useRef<HTMLInputElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
+  /** 可回退：AI 执行前的整簿快照（JkWorkbook），撤销时经 createWb 重建 */
+  const aiUndoRef = useRef<JkWorkbook | null>(null);
+  const [aiCanUndo, setAiCanUndo] = useState(false);
   const [aiInstruction, setAiInstruction] = useState('');
   // Enter 处理器读 ref 而非 state：避免 React 批处理导致读到旧值
   const aiInstructionRef = useRef('');
@@ -218,11 +221,14 @@ export function SheetEditor() {
         toast.info(plan.explanation || '无需修改表格');
         return;
       }
+      // 可回退：jk 为执行前快照（plan 前算出），撤销即整簿重建
+      aiUndoRef.current = jk;
       const result = applySheetOps(api, plan.ops);
+      setAiCanUndo(true);
       setAiNote(
         `${plan.explanation || '已执行'} · ✅${result.applied.length}${result.skipped.length ? ` · ⚠️跳过${result.skipped.length}` : ''}`,
       );
-      toast.success(`AI 已执行 ${result.applied.length} 个操作`);
+      toast.success(`AI 已执行 ${result.applied.length} 个操作（可撤销）`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setAiNote(`失败：${msg}`);
@@ -386,6 +392,25 @@ export function SheetEditor() {
           <span className="max-w-72 truncate text-tiny text-muted" title={aiNote}>
             {aiNote}
           </span>
+        )}
+        {aiCanUndo && (
+          <button
+            type="button"
+            title="恢复到本次 AI 执行前的表格状态"
+            className="rounded border border-border px-1.5 py-0.5 text-tiny text-muted transition-colors hover:border-accent hover:text-accent"
+            onClick={() => {
+              const api = apiRef.current;
+              const snap = aiUndoRef.current;
+              if (!api || !snap) return;
+              void createWb(api, snap);
+              aiUndoRef.current = null;
+              setAiCanUndo(false);
+              setAiNote('已撤销本次 AI 操作');
+              toast.success('已撤销本次 AI 操作');
+            }}
+          >
+            ↩ 撤销
+          </button>
         )}
         <span className="ml-auto text-xs text-text-secondary">
           Univer 表格引擎 · 公式/合并/多 Sheet 开箱即用

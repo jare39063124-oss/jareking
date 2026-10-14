@@ -208,6 +208,9 @@ export function SlideEditor() {
   const thumbScrollRef = useRef<HTMLDivElement>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
+  /** 可回退：AI 执行前的演示文稿快照（含媒体字节），撤销即整份恢复 */
+  const aiUndoRef = useRef<JkPresentation | null>(null);
+  const [aiCanUndo, setAiCanUndo] = useState(false);
   const [aiInstruction, setAiInstruction] = useState('');
   const aiInstructionRef = useRef('');
   const configs = useAiStore((st) => st.configs);
@@ -445,10 +448,13 @@ export function SlideEditor() {
       const newSlides = plan.ops
         .filter((o): o is Extract<PresentationOp, { op: 'addSlide' }> => o.op === 'addSlide')
         .map(buildSlideFromOp);
+      // 可回退：执行前整份快照（含媒体）
+      aiUndoRef.current = structuredClone(pres);
       setPres((prev) => ({ ...prev, slides: [...prev.slides, ...newSlides] }));
       setSlideIdx(pres.slides.length);
+      setAiCanUndo(true);
       setAiNote(`${plan.explanation || '已生成'} · 新增 ${newSlides.length} 页`);
-      toast.success(`AI 已生成 ${newSlides.length} 页幻灯片`);
+      toast.success(`AI 已生成 ${newSlides.length} 页幻灯片（可撤销）`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setAiNote(`失败：${msg}`);
@@ -764,6 +770,25 @@ export function SlideEditor() {
             <span className="max-w-64 truncate text-tiny text-muted" title={aiNote}>
               {aiNote}
             </span>
+          )}
+          {aiCanUndo && (
+            <button
+              type="button"
+              title="恢复到本次 AI 生成前的幻灯片状态"
+              className="rounded border border-border px-1.5 py-0.5 text-tiny text-muted transition-colors hover:border-accent hover:text-accent"
+              onClick={() => {
+                const snap = aiUndoRef.current;
+                if (!snap) return;
+                setPres(snap);
+                setSlideIdx(0);
+                aiUndoRef.current = null;
+                setAiCanUndo(false);
+                setAiNote('已撤销本次 AI 生成');
+                toast.success('已撤销本次 AI 生成');
+              }}
+            >
+              ↩ 撤销
+            </button>
           )}
           <span className="mx-1 h-5 w-px bg-border" />
           <Button variant="secondary" size="sm" icon={<Play size={13} />} onClick={() => setPlaying(true)} title="F5">

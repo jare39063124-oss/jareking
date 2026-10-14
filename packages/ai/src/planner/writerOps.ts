@@ -165,6 +165,8 @@ export interface DocContextSummary {
   selection?: string;
   /** 标题列表（outline） */
   headings?: string[];
+  /** 对话历史（多轮上下文，T4.7；调用方截取最近几轮） */
+  history?: { role: 'user' | 'assistant'; content: string }[];
 }
 
 export function buildWriterPlannerPrompt(instruction: string, ctx: DocContextSummary | undefined): {
@@ -175,11 +177,20 @@ export function buildWriterPlannerPrompt(instruction: string, ctx: DocContextSum
   if (ctx?.headings?.length) contextLines.push(`文档标题：${ctx.headings.join(' / ')}`);
   if (ctx?.text) contextLines.push(`文档内容（节选）：\n${ctx.text}`);
   if (ctx?.selection) contextLines.push(`当前选区：「${ctx.selection}」`);
+  if (ctx?.history?.length) {
+    const histLines = ctx.history
+      .slice(-6)
+      .map((h) => `${h.role === 'user' ? '用户' : '助手'}：${h.content.slice(0, 200)}`)
+      .join('\n');
+    contextLines.push(`对话历史（用于理解"再/接着/第二段"等指代，最新在后）：\n${histLines}`);
+  }
   if (!contextLines.length) contextLines.push('（空文档）');
 
   return {
     system: `你是 jareking 文档助手的规划器。用户给出对文档的修改指令，你输出要执行的操作序列。
 ${OPS_MANUAL}
+
+多轮对话：若提供了对话历史，结合它理解当前指令中的指代与省略（如"再润色一遍""第二段也这样"）。
 
 输出格式：只输出一个 JSON 对象 {"operations":[...],"explanation":"一句话说明你做了什么"}。
 禁止输出 markdown 代码块、注释或 JSON 以外的任何文字。`,

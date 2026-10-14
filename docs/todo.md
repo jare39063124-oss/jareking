@@ -142,7 +142,13 @@
   - **全链路 GUI 冒烟通过**：设置 mock LLM → AI 面板发指令 → 文档真实变更（aiDocChanged）+ 执行摘要展示，0 控制台错误
 - [x] **T4.4** Writer AI 技能：格式指令、内容指令、润色/续写/翻译/摘要；选中浮动工具条
   - 完成（2026-10-13，核心部分）：AIPanel 快捷技能条（润色选区/续写/翻译为英文/总结全文/插入表格）——预设指令走同一条 Planner→Executor 管道；自由指令并行支持
-  - **后续迭代**：选中浮动工具条（选区上方浮出 AI 按钮，更贴近 Word 体验）
+  - **选中浮动工具条 —— 已落地（2026-10-14 晚）**：`writer/FloatingAiBar.tsx` 自实现（不引入 @tiptap/extension-bubble-menu，免 v2/v3 版本漂移）——选区非空时经 `view.coordsAtPos` 在选区上方浮出（润色/译英/改写/总结），走 `aiRunner` 共享管线，执行结果与撤销统一写入 aiChatStore（与面板共用撤销入口）
+- [x] **T4.7** 侧边栏对话：多轮对话、文档上下文注入（当前文档/选中区域）、历史会话
+  - 完成（2026-10-13，核心部分）：文档上下文注入（全文节选 1500 字 + 当前选区）已在 Planner prompt；侧边栏对话 UI 已实现（消息列表/忙碌态/错误反馈）
+  - **多轮对话 + 历史持久化 —— 已落地（2026-10-14 晚）**：`DocContextSummary.history`（最近 6 轮随指令进 Planner prompt，system 提示理解「再/第二段」等指代）；消息经 `stores/aiChatStore.ts` 持久化 localStorage（jk-ai-chat-v1，重启续聊，加载时过滤崩溃残留的未完成占位）；标题栏「新会话」清空
+- [x] **AI 执行可回退（T4.9 前置，2026-10-14 晚落地）**：三端全覆盖——Writer：`aiRunner.ts` 执行前 `getJSON` 快照，面板/浮动条消息带「↩ 撤销本次」（`aiChatStore.undoFns` 内存态，重启后撤销不可用属预期）；Sheet：执行前 `univerSnapshotToJk` 整簿快照，撤销经 `createWb` 重建；PPT：`structuredClone(pres)` 快照整份恢复。**顺带修复 op 组合缺陷**：`setColor`/`setFormat` 在无选区时 TipTap stored mark 会被 `insertContent` 丢弃 → opsExecutor 引入 `pendingMarks`（无选区设格式暂存，随下一次 `insertText` 以 marks 参数落盘；color 挂 `textStyle` mark 的 color 属性而非独立 mark）
+- [x] **T4.9** **Phase 验收**：20 条预置指令（10 文档 + 10 表格）执行成功率 ≥ 90%；每次操作可撤销
+  - **完成（2026-10-14 晚）：24/24（100%）**——`scripts/ai-ops-acceptance.mjs`（mock LLM 按指令关键词返回确定性 ops，**最长 key 优先匹配**防「表格验收一」撞子串「验收一」；断言轮询等待防异步竞态）。覆盖 Writer 10 类 op（insertText/insertParagraph/heading/insertTable/hr/setColor/setFormat/undo/redo/formatNumbers）+ Sheet 全类（setValue 数字与字符串/setValues/setFormula/组合/数据问答）+ 撤销恢复断言（W1/W4/W10/S1）+ undo/redo op 往返。0 控制台错误；桌面 32/32 单测 + typecheck + GUI 冒烟全绿
 - [x] **T4.5** Sheet AI 技能：公式生成（自然语言 → 公式）、数据汇总、图表生成、数据洞察
   - 完成（2026-10-13）：Sheet ops 协议（setFormula/setValue/setValues，A1 记法，zod 判别联合）+ createSheetPlanner（表格 CSV 节选作上下文，数据问题类指令直接在 explanation 回答）+ sheetOpsExecutor（Univer 门面确定性执行）；SheetEditor 工具栏加 AI 输入（公式生成/数据写入/数据问答）
   - **排掉两个 Univer 深坑**（写入被静默拦截，弹「范围已保护」对话框）：① sheet 配置键必须用 Univer 默认 id（sheet-01…），自造键名与权限点注册错位；② 创建后需逐表调 getWorksheetPermission().unprotect() 解除默认创建者保护（文档的 FPermission.removeWorksheetPermission 在 1.0.4 未实现）
@@ -151,12 +157,7 @@
   - 完成（2026-10-13）：Presentation ops 协议（addSlide：标题+要点，高层 op）+ createPresentationPlanner（大纲→成稿，封面→内容→结尾结构化输出）+ SlideEditor 执行器（标题 32pt 居中 + 要点 20pt 项目符号排版）；工具栏 AI 输入
   - 全链路 GUI 冒烟：mock LLM → AI 指令 → 幻灯片真实追加（2→3 页），0 控制台错误
   - 后续迭代：模板套用/配图/细粒度形状 ops
-- [x] **T4.7** 侧边栏对话：多轮对话、文档上下文注入（当前文档/选中区域）、历史会话
-  - 完成（2026-10-13，核心部分）：文档上下文注入（全文节选 1500 字 + 当前选区）已在 Planner prompt；侧边栏对话 UI 已实现（消息列表/忙碌态/错误反馈）
-  - **后续迭代**：多轮对话上下文传递（当前每条指令独立规划）、历史会话持久化
-- [ ] **T4.8** 积分扣费打通：本地积分扣减；平台托管模式预留（服务器就绪后启用）
-  - **暂缓（2026-10-13 决策）**：v1 商业模式为「自带 Key 不扣积分」（见 spec），无平台托管 AI；PointsLedger 基础设施已就绪（T0.4），平台托管模式启用时再接扣费；AI usage 计量已在适配层返回（T4.1），扣费只需按 usage×费率写账
-- [ ] **T4.9** **Phase 验收**：20 条预置指令（10 文档 + 10 表格）执行成功率 ≥ 90%；每次操作可撤销
+  - （T4.7 多轮对话升级 / T4.9 Phase 验收已完成，见 T4.4 条目后统一记录）
 
 ## Phase 5 — PDF
 

@@ -1,26 +1,28 @@
 /**
- * AI 助手侧边面板（T4.3 接线）。
+ * AI 助手侧边面板（T4.3 接线；T4.7 多轮对话；可回退撤销入口）。
  *
- * 流程：用户指令 → 取启用的 AI 配置（aiStore + IPC resolveKey）→
- * createWriterPlanner（LLM-as-Planner）→ plan → applyWriterOps 确定性执行。
- * 面板仅展示计划说明与执行结果；文档修改全部经本地 Executor。
+ * 流程：用户指令 → runWriterAi（aiRunner 共享管线：Planner 含对话历史 →
+ * 执行前快照 → applyWriterOps 确定性执行）→ 面板展示摘要 + 「撤销」按钮。
+ * 消息经 aiChatStore 持久化（localStorage），重启可续聊；快照仅内存态。
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import { Bot, FileUp, Hash, LayoutTemplate, PanelRightClose, Send, Sparkles, Wand2 } from 'lucide-react';
-import { createAiAdapter, createWriterPlanner, FORMAT_TEMPLATES } from '@jareking/ai';
+import { Bot, FileUp, Hash, LayoutTemplate, PanelRightClose, RotateCcw, Send, Sparkles, Wand2 } from 'lucide-react';
+import { FORMAT_TEMPLATES } from '@jareking/ai';
 import { extractFormatProfile } from '@jareking/writer';
 import { IconButton } from './IconButton';
 import { Input } from './Input';
 import { toast } from '../stores/toastStore';
 import { useUiStore } from '../stores/uiStore';
 import { useAiStore } from '../stores/aiStore';
+import {
+  useAiChatStore,
+  recentAiHistory,
+  registerAiUndo,
+  performAiUndo,
+} from '../stores/aiChatStore';
 import { getActiveEditor } from '../writer/editorRef';
 import { applyWriterOps } from '../writer/opsExecutor';
-
-interface ChatItem {
-  role: 'user' | 'assistant';
-  content: string;
-}
+import { runWriterAiOnActive } from '../writer/aiRunner';
 
 /** T4.4 快捷技能（预设指令，走同一条 Planner→Executor 管道） */
 const QUICK_SKILLS: { label: string; instruction: string }[] = [
@@ -47,6 +49,8 @@ const TIDY_TOOLS: { label: string; title: string; icon: typeof Wand2; op: () => 
   },
 ];
 
+let runSeq = 0;
+
 export function AIPanel() {
   const toggleAiPanel = useUiStore((state) => state.toggleAiPanel);
   const aiPanelWidth = useUiStore((state) => state.aiPanelWidth);
@@ -56,8 +60,12 @@ export function AIPanel() {
   const loadConfigs = useAiStore((s) => s.load);
   const resolveKey = useAiStore((s) => s.resolveKey);
 
+  const messages = useAiChatStore((s) => s.messages);
+  const appendMsg = useAiChatStore((s) => s.append);
+  const updateMsg = useAiChatStore((s) => s.update);
+  const clearChat = useAiChatStore((s) => s.clear);
+
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<ChatItem[]>([]);
   const [busy, setBusy] = useState(false);
   const referenceInputRef = useRef<HTMLInputElement>(null);
 
@@ -104,59 +112,49 @@ export function AIPanel() {
     else toast.warning(result.skipped[0]?.reason ?? '套用失败');
   };
 
+  /** 撤销一次 AI 执行（按 runId 找快照恢复） */
+  const undoRun = (runId: string, msgId: string) => {
+    if (performAiUndo(runId)) {
+      updateMsg(msgId, { undone: true });
+      toast.success('已撤销本次 AI 操作');
+    } else {
+      toast.warning('该操作的撤销已不可用');
+      updateMsg(msgId, { undone: true });
+    }
+  };
+
   const send = async (raw?: string) => {
     const instruction = (raw ?? input).trim();
     if (!instruction || busy) return;
     setInput('');
-    setMessages((m) => [...m, { role: 'user', content: instruction }]);
+    appendMsg({ role: 'user', content: instruction });
 
     const editor = getActiveEditor();
     if (!editor) {
-      setMessages((m) => [...m, { role: 'assistant', content: '请先打开一个文字文档，AI 助手才能操作它。' }]);
+      appendMsg({ role: 'assistant', content: '请先打开一个文字文档，AI 助手才能操作它。' });
       return;
     }
     const config = configs.find((c) => c.enabled);
     if (!config) {
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', content: '还没有可用的 AI 服务商配置。请打开「设置 → AI 服务商」添加并启用一个。' },
-      ]);
+      appendMsg({
+        role: 'assistant',
+        content: '还没有可用的 AI 服务商配置。请打开「设置 → AI 服务商」添加并启用一个。',
+      });
       return;
     }
 
     setBusy(true);
-    setMessages((m) => [...m, { role: 'assistant', content: '正在规划操作…' }]);
+    const pendingId = appendMsg({ role: 'assistant', content: '正在规划操作…' });
     try {
-      const key = await resolveKey(config.id);
-      const adapter = createAiAdapter(config, key);
-      const planner = createWriterPlanner({ adapter });
-
-      const { from, to, empty } = editor.state.selection;
-      const plan = await planner.planWriter(instruction, {
-        text: editor.getText().slice(0, 1500),
-        selection: empty ? undefined : editor.state.doc.textBetween(from, to, '\n'),
-      });
-
-      const result = applyWriterOps(editor, plan.ops);
-      const summary = [
-        plan.explanation || '已执行计划',
-        `✅ ${result.applied.length} 个操作成功`,
-        result.skipped.length ? `⚠️ ${result.skipped.length} 个跳过（${result.skipped.map((s) => s.op).join('、')}）` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-      setMessages((m) => {
-        const next = [...m];
-        next[next.length - 1] = { role: 'assistant', content: summary };
-        return next;
-      });
+      // 多轮上下文：最近几轮对话随指令进 Planner（排除刚 append 的占位）
+      const history = messages.slice(-6).map((m) => ({ role: m.role, content: m.content }));
+      const result = await runWriterAiOnActive(instruction, history);
+      const runId = `run-${Date.now()}-${++runSeq}`;
+      registerAiUndo(runId, result.undo);
+      updateMsg(pendingId, { content: result.summary, runId });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setMessages((m) => {
-        const next = [...m];
-        next[next.length - 1] = { role: 'assistant', content: `执行失败：${msg}` };
-        return next;
-      });
+      updateMsg(pendingId, { content: `执行失败：${msg}` });
       toast.warning('AI 执行失败');
     } finally {
       setBusy(false);
@@ -206,10 +204,22 @@ export function AIPanel() {
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-3">
         <Sparkles size={14} className="text-accent" aria-hidden="true" />
         <span className="text-ui font-medium text-fg">AI 助手</span>
+        {messages.length > 0 && (
+          <IconButton
+            label="开新会话（清空当前对话）"
+            size="sm"
+            className="ml-auto"
+            icon={<RotateCcw size={14} />}
+            onClick={() => {
+              clearChat();
+              toast.success('已开新会话');
+            }}
+          />
+        )}
         <IconButton
           label="收起 AI 助手面板"
           size="sm"
-          className="ml-auto"
+          className={messages.length > 0 ? '' : 'ml-auto'}
           icon={<PanelRightClose size={15} />}
           onClick={toggleAiPanel}
         />
@@ -282,18 +292,18 @@ export function AIPanel() {
             <Bot size={28} className="text-muted" aria-hidden="true" />
             <p className="text-body text-fg">用自然语言指挥 AI 修改文档</p>
             <p className="text-tiny leading-relaxed text-muted">
-              例如：「把选区加粗」「在文末插入 3×3 表格」
+              支持多轮对话（"再润色一遍""第二段也这样"）
               <br />
-              「加一段总结」「标题改成红色」
+              每次 AI 执行后可一键撤销
             </p>
             {configs.length === 0 && (
               <p className="text-tiny text-warning">尚未配置 AI 服务商，请到「设置 → AI 服务商」添加。</p>
             )}
           </div>
         )}
-        {messages.map((m, i) => (
+        {messages.map((m) => (
           <div
-            key={i}
+            key={m.id}
             className={`max-w-[92%] whitespace-pre-wrap rounded px-2.5 py-1.5 text-body ${
               m.role === 'user'
                 ? 'self-end bg-accent/10 text-fg'
@@ -301,6 +311,19 @@ export function AIPanel() {
             }`}
           >
             {m.content}
+            {m.role === 'assistant' && m.runId && !m.undone && (
+              <button
+                type="button"
+                title="恢复到本次 AI 执行前的文档状态"
+                className="mt-1 block rounded border border-border px-1.5 py-0.5 text-tiny text-muted transition-colors hover:border-accent hover:text-accent"
+                onClick={() => undoRun(m.runId!, m.id)}
+              >
+                ↩ 撤销本次
+              </button>
+            )}
+            {m.role === 'assistant' && m.undone && (
+              <span className="mt-1 block text-tiny text-muted">（已撤销）</span>
+            )}
           </div>
         ))}
         {busy && <div className="self-start text-tiny text-muted">AI 思考中…</div>}

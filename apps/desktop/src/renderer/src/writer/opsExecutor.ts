@@ -16,15 +16,37 @@ export interface ApplyResult {
 
 const normalizeColor = (c: string) => (c.startsWith('#') ? c : `#${c}`);
 
+/** 无选区时 setColor/setFormat 的待应用格式（随下一次 insertText 以 marks 落盘） */
+interface PendingMark {
+  type: string;
+  attrs?: Record<string, unknown>;
+}
+
 export function applyWriterOps(editor: Editor, ops: WriterOp[]): ApplyResult {
   const applied: string[] = [];
   const skipped: ApplyResult['skipped'] = [];
+  const pendingMarks: PendingMark[] = [];
+
+  /** 无选区时把格式暂存为 pendingMark（TipTap stored mark 会被 insertContent 丢弃） */
+  const stashMarkIfNoSelection = (): boolean => {
+    const { empty } = editor.state.selection;
+    return empty;
+  };
 
   for (const op of ops) {
     try {
       switch (op.op) {
         case 'insertText': {
-          editor.chain().focus().insertContent(op.text).run();
+          if (pendingMarks.length) {
+            editor
+              .chain()
+              .focus()
+              .insertContent({ type: 'text', text: op.text, marks: pendingMarks.map((m) => ({ type: m.type, attrs: m.attrs ?? {} })) })
+              .run();
+            pendingMarks.length = 0;
+          } else {
+            editor.chain().focus().insertContent(op.text).run();
+          }
           applied.push(op.op);
           break;
         }
@@ -35,6 +57,11 @@ export function applyWriterOps(editor: Editor, ops: WriterOp[]): ApplyResult {
           break;
         }
         case 'setFormat': {
+          if (stashMarkIfNoSelection()) {
+            pendingMarks.push({ type: op.mark, attrs: {} });
+            applied.push(op.op);
+            break;
+          }
           const chain = editor.chain().focus();
           if (op.value) chain.setMark(op.mark).run();
           else chain.unsetMark(op.mark).run();
@@ -75,6 +102,12 @@ export function applyWriterOps(editor: Editor, ops: WriterOp[]): ApplyResult {
           break;
         }
         case 'setColor': {
+          if (stashMarkIfNoSelection()) {
+            // TipTap 的 Color 扩展不是独立 mark，颜色挂在 textStyle mark 的 color 属性上
+            pendingMarks.push({ type: 'textStyle', attrs: { color: normalizeColor(op.color) } });
+            applied.push(op.op);
+            break;
+          }
           editor.chain().focus().setColor(normalizeColor(op.color)).run();
           applied.push(op.op);
           break;

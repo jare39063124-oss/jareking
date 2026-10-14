@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor } from "@tiptap/react";
 import { setActiveEditor } from "./editorRef";
+import { FloatingAiBar } from "./FloatingAiBar";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -760,6 +761,9 @@ export function WriterEditor() {
           <EditorContent editor={editor} />
         </div>
       </div>
+
+      {/* T4.4 选中浮动 AI 工具条（选区非空时浮出） */}
+      {editor && <FloatingAiBar editor={editor} />}
 
       {/* 隐藏的文件选择器 */}
       <input
