@@ -237,12 +237,17 @@
 - **#47 Sheet 样式回写断裂 —— 根治**：`apps/desktop/src/renderer/src/sheet/univerAdapter.ts` 实现 `JkCellStyle ↔ IStyleData` 双向映射 + `StyleRegistry` 去重；`univerAdapter.test.ts` 7/7 通过。保存 Univer 编辑出的填充/字体/边框/对齐不再丢失。
 - **#48 Writer 域降级 —— 建模**：`packages/writer` 模型/解析/导出/编辑器链路全贯通 `field`（简单 `fldSimple` + 复杂 `fldChar`/`instrText` 状态机，含 `w:r` 内嵌套）；`test/field.test.ts` 3/3 通过。跨程序（Word/WPS）打开后页码/目录/公式按指令重算。
 - **#46 大文件稳定性 —— 安全降级缓解**：`lib/largeFile.ts` 统一阈值与文案；`WriterEditor`/`SlideEditor` 加 `LoadingOverlay`（解析不冻结 UI）+ 可关闭大文件横幅 + PPT 缩略图虚拟化（DOM 节点数恒定）。交互不卡死、不崩溃。
+- **#46-B 图片 Blob URL 化 —— 已落地（2026-10-15）**：新增 `writer/mediaRegistry.ts`（relId → 字节 + Blob URL，revoke 生命周期）+ `writer/jkImage.ts`（扩展 Image 保留 `data-jk-media`）；`jkToHtml`/`htmlToJk` 支持可选 `mediaMap`/`mediaBytes`，显示侧用 Blob URL（DOM 不再持 base64，消除双倍内存），保存凭 `data-jk-media` 从注册表取回字节（blob: 不可还原问题消除）；`WriterEditor` 接入加载建 / 保存回写 / 卸载 revoke。新增 `mediaRegistry.test.ts` 6 测，桌面 14/14 单测 + typecheck + GUI 冒烟全绿。
 
 ### ⏸ 暂缓（深层架构债，明确不丢项，排入 M3 性能专项前）
-- **#46-A Writer 文档级虚拟化/分页**：当前 `setContent(jkToHtml(jk))` 整篇合成一个 HTML 交给 ProseMirror，无分页/虚拟化。大文档仍有内存压力。→ 接入分块加载或虚拟滚动。
-- **#46-B 图片 Blob URL 化**：当前 `media`（图片二进制）经 base64 data URL 进入 HTML，等于内存双倍占用。→ 改为 `URL.createObjectURL` + 生命周期管理。
-- **#46-C Sheet/PPT 超大文件分块解析**：`docxParser`/`xlsxParser`/`pptxParser` 全量入内存。→ 流式/分块解析（如 worker 解析 + 增量提交）。
-- 上述三项已记入 `lib/largeFile.ts` 文件头注释，M3（T8.3 性能专项）优先处理。
+- **#46-A Writer 文档级虚拟化/分页**：当前 `setContent(jkToHtml(jk))` 整篇合成一个 HTML 交给 ProseMirror，无分页/虚拟化。大文档（纯文本/无图）仍有内存压力。→ 接入分块加载或虚拟滚动（见下方评估）。
+- **#46-C Sheet/PPT 超大文件分块解析**：`docxParser`/`xlsxParser`/`pptxParser` 全量入内存。→ 流式/分块解析（如 worker 解析 + 增量提交，见下方评估）。
+- 上述两项已记入 `lib/largeFile.ts` 文件头注释，M3（T8.3 性能专项）优先处理。
+
+### 🔍 #46-A / #46-C 评估（2026-10-15）
+- **#46-A 难度：高**。ProseMirror 原生全量渲染，真正的节点级虚拟滚动需自定义 node view + 窗口化（社区无成熟方案），改动面大、回归风险高。最小可行缓解：① 仅对**超阈值文档**延迟/分块 setContent（先渲染首屏若干段落，余下滚动到视区再 append）；② 或引入分页（每页一个 ProseMirror 实例）。建议作为独立专项，不在普通优化轮次顺手做。
+- **#46-C 难度：中高**。docx/xlsx/pptx 本质 zip of XML，全量 `JSZip.loadAsync` 占内存。最小可行缓解：① 解析迁移到 Web Worker（主线程不冻结，已有 LoadingOverlay 过渡）；② 改用流式 zip 读取（如 `yauzl` 流式）逐条目解析，避免一次性解压。需重构加载链路（消息化）。同样建议独立专项。
+- 结论：#46-B 已消除"图片双倍内存"这一最普遍的内存炸弹；#46-A/#46-C 留给 M3 性能专项，本次仅完成评估与文档登记，不丢项。
 
 ### 复查澄清（非缺口，留痕避免重复排查）
 - **命名样式**：复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已完整贯通 Word 命名样式（Heading 1 等），并非真实缺口。
