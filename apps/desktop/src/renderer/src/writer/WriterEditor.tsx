@@ -103,6 +103,31 @@ function ToolBtn({
 export function WriterEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
+  // 必须显式加 backgroundColor 属性，才能在编辑器内渲染并在 getHTML 时回写 style，
+  // 进而被 htmlToJk 读回模型（否则底纹在打开→编辑→保存后丢失）。
+  const backgroundColorAttr = {
+    backgroundColor: {
+      default: null as string | null,
+      parseHTML: (element: HTMLElement) =>
+        (element.style.backgroundColor as string) || null,
+      renderHTML: (attributes: Record<string, unknown>) =>
+        attributes.backgroundColor
+          ? { style: `background-color: ${attributes.backgroundColor}` }
+          : {},
+    },
+  };
+  const extendWithBg = (node: any) =>
+    node.extend({
+      addAttributes() {
+        return { ...(this.parent?.() ?? {}), ...backgroundColorAttr };
+      },
+    });
+  const TableCellWithBg = extendWithBg(TableCell);
+  const TableHeaderWithBg = extendWithBg(TableHeader);
+  const TableRowWithBg = extendWithBg(TableRow);
+  const TableWithBg = extendWithBg(Table);
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -121,10 +146,10 @@ export function WriterEditor() {
         HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
       }),
       ParagraphTextAlign.configure({ types: ['heading', 'paragraph'] }),
-      Table.configure({ resizable: true }),
-      TableRow,
-      TableHeader,
-      TableCell,
+      TableWithBg.configure({ resizable: true }),
+      TableRowWithBg,
+      TableHeaderWithBg,
+      TableCellWithBg,
       Image,
     ],
     content: '',

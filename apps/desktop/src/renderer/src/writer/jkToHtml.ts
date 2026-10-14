@@ -24,6 +24,7 @@ import type {
   Run,
   RunProperties,
   Table as JkTable,
+  TableShading,
 } from '@jareking/writer';
 
 /** 转义 HTML 文本节点中的特殊字符 */
@@ -43,6 +44,13 @@ function colorToCss(color: string): string {
 /** 半磅字号（half-point）→ 磅（pt）字符串，如 24 → "12pt" */
 function halfPointToPt(size: number): string {
   return `${(size / 2).toString()}pt`;
+}
+
+/** 底纹填充（6 位十六进制，不含 #）→ CSS background-color 片段；非纯十六进制或缺失返回 '' */
+function shdBackground(shd?: TableShading): string {
+  if (!shd?.fill) return '';
+  if (!/^[0-9A-Fa-f]{6}$/.test(shd.fill)) return '';
+  return `background-color:${colorToCss(shd.fill)};`;
 }
 
 /** 段落属性 → 标题级别 1~6；无则返回 null（普通段落） */
@@ -212,23 +220,32 @@ function renderCellBlocks(
     .join('');
 }
 
-/** 渲染表格 → <table><tbody><tr><td> */
+/** 渲染表格 → <table><tbody><tr><td>（含单元格/行/表格三级底纹） */
 function renderTable(
   t: JkTable,
   relMap: Map<string, string>,
   mediaMap: Map<string, string>,
 ): string {
   const jc = alignToCss(t.tablePr?.jc);
-  const alignStyle = jc && jc !== 'left' ? ` style="margin-left:auto;margin-right:auto"` : '';
+  const alignStyle = jc && jc !== 'left' ? 'margin-left:auto;margin-right:auto;' : '';
+  const tblBg = shdBackground(t.tablePr?.shd);
+  const tableStyle = [alignStyle, tblBg].filter(Boolean).join(' ');
+  const tableAttr = tableStyle ? ` style="${tableStyle}"` : '';
   const rows = t.rows
-    .map(
-      (tr) =>
-        `<tr>${tr.cells
-          .map((cell) => `<td>${renderCellBlocks(cell.blocks, relMap, mediaMap)}</td>`)
-          .join('')}</tr>`,
-    )
+    .map((tr) => {
+      const rowBg = shdBackground(tr.rowPr?.shd);
+      const trAttr = rowBg ? ` style="${rowBg}"` : '';
+      const cells = tr.cells
+        .map((cell) => {
+          const cellBg = shdBackground(cell.cellPr?.shd);
+          const tdAttr = cellBg ? ` style="${cellBg}"` : '';
+          return `<td${tdAttr}>${renderCellBlocks(cell.blocks, relMap, mediaMap)}</td>`;
+        })
+        .join('');
+      return `<tr${trAttr}>${cells}</tr>`;
+    })
     .join('');
-  return `<table${alignStyle}><tbody>${rows}</tbody></table>`;
+  return `<table${tableAttr}><tbody>${rows}</tbody></table>`;
 }
 
 /**

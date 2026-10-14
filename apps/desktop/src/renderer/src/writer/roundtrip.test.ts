@@ -143,3 +143,51 @@ describe('T1.6 字体/颜色/字号/超链接 编辑后保存不丢', () => {
   });
 });
 
+describe('T-表格底纹(shd) 编辑器保存闭环', () => {
+  const html = `
+    <p>普通段落</p>
+    <table style="background-color:#f2f2f2">
+      <tbody>
+        <tr style="background-color:#d9e2f3">
+          <td style="background-color:#ffff00"><p>甲</p></td>
+          <td><p>乙</p></td>
+        </tr>
+        <tr>
+          <td><p>丙</p></td>
+          <td><p>丁</p></td>
+        </tr>
+      </tbody>
+    </table>
+  `;
+
+  it('htmlToJk 解析单元格/行/表格三级底纹', () => {
+    const doc = htmlToJk(html);
+    const table = doc.body.find((b) => b.type === 'table') as any;
+    expect(table).toBeDefined();
+    // 单元格底纹
+    expect(table.rows[0].cells[0].cellPr?.shd?.fill).toBe('ffff00');
+    // 行底纹
+    expect(table.rows[0].rowPr?.shd?.fill).toBe('d9e2f3');
+    // 表格底纹
+    expect(table.tablePr?.shd?.fill).toBe('f2f2f2');
+  });
+
+  it('jkToHtml 回写 background-color（单元格/行/表格三级）', () => {
+    const doc = htmlToJk(html);
+    const html2 = jkToHtml(doc);
+    expect(html2).toContain('background-color:#ffff00');
+    expect(html2).toContain('background-color:#d9e2f3');
+    expect(html2).toContain('background-color:#f2f2f2');
+  });
+
+  it('底纹经由 exportDocx 写入 w:shd 并在再解析后保留', async () => {
+    const doc = htmlToJk(html);
+    const exported = await exportDocx(doc);
+    const reparsed = await parseDocx(exported);
+    const table = reparsed.body.find((b) => b.type === 'table') as any;
+    expect(table.rows[0].cells[0].cellPr?.shd?.fill).toBe('ffff00');
+    expect(table.rows[0].rowPr?.shd?.fill).toBe('d9e2f3');
+    expect(table.tablePr?.shd?.fill).toBe('f2f2f2');
+  });
+});
+

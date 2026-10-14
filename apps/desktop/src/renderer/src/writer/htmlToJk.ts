@@ -29,6 +29,7 @@ import type {
   Table as JkTable,
   TableCell as JkTableCell,
   TableRow as JkTableRow,
+  TableShading,
 } from '@jareking/writer';
 
 /** 默认编号定义（保存时注入）：ol → numId "1"(decimal)，ul → numId "2"(bullet) */
@@ -62,6 +63,13 @@ function defaultNumbering(): Numbering {
 /** CSS 颜色 → 模型 6 位十六进制（不含 #）；无法识别则原样返回小写 */
 function normalizeColor(input: string): string {
   let c = input.trim();
+  // rgb()/rgba() → 6 位十六进制（浏览器常把 #fff 规范化为 rgb(...)）
+  const rgb = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/.exec(c);
+  if (rgb) {
+    const toHex = (n: string) =>
+      Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, '0');
+    return (toHex(rgb[1]) + toHex(rgb[2]) + toHex(rgb[3])).toLowerCase();
+  }
   if (c.startsWith('#')) c = c.slice(1);
   if (/^[0-9a-fA-F]{3}$/.test(c)) {
     // #rgb → #rrggbb
@@ -84,6 +92,22 @@ function fontSizeToHalfPoint(value: number, unit: string): number {
 function cleanRPr(rPr: RunProperties): RunProperties | undefined {
   if (Object.keys(rPr).length === 0) return undefined;
   return rPr;
+}
+
+/** 从元素的 inline style（或 bgcolor 属性）读取底纹填充；非纯 6 位十六进制返回 undefined */
+function readShd(el: Element): TableShading | undefined {
+  const style = el.getAttribute('style') ?? '';
+  let raw = '';
+  const m = /(?:^|;)\s*background-color:\s*([^;]+)/.exec(style);
+  if (m) raw = m[1].trim();
+  else {
+    const bg = el.getAttribute('bgcolor');
+    if (bg) raw = bg.trim();
+  }
+  if (!raw) return undefined;
+  const fill = normalizeColor(raw);
+  if (!/^[0-9a-f]{6}$/.test(fill)) return undefined;
+  return { fill };
 }
 
 interface ParseCtx {
@@ -313,28 +337,37 @@ function parseCellBlocks(el: Element, ctx: ParseCtx): Block[] {
   return blocks;
 }
 
-/** 解析表格 → Table */
+/** 解析表格 → Table（含单元格/行/表格三级底纹） */
 function parseTable(el: Element, ctx: ParseCtx): JkTable {
+  const tableShd = readShd(el);
   const rows: JkTableRow[] = [];
   el.querySelectorAll(':scope > tbody > tr, :scope > tr').forEach((trEl) => {
     const rowEl = trEl as Element;
+    const rowShd = readShd(rowEl);
     const cells: JkTableCell[] = [];
     rowEl.querySelectorAll(':scope > td, :scope > th').forEach((tdEl) => {
       const cellEl = tdEl as Element;
-      cells.push({
+      const cellShd = readShd(cellEl);
+      const cell: JkTableCell = {
         type: 'tableCell',
         blocks: parseCellBlocks(cellEl, ctx),
-      });
+      };
+      if (cellShd) cell.cellPr = { ...cell.cellPr, shd: cellShd };
+      cells.push(cell);
     });
-    rows.push({ type: 'tableRow', cells });
+    const row: JkTableRow = { type: 'tableRow', cells };
+    if (rowShd) row.rowPr = { ...row.rowPr, shd: rowShd };
+    rows.push(row);
   });
 
   const colCount = rows.length ? rows[0].cells.length : 0;
-  return {
+  const table: JkTable = {
     type: 'table',
     rows,
     grid: { cols: new Array(colCount).fill(0) },
   };
+  if (tableShd) table.tablePr = { ...table.tablePr, shd: tableShd };
+  return table;
 }
 
 /**

@@ -27,6 +27,7 @@ import type {
   TableCellProperties,
   TableProperties,
   TableRow,
+  TableShading,
 } from '../model/document.js';
 import { emuToTwips } from './units.js';
 import { escapeXmlAttr, escapeXmlText, rawNodeToParts } from './xml.js';
@@ -276,6 +277,8 @@ function serializeTblPr(tp?: TableProperties): string {
     const m = serializeTableCellMargin(tp.cellMargin);
     if (m) parts.push(m);
   }
+  const shd = serializeShd(tp.shd);
+  if (shd) parts.push(shd);
   return parts.length ? `<w:tblPr>${parts.join('')}</w:tblPr>` : '';
 }
 
@@ -307,10 +310,23 @@ function serializeTableRow(tr: TableRow, ctx: Ctx): string {
     const h = tr.rowPr.height !== undefined ? emuToTwips(tr.rowPr.height) : undefined;
     if (h !== undefined) rp.push(`<w:trHeight w:val="${h}"/>`);
     if (tr.rowPr.headerRepeat) rp.push('<w:tblHeader/>');
+    const shd = serializeShd(tr.rowPr.shd);
+    if (shd) rp.push(shd);
     if (rp.length) parts.push(`<w:trPr>${rp.join('')}</w:trPr>`);
   }
   for (const cell of tr.cells) parts.push(serializeTableCell(cell, ctx));
   return `<w:tr>${parts.join('')}</w:tr>`;
+}
+
+/** 底纹序列化（对应 w:shd）。fill 存在但 val 缺失时补 clear，确保填充生效。 */
+function serializeShd(shd?: TableShading): string {
+  if (!shd || (!shd.fill && !shd.color && !shd.val)) return '';
+  const val = shd.val ?? (shd.fill ? 'clear' : undefined);
+  const attrs: string[] = [];
+  if (val) attrs.push(`w:val="${escapeXmlAttr(val)}"`);
+  if (shd.color) attrs.push(`w:color="${escapeXmlAttr(shd.color)}"`);
+  if (shd.fill) attrs.push(`w:fill="${escapeXmlAttr(shd.fill)}"`);
+  return `<w:shd ${attrs.join(' ')}/>`;
 }
 
 function serializeTableCell(tc: TableCell, ctx: Ctx): string {
@@ -329,6 +345,8 @@ function serializeTableCell(tc: TableCell, ctx: Ctx): string {
       const b = serializeTableBorders(cp.borders, 'tcBorders');
       if (b) cpa.push(b);
     }
+    const shd = serializeShd(cp.shd);
+    if (shd) cpa.push(shd);
     if (cpa.length) parts.push(`<w:tcPr>${cpa.join('')}</w:tcPr>`);
   }
   const blocks = tc.blocks.length

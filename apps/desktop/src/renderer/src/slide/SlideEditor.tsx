@@ -24,12 +24,15 @@ import {
   Square,
   Trash2,
   Type,
+  BarChart3,
 } from 'lucide-react';
 import { createAiAdapter, createPresentationPlanner, type PresentationOp } from '@jareking/ai';
 import { exportPptx, parsePptx, type JkPresentation, type JkShape, type JkSlide } from '@jareking/presentation';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
+import { renderChartToPng, type ChartType } from '../writer/chartRenderer';
+import { Modal } from '../components/Modal';
 import { useAiStore } from '../stores/aiStore';
 import { SlideshowOverlay } from './SlideshowOverlay';
 
@@ -146,6 +149,15 @@ function bytesToDataUrl(bytes: Uint8Array): string {
   return `data:image/png;base64,${btoa(bin)}`;
 }
 
+/** dataURL → media 字节（图表/图片插入用） */
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+  const b64 = dataUrl.split(',')[1] ?? '';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 /** 加载 dataURL → HTMLImageElement（Konva.Image 需要） */
 function useLoadedImages(urls: string[]): Record<string, HTMLImageElement> {
   const [loaded, setLoaded] = useState<Record<string, HTMLImageElement>>({});
@@ -194,6 +206,13 @@ export function SlideEditor() {
   const loadAiConfigs = useAiStore((st) => st.load);
   const resolveKey = useAiStore((st) => st.resolveKey);
 
+  // 图表插入（用户反馈：PPT 数据页可视化难）——复用 writer/chartRenderer + 图片管线
+  const [chartOpen, setChartOpen] = useState(false);
+  const [chartType, setChartType] = useState<ChartType>('bar');
+  const [chartTitle, setChartTitle] = useState('季度营收');
+  const [chartLabels, setChartLabels] = useState('Q1,Q2,Q3,Q4');
+  const [chartSeries, setChartSeries] = useState('营收|120,158,203,241');
+
   useEffect(() => {
     if (!aiLoaded) void loadAiConfigs();
   }, [aiLoaded, loadAiConfigs]);
@@ -218,7 +237,7 @@ export function SlideEditor() {
     if (!slide) return [];
     return slide.shapes
       .filter((s) => s.type === 'image')
-      .map((s) => `${s.id}`)
+      .map((s) => `${s.relId}`)
       .map((key) => {
         const bytes = pres.media?.[`${slideIdx}:${key}`];
         return bytes ? bytesToDataUrl(bytes) : '';
@@ -304,6 +323,60 @@ export function SlideEditor() {
     toast.success('已插入图片');
   };
 
+  /** 插入图表：复用图表渲染器生成 PNG → 走图片插入管线 */
+  const addChart = () => {
+    const labels = chartLabels.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    if (!labels.length) {
+      toast.warning('请填写类别（逗号分隔）');
+      return;
+    }
+    const series = chartSeries
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line, i) => {
+        const idx = line.search(/[|｜]/);
+        const name = idx >= 0 ? line.slice(0, idx).trim() : `系列${i + 1}`;
+        const vals = (idx >= 0 ? line.slice(idx + 1) : line)
+          .split(/[,，]/)
+          .map((s) => Number(s.trim()))
+          .filter((v) => Number.isFinite(v));
+        return { name, values: vals };
+      });
+    if (!series.length || series.some((s) => !s.values.length)) {
+      toast.warning('请填写数据（每行：名称|值1,值2,…）');
+      return;
+    }
+    const dataUrl = renderChartToPng(chartType, labels, series, chartTitle.trim());
+    if (!dataUrl) {
+      toast.warning('图表渲染失败');
+      return;
+    }
+    const bytes = dataUrlToBytes(dataUrl);
+    const relId = `img-${Date.now().toString(36)}`;
+    const w = 2743200;
+    const h = Math.round((w * 520) / 880);
+    const cx = (pres.slideWidth - w) / 2;
+    const cy = (pres.slideHeight - h) / 2;
+    setPres((prev) => {
+      const slides = [...prev.slides];
+      slides[slideIdx] = {
+        ...slides[slideIdx],
+        shapes: [
+          ...slides[slideIdx].shapes,
+          { type: 'image', id: nextId(), relId, x: cx, y: cy, w, h },
+        ],
+      };
+      return {
+        ...prev,
+        slides,
+        media: { ...prev.media, [`${slideIdx}:${relId}`]: bytes },
+      };
+    });
+    toast.success('已插入图表');
+    setChartOpen(false);
+  };
+
   const deleteSelected = () => {
     if (!selectedId) return;
     updateShapes((shapes) => shapes.filter((s) => s.id !== selectedId));
@@ -379,11 +452,19 @@ export function SlideEditor() {
   /** 调试钩子（--jk-debug）：供自动化冒烟断言与触发 */
   const aiRunRef = useRef(runPresentationAi);
   aiRunRef.current = runPresentationAi;
+  const addChartRunRef = useRef(addChart);
+  addChartRunRef.current = addChart;
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has('jk-debug')) {
       (window as unknown as Record<string, unknown>).__jkSlideDebug = {
         runPresentationAi: (instruction: string) => aiRunRef.current(instruction),
         slideCount: () => pres.slides.length,
+        imageCount: () =>
+          pres.slides.flatMap((s) => s.shapes).filter((sh) => sh.type === 'image').length,
+        mediaCount: () => Object.keys(pres.media ?? {}).length,
+        insertChart: () => addChartRunRef.current(),
+        renderChartTest: () =>
+          renderChartToPng('bar', ['A', 'B'], [{ name: 'x', values: [1, 2] }], 't')?.length ?? -1,
       };
     }
   });
@@ -598,6 +679,9 @@ export function SlideEditor() {
           <Button variant="ghost" size="sm" icon={<ImageIcon size={13} />} onClick={() => imgInputRef.current?.click()}>
             图片
           </Button>
+          <Button variant="ghost" size="sm" icon={<BarChart3 size={13} />} onClick={() => setChartOpen(true)}>
+            图表
+          </Button>
           <span className="mx-1 h-5 w-px bg-border" />
           <Button variant="ghost" size="sm" icon={<Copy size={13} />} disabled={!selectedId} onClick={duplicateSelected}>
             复制
@@ -697,6 +781,52 @@ export function SlideEditor() {
           onClose={() => setPlaying(false)}
         />
       )}
+
+      <Modal
+        open={chartOpen}
+        onClose={() => setChartOpen(false)}
+        title="插入图表"
+        footer={<Button variant="primary" size="sm" onClick={addChart}>插入</Button>}
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex items-center gap-2">
+            <span className="w-10 text-tiny text-muted">类型</span>
+            <div className="flex gap-1">
+              {(['bar', 'line', 'pie'] as ChartType[]).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setChartType(t)}
+                  className={`rounded border px-2 py-1 text-tiny ${chartType === t ? 'border-accent bg-accent/10 text-accent' : 'border-border text-muted hover:bg-hover'}`}
+                >
+                  {t === 'bar' ? '柱状' : t === 'line' ? '折线' : '饼图'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-10 text-tiny text-muted">标题</span>
+            <Input className="flex-1" value={chartTitle} onChange={(e) => setChartTitle(e.target.value)} placeholder="图表标题" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-10 text-tiny text-muted">类别</span>
+            <Input className="flex-1" value={chartLabels} onChange={(e) => setChartLabels(e.target.value)} placeholder="Q1,Q2,Q3（逗号分隔）" />
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-1 w-10 text-tiny text-muted">数据</span>
+            <textarea
+              className="flex-1 rounded border border-border bg-surface p-2 text-body text-fg outline-none"
+              rows={4}
+              value={chartSeries}
+              onChange={(e) => setChartSeries(e.target.value)}
+              placeholder={'每行一个系列：名称|值1,值2,…\n例：营收|120,158,203,241'}
+            />
+          </div>
+          <p className="text-tiny leading-relaxed text-muted">
+            图表以图片形式插入当前页，可拖动调整位置与大小，并随 .pptx 一并保存。
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }

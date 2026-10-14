@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { IconButton } from './IconButton';
@@ -15,8 +15,20 @@ export interface ModalProps {
   width?: number;
 }
 
-/** 模态面板：遮罩点击关闭、Esc 关闭、标题栏 + 可滚动内容区 */
+/**
+ * 模态面板：遮罩点击关闭、Esc 关闭、标题栏 + 可滚动内容区。
+ *
+ * 注意：portal 目标挂到 #root 内部（而非 document.body）。React 事件委托根在 #root，
+ * 若弹窗渲染到 document.body（#root 的兄弟节点），其内部按钮的 onClick 无法被 React
+ * 捕获——这会导致所有弹窗的按钮点击失效（如本组件此前的问题）。挂到 #root 内部可修复。
+ */
 export function Modal({ open, onClose, title, children, footer, width = 520 }: ModalProps) {
+  const [container] = useState(() => {
+    const el = document.createElement('div');
+    el.className = 'jk-modal-portal';
+    return el;
+  });
+
   // Esc 关闭（打开期间监听）
   useEffect(() => {
     if (!open) return;
@@ -29,6 +41,16 @@ export function Modal({ open, onClose, title, children, footer, width = 520 }: M
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, onClose]);
+
+  // 挂载 portal 容器到 #root 内部（仅打开时挂载，关闭/卸载时移除）
+  useEffect(() => {
+    const root = document.getElementById('root');
+    if (!root) return;
+    if (open) root.appendChild(container);
+    return () => {
+      if (container.parentNode) container.parentNode.removeChild(container);
+    };
+  }, [open, container]);
 
   if (!open) return null;
 
@@ -57,6 +79,6 @@ export function Modal({ open, onClose, title, children, footer, width = 520 }: M
         ) : null}
       </div>
     </div>,
-    document.body,
+    container,
   );
 }

@@ -62,6 +62,7 @@ import type {
   TableProperties,
   TableRow,
   TableRowProperties,
+  TableShading,
 } from '../model/document.js';
 import type { UnsupportedFeature, UnsupportedFeatureKind } from '../model/fidelity.js';
 import { unsupportedFeature } from '../model/fidelity.js';
@@ -561,6 +562,8 @@ function parseTableProperties(tblPr: any): TableProperties | undefined {
   if (borders) tp.borders = borders;
   const cellMargin = parseTableCellMargin(tblPr.tblCellMar);
   if (cellMargin) tp.cellMargin = cellMargin;
+  const shd = parseShd(tblPr.shd);
+  if (shd) tp.shd = shd;
   return Object.keys(tp).length ? tp : undefined;
 }
 
@@ -570,7 +573,23 @@ function parseTableRowProperties(trPr: any): TableRowProperties | undefined {
   const h = tw2emu(getAttr(trPr.trHeight, '@_val'));
   if (h !== undefined) trp.height = h;
   if (trPr.tblHeader !== undefined) trp.headerRepeat = true;
+  const shd = parseShd(trPr.shd);
+  if (shd) trp.shd = shd;
   return Object.keys(trp).length ? trp : undefined;
+}
+
+/** 解析底纹（对应 w:shd：单元格/行/表格通用）。无有效属性返回 undefined。 */
+function parseShd(shd: any): TableShading | undefined {
+  if (!shd) return undefined;
+  const val = getAttr(shd, '@_val');
+  const color = getAttr(shd, '@_color');
+  const fill = getAttr(shd, '@_fill');
+  if (!val && !color && !fill) return undefined;
+  const out: TableShading = {};
+  if (val) out.val = val;
+  if (color) out.color = color;
+  if (fill) out.fill = fill;
+  return out;
 }
 
 function parseTableCellProperties(tcPr: any): TableCellProperties | undefined {
@@ -586,6 +605,8 @@ function parseTableCellProperties(tcPr: any): TableCellProperties | undefined {
   if (vm === 'restart' || vm === 'continue') cp.vMerge = vm;
   const borders = parseTableBorders(tcPr.tcBorders);
   if (borders) cp.borders = borders;
+  const shd = parseShd(tcPr.shd);
+  if (shd) cp.shd = shd;
   return Object.keys(cp).length ? cp : undefined;
 }
 

@@ -329,6 +329,8 @@ export interface TableProperties extends ModelExtra {
   borders?: TableBorders;
   /** 单元格边距（对应 w:tblCellMar） */
   cellMargin?: TableCellMargin;
+  /** 表格底纹（对应 w:tblPr/w:shd） */
+  shd?: TableShading;
 }
 
 /** 表格边框（对应 w:tblBorders：top/left/bottom/right/insideH/insideV） */
@@ -359,12 +361,24 @@ export interface TableCellMargin {
   right?: number;
 }
 
+/** 底纹/底纹填充（对应 w:shd：单元格、行、表格三级通用） */
+export interface TableShading {
+  /** 图案值（w:val，如 clear/solid）；通常 clear，表示以 fill 为底 */
+  val?: string;
+  /** 前景色（w:color，主题色或 auto）；通常 auto */
+  color?: string;
+  /** 背景填充色（w:fill，6 位十六进制，不含 #）；为实际可见底纹色 */
+  fill?: string;
+}
+
 /** 行属性（对应 w:trPr） */
 export interface TableRowProperties extends ModelExtra {
   /** 行高（EMU，对应 w:trHeight） */
   height?: number;
   /** 跨页重复表头（对应 w:tblHeader） */
   headerRepeat?: boolean;
+  /** 行底纹（对应 w:trPr/w:shd） */
+  shd?: TableShading;
 }
 
 /** 单元格属性（对应 w:tcPr） */
@@ -379,6 +393,8 @@ export interface TableCellProperties extends ModelExtra {
   vMerge?: 'restart' | 'continue';
   /** 单元格边框（对应 w:tcBorders） */
   borders?: TableBorders;
+  /** 单元格底纹（对应 w:tcPr/w:shd） */
+  shd?: TableShading;
 }
 
 /* =========================================================================

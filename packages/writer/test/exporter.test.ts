@@ -207,4 +207,49 @@ describe('T1.5 docx 导出器', () => {
     // 关系也保留
     expect(doc2.relationships.find((r) => r.id === 'rId7')?.target).toBe('media/image1.png');
   });
+
+  it('5. 表格底纹(shd) 保真：单元格/行/表格三级解析→导出→再解析', async () => {
+    const body = `
+      <w:tbl>
+        <w:tblPr>
+          <w:tblW w:w="9000" w:type="dxa"/>
+          <w:shd w:val="clear" w:color="auto" w:fill="F2F2F2"/>
+        </w:tblPr>
+        <w:tblGrid><w:gridCol w:w="4500"/><w:gridCol w:w="4500"/></w:tblGrid>
+        <w:tr>
+          <w:trPr><w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/></w:trPr>
+          <w:tc>
+            <w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/></w:tcPr>
+            <w:p><w:r><w:t>A1</w:t></w:r></w:p>
+          </w:tc>
+          <w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>
+        </w:tr>
+      </w:tbl>
+    `;
+    const input = await buildDocx({ body });
+    const doc1 = await parseDocx(input);
+    const t1 = tableBlock(doc1)!;
+    expect(t1).toBeDefined();
+
+    // 解析阶段：三级底纹都被读入模型
+    expect(t1.tablePr?.shd?.fill).toBe('F2F2F2');
+    expect(t1.rows[0].rowPr?.shd?.fill).toBe('D9E2F3');
+    expect(t1.rows[0].cells[0].cellPr?.shd?.fill).toBe('FFFF00');
+
+    // 导出阶段：document.xml 含对应 w:shd（含 w:fill）
+    const out = await exportDocx(doc1);
+    const zip = await JSZip.loadAsync(out);
+    const docXml = await zip.file('word/document.xml')!.async('string');
+    expect(docXml).toContain('<w:shd');
+    expect(docXml).toContain('w:fill="F2F2F2"');
+    expect(docXml).toContain('w:fill="D9E2F3"');
+    expect(docXml).toContain('w:fill="FFFF00"');
+
+    // 再解析阶段：三级底纹仍保留
+    const doc2 = await parseDocx(out);
+    const t2 = tableBlock(doc2)!;
+    expect(t2.tablePr?.shd?.fill).toBe('F2F2F2');
+    expect(t2.rows[0].rowPr?.shd?.fill).toBe('D9E2F3');
+    expect(t2.rows[0].cells[0].cellPr?.shd?.fill).toBe('FFFF00');
+  });
 });

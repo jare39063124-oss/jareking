@@ -568,7 +568,43 @@ async function main() {
     true,
   );
   llm3.close();
+
+  // PPT 图表插入（用户反馈：PPT 数据页可视化难）——复用图表渲染器 + 图片管线
+  results.pptChartBefore = await cdp.eval(`window.__jkSlideDebug?.imageCount?.() ?? -1`);
+  results.pptChartBtnCount = await cdp.eval(
+    `[...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === '图表').length`,
+  );
+  results.pptChartRender = await cdp.eval(`window.__jkSlideDebug?.renderChartTest?.() ?? -1`);
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '图表');
+    if (btn) btn.click();
+  })()`);
+  await sleep(800);
+  results.pptChartModalOpen = await cdp.eval(`document.body.innerText.includes('插入图表')`);
+  // 注意：必须在 [role="dialog"] 弹窗内查找「插入」按钮。若直接全局匹配，
+  // 会误命中功能区同名「插入」按钮——因为其祖先 #root 包含了弹窗标题「插入图表」文本。
+  results.pptChartInsertFound = await cdp.eval(`(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) return false;
+    return [...dialog.querySelectorAll('button')].some((b) => b.textContent.trim() === '插入');
+  })()`);
+  // 弹窗「插入」点击（UI 接线诊断）——限定在弹窗内
+  await cdp.eval(`(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) return;
+    const target = [...dialog.querySelectorAll('button')].find((b) => b.textContent.trim() === '插入');
+    if (target) target.click();
+  })()`);
+  await sleep(1200);
+  results.pptChartAfterModal = await cdp.eval(`window.__jkSlideDebug?.imageCount?.() ?? -1`);
+  // 兜底：直接调用插入管线，验证功能本身（与弹窗点击结果对比定位接线问题）
+  await cdp.eval(`window.__jkSlideDebug?.insertChart?.()`);
+  await sleep(1200);
+  results.pptChartAfter = await cdp.eval(`window.__jkSlideDebug?.imageCount?.() ?? -1`);
+
   if (results.pptAiSent !== 'sent' || results.pptAiSlideCount !== 3) failed = true;
+  // 关键验证：弹窗「插入」按钮点击（UI 接线）必须真正插入图片——这是 Modal portal 修复的验收点
+  if (results.pptChartRender <= 0 || results.pptChartAfterModal <= results.pptChartBefore || results.pptChartAfter <= results.pptChartBefore) failed = true;
 
   // 8. PDF 工具箱（文件菜单入口）
   await cdp.eval(`location.reload()`, true).catch(() => {});
