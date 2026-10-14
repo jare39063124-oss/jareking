@@ -41,11 +41,12 @@ import {
   ZoomIn,
   ZoomOut,
   FileCog,
+  ChevronUp,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useEffect } from 'react';
 import { Tabs } from './Tabs';
 import { toastNotImplemented } from '../stores/toastStore';
-import { useUiStore } from '../stores/uiStore';
 import { useUiStore, type RibbonTabId } from '../stores/uiStore';
 
 /** Ribbon 占位工具按钮 */
@@ -234,8 +235,29 @@ export function Ribbon() {
   const setPdfToolboxOpen = useUiStore((state) => state.setPdfToolboxOpen);
   const activeRibbonTab = useUiStore((state) => state.activeRibbonTab);
   const setActiveRibbonTab = useUiStore((state) => state.setActiveRibbonTab);
+  const ribbonCollapsed = useUiStore((state) => state.ribbonCollapsed);
+  const setRibbonCollapsed = useUiStore((state) => state.setRibbonCollapsed);
+  const toggleRibbonCollapsed = useUiStore((state) => state.toggleRibbonCollapsed);
 
   const activeTabDef = RIBBON_TABS.find((tab) => tab.id === activeRibbonTab) ?? RIBBON_TABS[1];
+
+  // Ctrl+F1 切换功能区折叠（与 Office/WPS 一致）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'F1' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        toggleRibbonCollapsed();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleRibbonCollapsed]);
+
+  /** 切换标签：折叠态下点标签即展开（Office/WPS 的"点标签预览"行为） */
+  const handleTabChange = (id: string) => {
+    setActiveRibbonTab(id as RibbonTabId);
+    if (ribbonCollapsed) setRibbonCollapsed(false);
+  };
 
   return (
     <div className="flex shrink-0 flex-col border-b border-border bg-surface">
@@ -244,50 +266,53 @@ export function Ribbon() {
         <Tabs
           items={RIBBON_TABS.map((tab) => ({ id: tab.id, label: tab.label }))}
           value={activeRibbonTab}
-          onChange={(id) => setActiveRibbonTab(id as RibbonTabId)}
+          onChange={handleTabChange}
         />
-        {/* 折叠 Ribbon 的占位按钮（对齐 WPS 右侧 ^ 按钮） */}
+        {/* 折叠/展开功能区（对齐 WPS 右侧 ^ 按钮） */}
         <button
           type="button"
-          title="折叠功能区"
+          title={ribbonCollapsed ? '展开功能区 (Ctrl+F1)' : '折叠功能区 (Ctrl+F1)'}
+          aria-pressed={ribbonCollapsed}
           className="ml-auto flex h-7 w-7 items-center justify-center rounded-sm text-muted transition-colors hover:bg-hover hover:text-fg"
-          onClick={() => toastNotImplemented('折叠功能区')}
+          onClick={toggleRibbonCollapsed}
         >
-          <ChevronDown size={15} />
+          {ribbonCollapsed ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
         </button>
       </div>
 
-      {/* 工具组行 */}
-      <div className="flex h-[86px] items-stretch gap-0.5 overflow-x-auto px-2 pb-1.5">
-        {activeTabDef.groups.map((group, groupIndex) => (
-          <div key={group.name} className="flex items-stretch">
-            {/* 组间分隔线 */}
-            {groupIndex > 0 ? <div className="mx-1 w-px shrink-0 bg-border" aria-hidden="true" /> : null}
-            <div className="flex flex-col items-center rounded-sm px-1.5 py-1 transition-colors hover:bg-muted-bg">
-              {/* 工具按钮 */}
-              <div className="flex flex-1 items-start gap-0.5">
-                {group.tools.map((tool) => (
-                  <button
-                    key={tool.id}
-                    type="button"
-                    title={tool.label}
-                    className="flex w-[52px] flex-col items-center gap-1 rounded-sm p-1.5 text-tiny text-fg transition-colors hover:bg-active"
-                    onClick={() => {
-                      if (tool.id === 'pdf-toolbox') setPdfToolboxOpen(true);
-                      else toastNotImplemented(tool.label);
-                    }}
-                  >
-                    <tool.icon size={18} aria-hidden="true" />
-                    <span className="w-full text-center leading-tight">{tool.label}</span>
-                  </button>
-                ))}
+      {/* 工具组行（折叠时隐藏，给文档更多显示空间） */}
+      {!ribbonCollapsed && (
+        <div className="flex h-[86px] items-stretch gap-0.5 overflow-x-auto px-2 pb-1.5">
+          {activeTabDef.groups.map((group, groupIndex) => (
+            <div key={group.name} className="flex items-stretch">
+              {/* 组间分隔线 */}
+              {groupIndex > 0 ? <div className="mx-1 w-px shrink-0 bg-border" aria-hidden="true" /> : null}
+              <div className="flex flex-col items-center rounded-sm px-1.5 py-1 transition-colors hover:bg-muted-bg">
+                {/* 工具按钮 */}
+                <div className="flex flex-1 items-start gap-0.5">
+                  {group.tools.map((tool) => (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      title={tool.label}
+                      className="flex w-[52px] flex-col items-center gap-1 rounded-sm p-1.5 text-tiny text-fg transition-colors hover:bg-active"
+                      onClick={() => {
+                        if (tool.id === 'pdf-toolbox') setPdfToolboxOpen(true);
+                        else toastNotImplemented(tool.label);
+                      }}
+                    >
+                      <tool.icon size={18} aria-hidden="true" />
+                      <span className="w-full text-center leading-tight">{tool.label}</span>
+                    </button>
+                  ))}
+                </div>
+                {/* 组名（底部） */}
+                <span className="select-none pt-1 text-tiny text-muted">{group.name}</span>
               </div>
-              {/* 组名（底部） */}
-              <span className="select-none pt-1 text-tiny text-muted">{group.name}</span>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

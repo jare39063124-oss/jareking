@@ -18,6 +18,10 @@ interface UiState {
   pdfToolboxOpen: boolean;
   /** Ribbon 当前激活的菜单标签 */
   activeRibbonTab: RibbonTabId;
+  /** 功能区（工具组行）是否折叠——折叠后仅保留菜单标签行，给文档更多显示空间 */
+  ribbonCollapsed: boolean;
+  /** AI 助手面板宽度（px），可拖拽调整，给文档更多显示空间 */
+  aiPanelWidth: number;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
   setAiPanelOpen: (open: boolean) => void;
@@ -26,6 +30,9 @@ interface UiState {
   setCommandPaletteOpen: (open: boolean) => void;
   setPdfToolboxOpen: (open: boolean) => void;
   setActiveRibbonTab: (tab: RibbonTabId) => void;
+  setRibbonCollapsed: (collapsed: boolean) => void;
+  toggleRibbonCollapsed: () => void;
+  setAiPanelWidth: (width: number) => void;
 }
 
 /** 将主题写入 <html data-theme>，驱动 CSS 变量切换 */
@@ -40,6 +47,8 @@ export const useUiStore = create<UiState>()((set) => ({
   commandPaletteOpen: false,
   pdfToolboxOpen: false,
   activeRibbonTab: 'home',
+  ribbonCollapsed: false,
+  aiPanelWidth: 320,
 
   setTheme: (theme) => {
     applyTheme(theme);
@@ -59,6 +68,9 @@ export const useUiStore = create<UiState>()((set) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setPdfToolboxOpen: (open) => set({ pdfToolboxOpen: open }),
   setActiveRibbonTab: (tab) => set({ activeRibbonTab: tab }),
+  setRibbonCollapsed: (collapsed) => set({ ribbonCollapsed: collapsed }),
+  toggleRibbonCollapsed: () => set((state) => ({ ribbonCollapsed: !state.ribbonCollapsed })),
+  setAiPanelWidth: (width) => set({ aiPanelWidth: Math.min(560, Math.max(240, Math.round(width))) }),
 }));
 
 // 初始化：确保首屏即应用当前主题（避免刷新/深色环境下闪烁）

@@ -5,7 +5,7 @@
  * createWriterPlanner（LLM-as-Planner）→ plan → applyWriterOps 确定性执行。
  * 面板仅展示计划说明与执行结果；文档修改全部经本地 Executor。
  */
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { Bot, FileUp, Hash, LayoutTemplate, PanelRightClose, Send, Sparkles, Wand2 } from 'lucide-react';
 import { createAiAdapter, createWriterPlanner, FORMAT_TEMPLATES } from '@jareking/ai';
 import { extractFormatProfile } from '@jareking/writer';
@@ -49,6 +49,8 @@ const TIDY_TOOLS: { label: string; title: string; icon: typeof Wand2; op: () => 
 
 export function AIPanel() {
   const toggleAiPanel = useUiStore((state) => state.toggleAiPanel);
+  const aiPanelWidth = useUiStore((state) => state.aiPanelWidth);
+  const setAiPanelWidth = useUiStore((state) => state.setAiPanelWidth);
   const configs = useAiStore((s) => s.configs);
   const loaded = useAiStore((s) => s.loaded);
   const loadConfigs = useAiStore((s) => s.load);
@@ -168,8 +170,38 @@ export function AIPanel() {
     }
   };
 
+  /** 拖拽左边缘调整面板宽度（给文档更多/更少空间） */
+  const startResize = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = aiPanelWidth;
+    const onMove = (ev: MouseEvent) => setAiPanelWidth(startW + (startX - ev.clientX));
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   return (
-    <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-surface">
+    <aside
+      className="relative flex shrink-0 flex-col border-l border-border bg-surface"
+      style={{ width: aiPanelWidth }}
+    >
+      {/* 左侧拖拽手柄（调整宽度，给文档更多显示空间） */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        title="拖拽调整 AI 面板宽度"
+        className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize bg-transparent transition-colors hover:bg-accent/40"
+        onMouseDown={startResize}
+      />
+
       {/* 面板标题栏 */}
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border px-3">
         <Sparkles size={14} className="text-accent" aria-hidden="true" />
