@@ -24,6 +24,17 @@ import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import { exportDocx, parseDocx } from '@jareking/writer';
+import type { Block, JkDocument } from '@jareking/writer';
+import {
+  applyChunkEdits,
+  collectImageRelIds,
+  computeChunkRanges,
+  extractChunk,
+  maxMediaSeq,
+  maxRelSeq,
+  WRITER_CHUNK_BLOCK_THRESHOLD,
+} from './chunking';
+import type { ChunkRange } from './chunking';
 import {
   Bold,
   Download,
@@ -61,10 +72,15 @@ import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
 
 /** 从解析后的文档登记图片字节并构建 relId → Blob URL 映射（#46-B） */
-function buildMediaMap(jk: import('@jareking/writer').JkDocument, reg: MediaRegistry): Map<string, string> {
+function buildMediaMap(
+  jk: import('@jareking/writer').JkDocument,
+  reg: MediaRegistry,
+  relIdFilter?: Set<string>,
+): Map<string, string> {
   const map = new Map<string, string>();
   for (const rel of jk.relationships ?? []) {
     if (rel.type !== 'image') continue;
+    if (relIdFilter && !relIdFilter.has(rel.id)) continue;
     const bytes = jk.media?.[rel.id];
     if (!bytes) continue;
     const ext = (rel.target.split('.').pop() ?? 'png').toLowerCase();
@@ -128,6 +144,16 @@ export function WriterEditor() {
   const mediaRegistryRef = useRef<MediaRegistry>();
   if (!mediaRegistryRef.current) mediaRegistryRef.current = new MediaRegistry();
 
+  // #46-A 分块编辑：完整文档留内存作真源；编辑器只渲染 body 的一个切片，DOM 节点数受限
+  const fullDocRef = useRef<JkDocument | null>(null);
+  const chunkRangesRef = useRef<ChunkRange[]>([]);
+  const currentRangeRef = useRef<ChunkRange>({ start: 0, end: 0 });
+  const [chunkMode, setChunkMode] = useState(false);
+  const [chunkIndex, setChunkIndex] = useState(0);
+  // 镜像 ref，供调试钩子读取实时值（避免闭包捕获初始 state）
+  const chunkModeRef = useRef(false);
+  const chunkIndexRef = useRef(0);
+
   // 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
   // 必须显式加 backgroundColor 属性，才能在编辑器内渲染并在 getHTML 时回写 style，
   // 进而被 htmlToJk 读回模型（否则底纹在打开→编辑→保存后丢失）。
@@ -189,6 +215,74 @@ export function WriterEditor() {
     return () => setActiveEditor(null);
   }, [editor]);
 
+  // #46-A 分块编辑核心：完整文档在内存作真源，编辑器只渲染 body 的一个切片
+  /** 把当前编辑器内容解析并写回整文对应切片（切换/保存前调用） */
+  const flushCurrentChunk = () => {
+    const ed = editor;
+    const full = fullDocRef.current;
+    if (!ed || !full) return;
+    const range = currentRangeRef.current;
+    const html = ed.getHTML();
+    const mediaBytes = new Map<string, Uint8Array>();
+    for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
+    // 续号起点：避免分块内新生成的 rId 与整文既有关系冲突
+    const edited = htmlToJk(html, mediaBytes, maxRelSeq(full), maxMediaSeq(full));
+    applyChunkEdits(full, range, edited.body, edited);
+  };
+
+  /** 渲染某个切片到编辑器 */
+  const renderChunk = (
+    index: number,
+    docOverride?: JkDocument,
+    rangesOverride?: ChunkRange[],
+  ) => {
+    const ed = editor;
+    const doc = docOverride ?? fullDocRef.current;
+    if (!ed || !doc) return;
+    const ranges = rangesOverride ?? chunkRangesRef.current;
+    const clamped = Math.max(0, Math.min(index, ranges.length - 1));
+    const range = ranges[clamped];
+    const reg = mediaRegistryRef.current!;
+    reg.clear();
+    const chunkDoc = extractChunk(doc, range);
+    const relIds = collectImageRelIds(chunkDoc);
+    const mediaMap = buildMediaMap(chunkDoc, reg, relIds);
+    const html = jkToHtml(chunkDoc, mediaMap);
+    ed.commands.setContent(html, false);
+    currentRangeRef.current = range;
+    setChunkIndex(clamped);
+    chunkIndexRef.current = clamped;
+  };
+
+  /** 切换切片：先写回当前切片，再重算区间（长度可能变化）并渲染目标切片 */
+  const goToChunk = (index: number) => {
+    const full = fullDocRef.current;
+    if (!full || !editor) return;
+    flushCurrentChunk();
+    const ranges = computeChunkRanges(full.body.length);
+    chunkRangesRef.current = ranges;
+    renderChunk(index);
+  };
+
+  /** 载入解析后的文档：决定分块模式并渲染首屏（#46-A 入口） */
+  const loadDocument = (jk: JkDocument) => {
+    const reg = mediaRegistryRef.current!;
+    reg.clear();
+    fullDocRef.current = jk;
+    const ranges = computeChunkRanges(jk.body.length);
+    chunkRangesRef.current = ranges;
+    const isChunked = jk.body.length > WRITER_CHUNK_BLOCK_THRESHOLD && ranges.length > 1;
+    setChunkMode(isChunked);
+    chunkModeRef.current = isChunked;
+    if (isChunked) {
+      renderChunk(0, jk, ranges);
+    } else {
+      const mediaMap = buildMediaMap(jk, reg);
+      const html = jkToHtml(jk, mediaMap);
+      editor!.commands.setContent(html, false);
+    }
+  };
+
   // 首次加载示例文档
   useEffect(() => {
     if (!editor) return;
@@ -204,10 +298,7 @@ export function WriterEditor() {
         const buf = new Uint8Array(await res.arrayBuffer());
         const jk = await parseDocx(buf);
         if (cancelled) return;
-        const reg = mediaRegistryRef.current!;
-        reg.clear(); // 释放上一文档的 Blob URL，避免泄漏
-        const html = jkToHtml(jk, buildMediaMap(jk, reg));
-        editor.commands.setContent(html, false); // 不触发更新广播，降低加载开销
+        loadDocument(jk);
       } catch {
         if (!cancelled) toast.warning('示例文档加载失败，已创建空白文档');
       } finally {
@@ -235,6 +326,34 @@ export function WriterEditor() {
       (window as unknown as Record<string, unknown>).__jkWriterDebug = {
         html: () => editor.getHTML(),
         text: () => editor.getText(),
+        // #46-A 验证：载入合成大文档（count 个段落），触发分块分页模式
+        loadLargeTest: (count = 2000) => {
+          const body: Block[] = [];
+          for (let i = 0; i < count; i++) {
+            body.push({
+              type: 'paragraph',
+              runs: [{ type: 'run', text: `测试段落 ${i}` }],
+            } as Block);
+          }
+          const doc = {
+            body,
+            sections: [],
+            styleDefs: { styles: [] },
+            numberingDefs: { abstractNum: [], num: [] },
+            settings: {},
+            relationships: [],
+            fidelity: { level: 'L2' as const, features: [] },
+          } as unknown as JkDocument;
+          loadDocument(doc);
+        },
+        // #46-A 验证：读取当前是否为分块模式与分页信息（实时值）
+        chunkInfo: () => ({
+          chunkMode: chunkModeRef.current,
+          chunkIndex: chunkIndexRef.current,
+          total: chunkRangesRef.current.length,
+        }),
+        // #46-A 验证：跳转到指定切片
+        goToChunk: (i: number) => goToChunk(i),
       };
     }
     return () => {
@@ -254,10 +373,7 @@ export function WriterEditor() {
       await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
       const jk = await parseDocx(buf);
-      const reg = mediaRegistryRef.current!;
-      reg.clear(); // 释放上一文档的 Blob URL，避免泄漏
-      const html = jkToHtml(jk, buildMediaMap(jk, reg));
-      editor.commands.setContent(html, false); // 不触发更新广播，降低加载开销
+      loadDocument(jk);
       setLargeHint(largeFileHint(file.size, 'word'));
       toast.success(`已打开 ${file.name}`);
     } catch {
@@ -270,11 +386,18 @@ export function WriterEditor() {
   const onSave = async () => {
     if (!editor) return;
     try {
-      const html = editor.getHTML();
-      // 凭注册表字节还原 Blob URL 图片（#46-B），新插入的 data URL 图片由 htmlToJk 解码
-      const mediaBytes = new Map<string, Uint8Array>();
-      for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
-      const jk = htmlToJk(html, mediaBytes);
+      let jk: JkDocument;
+      if (chunkMode && fullDocRef.current) {
+        // #46-A：先把当前切片写回整文，再导出完整文档（保存无损）
+        flushCurrentChunk();
+        jk = fullDocRef.current;
+      } else {
+        // 凭注册表字节还原 Blob URL 图片（#46-B），新插入的 data URL 图片由 htmlToJk 解码
+        const html = editor.getHTML();
+        const mediaBytes = new Map<string, Uint8Array>();
+        for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
+        jk = htmlToJk(html, mediaBytes);
+      }
       const buf = await exportDocx(jk);
       const blob = new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -588,6 +711,45 @@ export function WriterEditor() {
             title="关闭提示"
           >
             ×
+          </button>
+        </div>
+      )}
+
+      {/* #46-A 分块分页条：仅大文档出现，DOM 节点数受切片大小约束 */}
+      {chunkMode && (
+        <div className="flex h-8 shrink-0 items-center justify-center gap-2 border-b border-border bg-surface text-xs text-text">
+          <button
+            type="button"
+            className="rounded px-2 py-0.5 disabled:opacity-40 hover:bg-black/5"
+            disabled={chunkIndex <= 0}
+            onClick={() => goToChunk(chunkIndex - 1)}
+            title="上一段"
+          >
+            ‹
+          </button>
+          <span className="tabular-nums">
+            第 {chunkIndex + 1} / {chunkRangesRef.current.length} 段
+          </span>
+          <select
+            className="h-6 rounded border border-border bg-surface px-1 text-xs outline-none"
+            value={chunkIndex}
+            onChange={(e) => goToChunk(Number(e.target.value))}
+            title="跳转到指定段"
+          >
+            {chunkRangesRef.current.map((_, i) => (
+              <option key={i} value={i}>
+                第 {i + 1} 段
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="rounded px-2 py-0.5 disabled:opacity-40 hover:bg-black/5"
+            disabled={chunkIndex >= chunkRangesRef.current.length - 1}
+            onClick={() => goToChunk(chunkIndex + 1)}
+            title="下一段"
+          >
+            ›
           </button>
         </div>
       )}

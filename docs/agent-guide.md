@@ -150,8 +150,9 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
   - `lib/largeFile.ts` 新增 `LARGE_FILE_WARN_BYTES=30MB` / `LARGE_FILE_HARD_BYTES=200MB`、`fileSizeLevel()`、`formatBytes()`、`largeFileHint(bytes,'word'|'ppt')` —— 统一告警阈值与文案。
   - `WriterEditor.tsx`：开大文档时先 `setTimeout(0)` 让出主线程再 `setContent`，期间挂 `LoadingOverlay` 遮罩，**解析不冻结 UI**；超阈值弹可关闭的"大文件"横幅提示（非阻塞）。
   - `SlideEditor.tsx`：**缩略图条虚拟化**（按 `scrollTop` 窗口化渲染 + 5 项缓冲，绝对定位 + 占位 spacer），无论多少页 DOM 节点数恒定；`onFileChange` 包裹 loading + 滚动复位 + 尺寸告警。
-- **⏸ 暂缓（深层架构债，明确不丢项，排入后续）**：① Writer 文档级虚拟化/分页（当前整篇合成一个 HTML 给 ProseMirror，无分页）；③ Sheet/PPT 超大数据的分块解析。这些记录在 `lib/largeFile.ts` 注释与 `todo.md` 的「对抗性复检后续」清单，作为 M3 优化项。
-- **✅ ② 图片 Blob URL 化（#46-B，已落地 2026-10-15）**：新增 `writer/mediaRegistry.ts`（relId → 字节 + Blob URL，生命周期 revoke）；`jkImage.ts` 扩展 TipTap Image 保留 `data-jk-media`；`jkToHtml`/`htmlToJk` 支持可选 `mediaMap`/`mediaBytes`，显示侧用 Blob URL（DOM 不再持 base64，内存大幅下降），保存凭 `data-jk-media` 从注册表取回字节（blob: 不可还原问题消除）；`WriterEditor` 接入加载建 Blob URL / 保存回写 / 卸载 revoke。新增 `mediaRegistry.test.ts`（6 测），`roundtrip.test.ts` 回归通过。**验证**：桌面 14/14 单测通过；typecheck 通过；GUI 冒烟待构建后跑 `scripts/gui-smoke.mjs`。
+- **✅ ① 分块/分页编辑（#46-A，已落地 2026-10-15）**：真·ProseMirror DOM 节点虚拟化风险高（易破坏刚稳定的编辑器），故采用**分块编辑**——完整 `JkDocument` 留内存作唯一真源，编辑器每次只渲染 `body` 的一个切片（DOM 节点数被锁在 `WRITER_CHUNK_SIZE=300`），切换/保存前 `htmlToJk` 解析当前切片并 `applyChunkEdits` 写回整文对应区间（关系按 id 去重、媒体按 rId 写入）；仅当 `body` 块数 > `WRITER_CHUNK_BLOCK_THRESHOLD=800` 才启用，普通小文档走原单文档路径**零回归**；新增分页条 UI（‹ 第 i/N 段 › + 跳转）。配套 `htmlToJk` 增加 `relSeqStart`/`mediaSeqStart` 续号参数避免分块保存时 rId 冲突。新增 `writer/chunking.ts`（纯函数）+ `chunking.test.ts`（11 测，含切片往返保留图片）。**验证**：桌面 25/25 单测通过；typecheck 通过；GUI 冒烟（consoleErrors:[]）。
+- **⏸ 暂缓（深层架构债，明确不丢项，排入后续）**：③ Sheet/PPT 超大数据的分块解析（当前 `docxParser`/`xlsxParser`/`pptxParser` 全量入内存）。记录在 `lib/largeFile.ts` 注释与 `todo.md` 的「对抗性复检后续」清单，作为 M3 优化项。
+- **✅ ② 图片 Blob URL 化（#46-B，已落地 2026-10-15）**：新增 `writer/mediaRegistry.ts`（relId → 字节 + Blob URL，生命周期 revoke）；`jkImage.ts` 扩展 TipTap Image 保留 `data-jk-media`；`jkToHtml`/`htmlToJk` 支持可选 `mediaMap`/`mediaBytes`，显示侧用 Blob URL（DOM 不再持 base64，内存大幅下降），保存凭 `data-jk-media` 从注册表取回字节（blob: 不可还原问题消除）；`WriterEditor` 接入加载建 Blob URL / 保存回写 / 卸载 revoke。新增 `mediaRegistry.test.ts`（6 测），`roundtrip.test.ts` 回归通过。**验证**：桌面 14/14 单测通过；typecheck 通过；GUI 冒烟（consoleErrors:[]）。
 
 ### ✅ #47 Sheet 样式回写断裂（跨设备保真回归）—— 已根治
 - 旧 `sheet/univerAdapter.ts` 注释"样式暂不映射"，`styles:{}`，保存只回读公式/合并 → Univer 里改的填充/字体/边框/对齐**存盘即丢**。
@@ -204,5 +205,5 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 - ✅ 完成：Phase 0（基础设施）、Phase 1 Writer（L2）、Phase 2 Sheet（xlsx+公式+数据功能）、Phase 3 PPT 核心（开/编/存，无动画/放映）、Phase 4 AI 全链路（mock 验证）。
 - ⏸ 暂缓/未做：**Phase 5 PDF（阅读/编辑/导出全未做）**、Phase 6 商业化（未做）、Phase 7 账户（未做）、Phase 8 体验发布（未做）；Writer 高级特性（目录/批注/查找替换）、PPT 动画放映、Sheet 图表。
-- 🔧 本次（2026-10-15）已落地：#46 大文件安全降级缓解（LoadingOverlay 不冻结/尺寸告警/缩略图虚拟化）+ #46-B 图片 Blob URL 化（mediaRegistry 省内存）、#47 Sheet 样式双向映射根治（7/7 单测）、#48 Writer 域建模（简单+复杂，3/3 单测）；另含 Ribbon 折叠/AI 面板调宽/设置折叠/布局优化（2026-10-14）。
-- ⏸ 大文件深层架构债（#46 暂缓项，不丢项）：Writer 文档级虚拟化/分页、Sheet/PPT 分块解析 —— 见 `lib/largeFile.ts` 注释 + `todo.md`「对抗性复检后续」。
+- 🔧 本次（2026-10-15）已落地：#46-A 分块/分页编辑（大文档 DOM 节点数受限，门控零回归）+ #46-B 图片 Blob URL 化（mediaRegistry 省内存）+ #46 安全降级缓解（LoadingOverlay/尺寸告警/缩略图虚拟化）；#47 Sheet 样式双向映射根治（7/7 单测）、#48 Writer 域建模（简单+复杂，3/3 单测）；另含 Ribbon 折叠/AI 面板调宽/设置折叠/布局优化（2026-10-14）。
+- ⏸ 大文件深层架构债（#46 暂缓项，不丢项）：仅剩 Sheet/PPT 分块解析 —— 见 `lib/largeFile.ts` 注释 + `todo.md`「对抗性复检后续」。Writer 文档级虚拟化已由分块编辑替代（非真·节点虚拟化，但达成"大文档不整篇挂载"目标）。

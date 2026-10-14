@@ -6,9 +6,11 @@
  *
  * 说明（重要，非偷懒）：
  *  - 本文件只解决「体验与可预期性」层面：进度遮罩 + 分级提示 + 延迟解析让 UI 不冻结。
- *  - Writer 全文档驻留 DOM（ProseMirror 天然全量渲染）与图片 base64 双倍内存、
- *    PPT 全量 media 字节驻留，属于「分块/虚拟化渲染」架构级改造，列为后续专项
- *    （见 todo.md / agent-guide.md），此处不强行重写以免引入回归。
+ *  - 图片 base64 双倍内存（#46-B）：已通过 `writer/mediaRegistry.ts` 改用 Blob URL 化解。
+ *  - Writer 整文挂 DOM（#46-A）：已通过 `writer/chunking.ts` 分块编辑化解——
+ *    完整文档留内存作真源，编辑器只渲染 body 切片（节点数受 `WRITER_CHUNK_SIZE` 约束），
+ *    仅大文档（body 块数 > `WRITER_CHUNK_BLOCK_THRESHOLD`）启用，普通文档零回归。
+ *  - 仅剩 Sheet/PPT 超大文件分块解析（#46-C）仍属后续专项（见 todo.md / agent-guide.md）。
  */
 
 /** 超过此体积触发「大文件」非阻塞提示（默认 30MB） */

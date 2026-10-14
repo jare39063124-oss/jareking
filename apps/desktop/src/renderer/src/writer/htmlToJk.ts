@@ -399,11 +399,24 @@ function parseTable(el: Element, ctx: ParseCtx): JkTable {
  * @param mediaBytes 可选。调用方注入的 `relId → 字节` 映射（MediaRegistry）。
  *   当 `<img>` 带 `data-jk-media="relId"` 且该映射含此 relId 时，直接取回模型字节，
  *   避免 Blob URL 不可还原导致保存后图片丢失（#46-B）。不提供时回退 base64 解码。
+ * @param relSeqStart 可选。超链接等 `rId<n>` 序号续号起点（#46-A 分块保存用，避免与整文冲突）。
+ * @param mediaSeqStart 可选。`rIdMedia<n>` 序号续号起点（#46-A 分块保存用）。
  */
-export function htmlToJk(html: string, mediaBytes?: Map<string, Uint8Array>): JkDocument {
+export function htmlToJk(
+  html: string,
+  mediaBytes?: Map<string, Uint8Array>,
+  relSeqStart = 0,
+  mediaSeqStart = 0,
+): JkDocument {
   const parser = new DOMParser();
   const dom = parser.parseFromString(html, 'text/html');
-  const ctx: ParseCtx = { relationships: [], relSeq: 0, media: {}, mediaSeq: 0, mediaBytes };
+  const ctx: ParseCtx = {
+    relationships: [],
+    relSeq: relSeqStart,
+    media: {},
+    mediaSeq: mediaSeqStart,
+    mediaBytes,
+  };
   const blocks: Block[] = [];
 
   dom.body.childNodes.forEach((node) => {

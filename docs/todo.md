@@ -238,16 +238,16 @@
 - **#48 Writer 域降级 —— 建模**：`packages/writer` 模型/解析/导出/编辑器链路全贯通 `field`（简单 `fldSimple` + 复杂 `fldChar`/`instrText` 状态机，含 `w:r` 内嵌套）；`test/field.test.ts` 3/3 通过。跨程序（Word/WPS）打开后页码/目录/公式按指令重算。
 - **#46 大文件稳定性 —— 安全降级缓解**：`lib/largeFile.ts` 统一阈值与文案；`WriterEditor`/`SlideEditor` 加 `LoadingOverlay`（解析不冻结 UI）+ 可关闭大文件横幅 + PPT 缩略图虚拟化（DOM 节点数恒定）。交互不卡死、不崩溃。
 - **#46-B 图片 Blob URL 化 —— 已落地（2026-10-15）**：新增 `writer/mediaRegistry.ts`（relId → 字节 + Blob URL，revoke 生命周期）+ `writer/jkImage.ts`（扩展 Image 保留 `data-jk-media`）；`jkToHtml`/`htmlToJk` 支持可选 `mediaMap`/`mediaBytes`，显示侧用 Blob URL（DOM 不再持 base64，消除双倍内存），保存凭 `data-jk-media` 从注册表取回字节（blob: 不可还原问题消除）；`WriterEditor` 接入加载建 / 保存回写 / 卸载 revoke。新增 `mediaRegistry.test.ts` 6 测，桌面 14/14 单测 + typecheck + GUI 冒烟全绿。
+- **#46-A Writer 分块/分页编辑 —— 已落地（2026-10-15）**：真·ProseMirror 节点虚拟化风险高（易破坏刚稳定的编辑器），故采用**分块编辑**——完整 `JkDocument` 留内存作唯一真源，编辑器每次只渲染 `body` 一个切片（`WRITER_CHUNK_SIZE=300` 锁 DOM 节点数），切换/保存前 `htmlToJk` 解析当前切片并 `applyChunkEdits` 写回整文（关系按 id 去重、媒体按 rId 写回）；仅当 `body` 块数 > `WRITER_CHUNK_BLOCK_THRESHOLD=800` 才启用，普通文档走原单文档路径**零回归**。配套 `htmlToJk` 增 `relSeqStart`/`mediaSeqStart` 续号参数防 rId 冲突；新增分页条 UI（‹ 第 i/N 段 › + 跳转）+ `writer/chunking.ts`（纯函数）+ `chunking.test.ts`（11 测，含切片往返保留图片）。验证：桌面 25/25 单测 + typecheck + `scripts/chunk-smoke.mjs`（真实 Electron 验证 2000 段→7 块、分页条、切片内容正确、翻页无报错）+ 标准 GUI 冒烟（consoleErrors:[]）全绿。
 
 ### ⏸ 暂缓（深层架构债，明确不丢项，排入 M3 性能专项前）
-- **#46-A Writer 文档级虚拟化/分页**：当前 `setContent(jkToHtml(jk))` 整篇合成一个 HTML 交给 ProseMirror，无分页/虚拟化。大文档（纯文本/无图）仍有内存压力。→ 接入分块加载或虚拟滚动（见下方评估）。
 - **#46-C Sheet/PPT 超大文件分块解析**：`docxParser`/`xlsxParser`/`pptxParser` 全量入内存。→ 流式/分块解析（如 worker 解析 + 增量提交，见下方评估）。
-- 上述两项已记入 `lib/largeFile.ts` 文件头注释，M3（T8.3 性能专项）优先处理。
+- 已记入 `lib/largeFile.ts` 文件头注释，M3（T8.3 性能专项）优先处理。
 
-### 🔍 #46-A / #46-C 评估（2026-10-15）
-- **#46-A 难度：高**。ProseMirror 原生全量渲染，真正的节点级虚拟滚动需自定义 node view + 窗口化（社区无成熟方案），改动面大、回归风险高。最小可行缓解：① 仅对**超阈值文档**延迟/分块 setContent（先渲染首屏若干段落，余下滚动到视区再 append）；② 或引入分页（每页一个 ProseMirror 实例）。建议作为独立专项，不在普通优化轮次顺手做。
-- **#46-C 难度：中高**。docx/xlsx/pptx 本质 zip of XML，全量 `JSZip.loadAsync` 占内存。最小可行缓解：① 解析迁移到 Web Worker（主线程不冻结，已有 LoadingOverlay 过渡）；② 改用流式 zip 读取（如 `yauzl` 流式）逐条目解析，避免一次性解压。需重构加载链路（消息化）。同样建议独立专项。
-- 结论：#46-B 已消除"图片双倍内存"这一最普遍的内存炸弹；#46-A/#46-C 留给 M3 性能专项，本次仅完成评估与文档登记，不丢项。
+### 🔍 #46-A / #46-C 评估（2026-10-15 更新）
+- **#46-A —— 已落地（分块编辑，非节点虚拟化）**：原评估认为"真·节点虚拟化难度高、回归风险高"。实际落地采用分块编辑（完整文档留内存、编辑器只渲染 body 切片 + 分页条），同样达成"大文档不整篇挂载 DOM"目标，且普通文档零回归。真·节点级虚拟滚动仍不作为目标（性价比低）。
+- **#46-C 难度：中高**。docx/xlsx/pptx 本质 zip of XML，全量 `JSZip.loadAsync` 占内存。最小可行缓解：① 解析迁移到 Web Worker（主线程不冻结，已有 LoadingOverlay 过渡）；② 改用流式 zip 读取（如 `yauzl` 流式）逐条目解析，避免一次性解压。需重构加载链路（消息化）。建议独立专项。
+- 结论：#46-B（图片双倍内存）、#46-A（大文档 DOM 节点数）两项内存炸弹已消除；仅剩 #46-C（解析期峰值）留给 M3，不丢项。
 
 ### 复查澄清（非缺口，留痕避免重复排查）
 - **命名样式**：复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已完整贯通 Word 命名样式（Heading 1 等），并非真实缺口。
