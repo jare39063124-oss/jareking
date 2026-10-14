@@ -111,6 +111,17 @@ describe('pptxParser（fflate 流式）round-trip', () => {
     expect(Array.from(mediaVals[0])).toEqual(Array.from(pngBytes));
   });
 
+  it('切换效果（fade/slide）导出→解析往返保持', async () => {
+    const pres = buildPres();
+    const bytes = await exportPptx({
+      ...pres,
+      slides: pres.slides.map((s, i) => ({ ...s, transition: i === 0 ? 'fade' : 'slide' })),
+    });
+    const parsed = await parsePptx(bytes);
+    expect(parsed.slides[0].transition).toBe('fade');
+    expect(parsed.slides[1].transition).toBe('slide');
+  });
+
   it('缺少 presentation.xml 的非法包 → 抛错', async () => {
     const bad = zipSync({
       '[Content_Types].xml': new TextEncoder().encode('<?xml version="1.0"?><Types/>'),

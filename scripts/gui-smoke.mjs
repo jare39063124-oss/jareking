@@ -254,6 +254,26 @@ async function main() {
   );
   if (!results.slideshowOverlay || !results.slideshowClosed) failed = true;
 
+  // 3c. T3.3 动画切换（WPS 对齐批3）：工具栏切换下拉设「滑动」→ 放映 → 断言画布播 jk-slide-in
+  await cdp.eval(`(() => {
+    const sel = [...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'slide'));
+    if (!sel) return 'no-select';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(sel, 'slide');
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'set';
+  })()`);
+  await sleep(300);
+  results.slideTransitionSet = await cdp.eval(`window.__jkSlideDebug?.transitions?.() ?? '[]'`);
+  await cdp.eval(`(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('放映')); if (b) b.click(); })()`);
+  await sleep(900);
+  results.slideAnimPlaying = await cdp.eval(
+    `(() => { const el = document.querySelector('[class*="shadow-2xl"]'); return el ? String(el.style.animation || '').includes('jk-slide-in') : false; })()`,
+  );
+  await cdp.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await sleep(400);
+  if (!results.slideAnimPlaying) failed = true;
+
   // 4. T4.2 AI 配置端到端：保存（safeStorage 加密）→ resolve → adapter 连通 mock 网关
   const mock = http.createServer((req, res) => {
     if (req.url?.endsWith('/chat/completions')) {

@@ -475,6 +475,8 @@ export function SlideEditor() {
         runPresentationAi: (instruction: string) => aiRunRef.current(instruction),
         // #46-C 压测钩子：解析级直调（transfer 会 neuter buf.buffer）
         parseInWorker: (kind: 'xlsx' | 'pptx', buf: Uint8Array) => parseInWorker(kind, buf),
+        // T3.3：各页切换效果（断言工具栏设置生效）
+        transitions: () => pres.slides.map((s) => s.transition ?? 'none'),
         slideCount: () => pres.slides.length,
         imageCount: () =>
           pres.slides.flatMap((s) => s.shapes).filter((sh) => sh.type === 'image').length,
@@ -799,7 +801,7 @@ export function SlideEditor() {
             value={slide?.transition ?? 'none'}
             title="切换效果"
             onChange={(e) => {
-              const v = e.target.value as 'none' | 'fade';
+              const v = e.target.value as 'none' | 'fade' | 'slide';
               setPres((prev) => {
                 const slides = [...prev.slides];
                 slides[slideIdx] = { ...slides[slideIdx], transition: v };
@@ -809,6 +811,7 @@ export function SlideEditor() {
           >
             <option value="none">无切换</option>
             <option value="fade">淡入</option>
+            <option value="slide">滑动</option>
           </select>
           <span className="ml-2 text-xs text-text-secondary">拖拽移动 · 双击改文字 · 单击选中 · F5 放映</span>
         </div>

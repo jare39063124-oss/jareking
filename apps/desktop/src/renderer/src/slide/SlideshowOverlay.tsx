@@ -23,11 +23,24 @@ function RenderShape({
   shape,
   scale,
   dataUrl,
+  enterIndex,
+  animateEnter,
 }: {
   shape: JkShape;
   scale: number;
   dataUrl?: string;
+  /** 进入动画序号（-1 表示不播进入动画） */
+  enterIndex: number;
+  animateEnter: boolean;
 }) {
+  // 放映态：形状逐个淡入上移（WPS 基础进入动画感）
+  const enterStyle: React.CSSProperties =
+    animateEnter && enterIndex >= 0
+      ? {
+          animation: 'jk-enter 0.4s ease backwards',
+          animationDelay: `${enterIndex * 0.15}s`,
+        }
+      : {};
   const style: React.CSSProperties = {
     position: 'absolute',
     left: shape.x * scale,
@@ -36,6 +49,7 @@ function RenderShape({
     height: shape.h * scale,
     transform: shape.rotation ? `rotate(${shape.rotation}deg)` : undefined,
     transformOrigin: 'center center',
+    ...enterStyle,
   };
 
   if (shape.type === 'image') {
@@ -179,7 +193,7 @@ export function SlideshowOverlay({
     return map;
   }, [slide, pres.media, idx]);
 
-  const animate = slide?.transition !== 'none';
+  const transition = slide?.transition ?? 'none';
 
   return (
     <div
@@ -190,22 +204,33 @@ export function SlideshowOverlay({
         prev();
       }}
     >
-      <style>{`@keyframes jk-fade { from { opacity: 0; } to { opacity: 1; } }`}</style>
+      <style>{`
+        @keyframes jk-fade { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes jk-slide-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes jk-enter { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
       <div
         key={idx}
         className="relative bg-white shadow-2xl"
         style={{
           width: w,
           height: h,
-          animation: animate ? 'jk-fade 0.25s ease' : undefined,
+          animation:
+            transition === 'fade'
+              ? 'jk-fade 0.25s ease'
+              : transition === 'slide'
+                ? 'jk-slide-in 0.35s ease'
+                : undefined,
         }}
       >
-        {slide?.shapes.map((shape) => (
+        {slide?.shapes.map((shape, i) => (
           <RenderShape
             key={shape.id}
             shape={shape}
             scale={scale}
             dataUrl={shape.id ? imageUrls[shape.id] : undefined}
+            enterIndex={i}
+            animateEnter={transition !== 'none'}
           />
         ))}
       </div>

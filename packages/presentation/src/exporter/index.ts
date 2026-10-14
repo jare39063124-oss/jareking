@@ -153,7 +153,7 @@ function serializeSlide(
     <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
     ${parts.join('')}
   </p:spTree></p:cSld>
-  ${transition === 'fade' ? '<p:transition><p:fade/></p:transition>' : ''}
+  ${transition === 'fade' ? '<p:transition><p:fade/></p:transition>' : transition === 'slide' ? '<p:transition><p:push dir="u"/></p:transition>' : ''}
 </p:sld>`;
 }
 

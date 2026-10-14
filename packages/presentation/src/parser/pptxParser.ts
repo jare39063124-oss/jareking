@@ -335,7 +335,9 @@ function streamUnzip(
         const xml = textDecoder.decode(data);
         const slideObj = parseXml(xml);
         const spTree = slideObj?.sld?.cSld?.spTree;
-        const transition = slideObj?.sld?.transition?.fade !== undefined ? 'fade' : 'none';
+        const tr = slideObj?.sld?.transition;
+        const transition: 'none' | 'fade' | 'slide' =
+          tr?.fade !== undefined ? 'fade' : tr?.push !== undefined ? 'slide' : 'none';
         // 解析后立即丢弃 XML 字符串（仅留模型），降低峰值
         slidesByPart.set(name, {
           partName: name,
