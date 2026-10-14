@@ -196,6 +196,23 @@ async function main() {
   );
   if (!results.tidyApplied || !results.tidyNumbers) failed = true;
 
+  // 2c. WPS 对齐批2：插入目录（扫描标题→目录+TOC 域）+ 插入页码（PAGE 域）
+  await cdp.eval(
+    `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('插入目录')); if (btn) btn.click(); return !!btn; })()`,
+  );
+  await sleep(600);
+  results.tocInserted = await cdp.eval(
+    `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('目录') && h.includes('data-jk-field="TOC'); })()`,
+  );
+  await cdp.eval(
+    `(() => { const btn = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('插入页码')); if (btn) btn.click(); return !!btn; })()`,
+  );
+  await sleep(400);
+  results.pageFieldInserted = await cdp.eval(
+    `(() => { const h = window.__jkWriterDebug?.html?.() ?? ''; return h.includes('data-jk-field="PAGE"'); })()`,
+  );
+  if (!results.tocInserted || !results.pageFieldInserted) failed = true;
+
   // 3. Slide：再次刷新回空状态，点击演示模块
   await cdp.eval(`location.reload()`, true).catch(() => {});
   await sleep(2500);

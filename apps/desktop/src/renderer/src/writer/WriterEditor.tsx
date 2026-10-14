@@ -15,6 +15,7 @@ import { setActiveEditor } from "./editorRef";
 import { FloatingAiBar } from "./FloatingAiBar";
 import { FONT_GROUPS } from "./fonts";
 import { FindReplaceBar, EditorStatusBar } from "./FindReplaceBar";
+import { buildTocEntries, buildTocContent } from "./tocBuilder";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -42,6 +43,7 @@ import {
   Bold,
   Download,
   FolderOpen,
+  Hash,
   Heading1,
   Heading2,
   Heading3,
@@ -50,6 +52,7 @@ import {
   Image as ImageIcon,
   List,
   ListOrdered,
+  ListTree,
   Redo2,
   SeparatorHorizontal,
   Strikethrough,
@@ -689,6 +692,34 @@ export function WriterEditor() {
           label="插入分页符"
           disabled={!canFormat}
           onClick={() => editor?.chain().focus().setHorizontalRule().run()}
+        />
+        <ToolBtn
+          icon={<Hash size={15} />}
+          label="插入页码"
+          disabled={!canFormat}
+          onClick={() => {
+            if (!editor) return;
+            editor
+              .chain()
+              .focus()
+              .insertContent({ type: 'jkField', attrs: { instr: 'PAGE', result: '1' } })
+              .run();
+          }}
+        />
+        <ToolBtn
+          icon={<ListTree size={15} />}
+          label="插入目录"
+          disabled={!canFormat}
+          onClick={() => {
+            if (!editor) return;
+            const entries = buildTocEntries(editor.state.doc);
+            if (!entries.length) {
+              toast.warning('文档中没有标题，先设置标题层级再插入目录');
+              return;
+            }
+            editor.chain().focus().insertContent(buildTocContent(entries)).run();
+            toast.success(`已插入目录（${entries.length} 个条目）`);
+          }}
         />
 
         <span className="mx-1 h-5 w-px bg-border" />

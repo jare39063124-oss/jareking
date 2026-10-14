@@ -22,11 +22,12 @@
 - Writer 字数统计状态栏（WPS 口径：字数/字符两档）
 - 字体库合规落地（字体下拉三分组，docs/fonts.md）
 
-### 批 2（下一批，预计 T5.3 前后融合）
-- Writer 页眉页脚 + 页码插入 UI（域已建模 T48，缺 UI 入口）
-- Writer 目录自动生成（TOC 域渲染）
-- 全模块「导出 PDF」统一入口（打印管线，Phase 5 T5.3）
-- Sheet 单元格格式对话框（数字格式/边框/对齐集合 UI）
+### 批 2（进行中，2026-10-14 首批交付）
+- ✅ Writer 插入页码（PAGE 域，域已建模 T48，Word/WPS 打开重算）
+- ✅ Writer 插入目录（扫描 heading 层级 → 目录标题 + 缩进大纲 + TOC 域）
+- ⬜ Writer 页眉页脚（**深度项**：sectPr header/footer parts 读写 + 纸张区布局重构，回归风险高，排单独专项）
+- ⬜ 全模块「导出 PDF」统一入口（打印管线，Phase 5 T5.3）
+- ⬜ Sheet 单元格格式对话框（数字格式/边框/对齐集合 UI）
 
 ### 批 3（Phase 3 收尾）
 - Presentation 动画与切换（T3.3）+ 表格 + 备注
