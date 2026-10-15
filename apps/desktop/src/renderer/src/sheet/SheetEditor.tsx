@@ -25,7 +25,7 @@ import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import type { FUniver } from '@univerjs/presets';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
-import { BarChart3, CopyMinus, Download, FileDown, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles, SplitSquareHorizontal, Table2 } from 'lucide-react';
+import { BarChart3, CopyMinus, Download, FileDown, FileSpreadsheet, FolderOpen, Paintbrush, Printer, RefreshCw, Search, Sparkles, SplitSquareHorizontal, Table2 } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -40,6 +40,14 @@ import { downloadBlob, downloadDataUrl } from '../lib/download';
 import { renderChartToPng, type ChartType } from '../lib/chartRenderer';
 import { buildChartData } from './chartData';
 import { workbookToPrintBody } from './sheetToHtml';
+import {
+  DEFAULT_SHEET_PRINT_SETTINGS,
+  normalizeSheetPrintSettings,
+  parsePrintArea,
+  parseRepeatRows,
+  type SheetPrintSettings,
+} from './printSettings';
+import { PAGE_SIZE_MM } from '../../../shared/pdfPrint';
 import { buildPrintDocument } from '../lib/printHtml';
 import { exportHtmlToPdf } from '../lib/pdfExport';
 import { takePendingOpen } from '../stores/pendingOpenStore';
@@ -89,6 +97,9 @@ function safeSet(range: unknown, method: string, ...args: unknown[]): void {
 type FWorkbookLike = NonNullable<ReturnType<FUniver['getActiveWorkbook']>>;
 /** 活动工作表 facade 的推导类型（避免深路径 import FWorksheet） */
 type FSheetLike = NonNullable<ReturnType<FWorkbookLike['getActiveSheet']>>;
+
+/** 打印设置持久化键（localStorage，供「打印设置」对话框读写） */
+const PRINT_SETTINGS_STORAGE_KEY = 'jk-sheet-print-v1';
 
 /** 「分列」常用分隔符预设（下拉选项；'custom' 走自定义输入） */
 const SPLIT_DELIMITER_PRESETS: { key: string; label: string; value: string }[] = [
@@ -316,6 +327,19 @@ export function SheetEditor() {
   const [dupHasHeader, setDupHasHeader] = useState(true);
   const [dupError, setDupError] = useState<string | null>(null);
 
+  // 打印设置（WPS 对齐批2续）：纸张 / 方向 / 页边距 / 打印区域 / 重复标题行 / 仅活动表
+  const [printOpen, setPrintOpen] = useState(false);
+  /** 打印设置（初值从 localStorage 反序列化并容错兜底，非法字段各自回落默认） */
+  const [sheetPrintSettings, setSheetPrintSettings] = useState<SheetPrintSettings>(() => {
+    try {
+      const raw = localStorage.getItem(PRINT_SETTINGS_STORAGE_KEY);
+      if (raw) return normalizeSheetPrintSettings(JSON.parse(raw));
+    } catch {
+      /* 反序列化失败 → 回落默认 */
+    }
+    return DEFAULT_SHEET_PRINT_SETTINGS;
+  });
+
   const configs = useAiStore((s) => s.configs);
   const aiLoaded = useAiStore((s) => s.loaded);
   const loadAiConfigs = useAiStore((s) => s.load);
@@ -530,20 +554,77 @@ export function SheetEditor() {
         // 暴露原始对象供探针深度内省（仅 jk-debug 模式）
         fws: () => apiRef.current?.getActiveWorkbook()?.getActiveSheet(),
         funiver: () => apiRef.current,
-        // 导出 PDF 探针（QA 冒烟）：与 onExportPdf 同路径构建 HTML，不下载，直接返回 { size, head }
-        pdfProbe: async () => {
+        // 导出 PDF 探针（QA 冒烟）：与 onExportPdf 同路径构建 HTML，不下载，直接返回可断言字段。
+        //  - 不传参：完全保留历史行为（打印效果不变），返回 { size, head } 并追加可断言字段；
+        //  - 传 JSON 字符串：用解析出的打印设置构建 HTML（含打印区域/重复行/纸张/方向）。
+        pdfProbe: async (settingsJson?: string) => {
           const jk = currentJkWorkbook();
-          if (!jk || !jk.sheets.length) return { size: 0, head: 'no-workbook' };
+          if (!jk || !jk.sheets.length) {
+            return {
+              size: 0,
+              head: 'no-workbook',
+              htmlLength: 0,
+              hasThead: false,
+              landscapeExpected: false,
+            };
+          }
           const active = jk.sheets[jk.activeSheetIndex ?? 0];
-          const html = buildPrintDocument({
-            title: active?.name || '导出',
-            bodyHtml: workbookToPrintBody(jk),
-          });
+
+          let settings: SheetPrintSettings | null = null;
+          if (typeof settingsJson === 'string' && settingsJson.trim()) {
+            try {
+              settings = normalizeSheetPrintSettings(JSON.parse(settingsJson));
+            } catch {
+              settings = null; // 解析失败 → 回退到「不传参」行为
+            }
+          }
+
+          let html: string;
+          let request: {
+            html: string;
+            fileName: string;
+            pageSize?: SheetPrintSettings['pageSize'];
+            landscape?: boolean;
+            marginMm?: number;
+          };
+          if (settings) {
+            html = buildPrintDocument({
+              title: active?.name || '导出',
+              bodyHtml: workbookToPrintBody(jk, {
+                activeOnly: settings.activeOnly,
+                printArea: parsePrintArea(settings.printArea ?? ''),
+                repeatRows: parseRepeatRows(settings.repeatRows ?? ''),
+              }),
+              pageSize: settings.pageSize,
+              landscape: settings.landscape,
+              marginMm: settings.marginMm,
+            });
+            request = {
+              html,
+              pageSize: settings.pageSize,
+              landscape: settings.landscape,
+              marginMm: settings.marginMm,
+              fileName: `${active?.name || '导出'}.pdf`,
+            };
+          } else {
+            html = buildPrintDocument({
+              title: active?.name || '导出',
+              bodyHtml: workbookToPrintBody(jk),
+            });
+            request = { html, fileName: `${active?.name || '导出'}.pdf` };
+          }
+
           const bytes = await window.jareking.invoke<Uint8Array>(
             window.jareking.IPC.PDF_EXPORT_HTML,
-            { html, fileName: `${active?.name || '导出'}.pdf` },
+            request,
           );
-          return { size: bytes.length, head: String.fromCharCode(...bytes.slice(0, 5)) };
+          return {
+            size: bytes.length,
+            head: String.fromCharCode(...bytes.slice(0, 5)),
+            htmlLength: html.length,
+            hasThead: html.includes('<thead>'),
+            landscapeExpected: settings?.landscape ?? false,
+          };
         },
       };
     }
@@ -622,10 +703,28 @@ export function SheetEditor() {
       const jk = currentJkWorkbook();
       if (!jk || !jk.sheets.length) throw new Error('no workbook');
       const active = jk.sheets[jk.activeSheetIndex ?? 0];
-      const body = workbookToPrintBody(jk);
-      const html = buildPrintDocument({ title: active?.name || '导出', bodyHtml: body });
+      const s = sheetPrintSettings;
+      // 应用打印设置：仅活动表套用打印区域/重复行；纸张/方向/页边距传到打印管线
+      const body = workbookToPrintBody(jk, {
+        activeOnly: s.activeOnly,
+        printArea: parsePrintArea(s.printArea ?? ''),
+        repeatRows: parseRepeatRows(s.repeatRows ?? ''),
+      });
+      const html = buildPrintDocument({
+        title: active?.name || '导出',
+        bodyHtml: body,
+        pageSize: s.pageSize,
+        landscape: s.landscape,
+        marginMm: s.marginMm,
+      });
       const fileName = `${active?.name || '导出'}.pdf`;
-      await exportHtmlToPdf({ html, fileName });
+      await exportHtmlToPdf({
+        html,
+        fileName,
+        pageSize: s.pageSize,
+        landscape: s.landscape,
+        marginMm: s.marginMm,
+      });
       toast.success(`已导出「${fileName}」`);
     } catch (err) {
       toast.warning('导出 PDF 失败：' + (err instanceof Error ? err.message : String(err)));
@@ -1304,6 +1403,56 @@ export function SheetEditor() {
     setDupOpen(false);
   };
 
+  /* =========================================================================
+   * 打印设置（WPS 对齐批2续）
+   * 表单态即 sheetPrintSettings；「确定」时校验 + 写回 localStorage，非法不关闭对话框。
+   * 严禁 window.prompt/alert，一律用 Modal。
+   * ========================================================================= */
+
+  /** 「用当前选区」：把当前选区 A1 记法写入打印区域 */
+  const applyPrintSelectionToArea = () => {
+    const sel = readActiveSelection();
+    if (!sel) {
+      toast.warning('请先在表格中选择要打印的区域');
+      return;
+    }
+    setSheetPrintSettings((s) => ({ ...s, printArea: sel.a1 }));
+  };
+
+  /** 「用选区首行」：把当前选区首行（1 基行号）写成 'N:N' 重复标题行 */
+  const applySelectionFirstRowToRepeat = () => {
+    const sel = readActiveSelection();
+    if (!sel) {
+      toast.warning('请先在表格中选择区域以取其首行');
+      return;
+    }
+    const rowNo = sel.startRow + 1;
+    setSheetPrintSettings((s) => ({ ...s, repeatRows: `${rowNo}:${rowNo}` }));
+  };
+
+  /** 「恢复默认」：重置为 DEFAULT_SHEET_PRINT_SETTINGS */
+  const resetPrintSettings = () => setSheetPrintSettings(DEFAULT_SHEET_PRINT_SETTINGS);
+
+  /** 「确定」：校验打印区域 / 重复标题行，非法则提示且不关闭；合法则写回 localStorage 并关闭 */
+  const confirmPrintSettings = () => {
+    const s = sheetPrintSettings;
+    if (s.printArea && !parsePrintArea(s.printArea)) {
+      toast.warning('打印区域格式不正确，示例：A1:C20');
+      return;
+    }
+    if (s.repeatRows && !parseRepeatRows(s.repeatRows)) {
+      toast.warning('重复标题行格式不正确，示例：1:2');
+      return;
+    }
+    try {
+      localStorage.setItem(PRINT_SETTINGS_STORAGE_KEY, JSON.stringify(s));
+    } catch {
+      /* 持久化失败不阻断（如隐私模式） */
+    }
+    setPrintOpen(false);
+    toast.success('打印设置已保存');
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 顶栏：文件操作（编辑能力由 Univer 自带工具栏提供） */}
@@ -1368,6 +1517,16 @@ export function SheetEditor() {
           aria-label="删除重复项"
         >
           删除重复项
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<Printer size={13} />}
+          onClick={() => setPrintOpen(true)}
+          title="打印设置"
+          aria-label="打印设置"
+        >
+          打印设置
         </Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
@@ -2126,6 +2285,140 @@ export function SheetEditor() {
           {dupError && <p className="text-tiny text-warning">{dupError}</p>}
           <p className="text-tiny text-muted">
             保留首次出现的行，删除其余重复行；结果从选区左上角写回（选区：{dupA1}），并清空尾部残留行。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 打印设置（WPS 对齐批2续）：纸张 / 方向 / 页边距 / 打印区域 / 重复标题行 / 仅活动表。
+          严禁 window.prompt/alert；「确定」校验通过后写回 localStorage（键：jk-sheet-print-v1）。 */}
+      <Modal
+        open={printOpen}
+        onClose={() => setPrintOpen(false)}
+        title="打印设置"
+        width={460}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={resetPrintSettings}>
+              恢复默认
+            </Button>
+            <span className="mr-auto" />
+            <Button variant="ghost" size="sm" onClick={() => setPrintOpen(false)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={confirmPrintSettings}>
+              确定
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex items-center gap-2">
+            <span className="w-28 shrink-0 text-tiny text-muted">纸张</span>
+            <select
+              aria-label="纸张"
+              className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+              value={sheetPrintSettings.pageSize}
+              onChange={(e) =>
+                setSheetPrintSettings((s) => ({
+                  ...s,
+                  pageSize: e.target.value as SheetPrintSettings['pageSize'],
+                }))
+              }
+            >
+              {/* 选项由 PAGE_SIZE_MM 的键生成（纸张规格单一事实源，勿硬编码第二份） */}
+              {(Object.keys(PAGE_SIZE_MM) as SheetPrintSettings['pageSize'][]).map((name) => {
+                const spec = PAGE_SIZE_MM[name];
+                return (
+                  <option key={name} value={name}>
+                    {`${name} (${spec.widthMm}×${spec.heightMm}mm)`}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="w-28 shrink-0 text-tiny text-muted">方向</span>
+            <select
+              aria-label="方向"
+              className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+              value={sheetPrintSettings.landscape ? 'landscape' : 'portrait'}
+              onChange={(e) =>
+                setSheetPrintSettings((s) => ({ ...s, landscape: e.target.value === 'landscape' }))
+              }
+            >
+              <option value="portrait">纵向</option>
+              <option value="landscape">横向</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="w-28 shrink-0 text-tiny text-muted">页边距（毫米）</span>
+            <input
+              type="number"
+              aria-label="页边距（毫米）"
+              min={0}
+              max={50}
+              className="w-24 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+              value={sheetPrintSettings.marginMm}
+              onChange={(e) =>
+                setSheetPrintSettings((s) => ({
+                  ...s,
+                  marginMm: e.target.value === '' ? 0 : Number(e.target.value),
+                }))
+              }
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">打印区域（留空 = 整表）</span>
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label="打印区域"
+                className="flex-1"
+                value={sheetPrintSettings.printArea ?? ''}
+                onChange={(e) =>
+                  setSheetPrintSettings((s) => ({ ...s, printArea: e.target.value || null }))
+                }
+                placeholder="如 A1:C20"
+              />
+              <Button variant="secondary" size="sm" onClick={applyPrintSelectionToArea}>
+                用当前选区
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">重复标题行（留空 = 不重复）</span>
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label="重复标题行"
+                className="flex-1"
+                value={sheetPrintSettings.repeatRows ?? ''}
+                onChange={(e) =>
+                  setSheetPrintSettings((s) => ({ ...s, repeatRows: e.target.value || null }))
+                }
+                placeholder="如 1:2"
+              />
+              <Button variant="secondary" size="sm" onClick={applySelectionFirstRowToRepeat}>
+                用选区首行
+              </Button>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-1.5 text-tiny text-fg">
+            <input
+              type="checkbox"
+              checked={sheetPrintSettings.activeOnly}
+              onChange={(e) =>
+                setSheetPrintSettings((s) => ({ ...s, activeOnly: e.target.checked }))
+              }
+            />
+            仅打印活动工作表
+          </label>
+
+          <p className="text-tiny text-muted">
+            打印区域与重复标题行仅作用于活动工作表；纸张、方向、页边距作用于整份导出。
           </p>
         </div>
       </Modal>

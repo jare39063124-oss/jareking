@@ -11,7 +11,9 @@
  *      A4 纵向期望约 '0 0 595.x 841.x'（pt）；横向期望宽高互换约 '842 595'；
  *      若得到 '612 792'（Letter，说明 pageSize 判定为非法回落默认）或明显异常，
  *      即为源码单位 Bug；
- *   3) 收集控制台错误 / 未捕获异常（口径同 gui-smoke）。
+ *   3) 收集控制台错误 / 未捕获异常（口径同 gui-smoke）；
+ *   4) 打印设置探针：带「打印区域 / 重复标题行 / 横向 / 页边距」调用 Sheet 的 pdfProbe(json)，
+ *      断言 PDF 头（'%PDF-'）、体积（>1500B）与重复标题行（HTML 含 <thead>）均成立。
  *
  * 用法：
  *   1) 启动应用（必须带 --jk-debug，否则调试钩子不挂载）：
@@ -268,6 +270,56 @@ async function main() {
   const errors = [...cdp.exceptions, ...cdp.consoleErrors].filter((e) => !pickIgnorable(e));
   results.consoleErrors = errors.slice(0, 10);
   if (errors.length > 0) failed = true;
+
+  // 4. 打印设置探针（WPS 对齐批2续）：带「打印区域 / 重复标题行 / 横向 / 页边距」导出，
+  //    断言 PDF 头、体积与 <thead>（重复标题行）存在。不触碰上方 3 个探针的既有断言。
+  await cdp.eval('location.reload()', true).catch(() => {});
+  await sleep(2500);
+  const printClicked = await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.includes('表格'));
+    if (!btn) return 'no-button';
+    btn.click();
+    return 'clicked';
+  })()`);
+  const printHookReady = await cdp.waitFor(
+    `typeof window.__jkDebug?.pdfProbe === 'function'`,
+  );
+
+  let printProbe = null;
+  let printProbeError = null;
+  if (printHookReady) {
+    const settingsJson = JSON.stringify({
+      pageSize: 'A4',
+      landscape: true,
+      marginMm: 10,
+      printArea: 'A1:B5',
+      repeatRows: '1:1',
+      activeOnly: true,
+    });
+    try {
+      printProbe = await cdp.eval(
+        `window.__jkDebug.pdfProbe(${JSON.stringify(settingsJson)})`,
+        true,
+      );
+    } catch (e) {
+      printProbeError = e.message;
+    }
+  }
+  results.printSettings = {
+    clicked: printClicked,
+    hookReady: !!printHookReady,
+    ...(printProbe ?? {}),
+    ...(printProbeError ? { error: printProbeError } : {}),
+  };
+  if (printProbeError) console.log(`[打印设置] probe error: ${printProbeError}`);
+
+  const printHeadOk = printProbe && printProbe.head === '%PDF-';
+  const printSizeOk = printProbe && printProbe.size > 1500;
+  const printTheadOk = printProbe && printProbe.hasThead === true;
+  console.log(
+    `[打印设置] clicked=${printClicked} hookReady=${!!printHookReady} size=${printProbe?.size} head=${JSON.stringify(printProbe?.head)} hasThead=${printProbe?.hasThead} htmlLength=${printProbe?.htmlLength} ${printHeadOk && printSizeOk && printTheadOk ? '✅' : '❌'}`,
+  );
+  if (!printHeadOk || !printSizeOk || !printTheadOk) failed = true;
 
   console.log('=== 导出 PDF 冒烟结果 ===');
   console.log(JSON.stringify(results, null, 2));

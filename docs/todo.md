@@ -17,6 +17,12 @@
     - **两个实测坑（已留痕在代码注释，勿再踩）**：① `printToPDF.pageSize` 对象单位是**英寸**（`electron.d.ts` PrintToPDFOptions），传微米会直接抛 `Failed to generate PDF`（100% 失败）；② Electron 44 的 `landscape` 选项对本路径基本无效 → 改用 `preferCSSPageSize: true`，由各模块 `@page size`（横向已按 `PAGE_SIZE_MM` 互换宽高）决定纸张与朝向。
     - 验收：`scripts/pdf-export-smoke.mjs` 真实 Electron 三探针全过（Writer 66346B / Sheet 24682B / Slide 45081B，均 `%PDF-`），A4 纵向 MediaBox `594.96×841.92`、横向 `841.92×594.96`，consoleErrors 0；新增单测 pdfPrint 8 / printHtml 7 / sheetToHtml 8 / presentationToHtml 8；typecheck / build / test 全绿。
     - 已知限制：字体依赖本机系统字体（Chromium 打印管线自动嵌入所用字体）；Sheet 日期类数字格式不做换算（原样输出防误改数据）；分页为 CSS 流式分页（非 WPS 精确分页引擎）。
+- [x] **W-批2续（2026-10-16）**：Sheet **打印设置对话框**（纸张 / 方向 / 页边距 / **打印区域** / **重复标题行** / 仅打印活动表）已落地，并真正接入「导出 PDF」打印管线
+  - 纯函数层 `sheet/printSettings.ts`：`SheetPrintSettings` / `DEFAULT_SHEET_PRINT_SETTINGS` / `normalizeSheetPrintSettings`（localStorage 脏数据逐字段容错）/ `parsePrintArea`（A1 记法，反序自动归一，行号列号必须 ≥1）/ `parseRepeatRows`（行号记法 `1:2`/`$1:$2`，兼容 `A1:D2`）/ `normalizeMarginForConfirm`。纸张名与页边距钳制复用 `shared/pdfPrint`（单一事实源），列号换算复用 `@jareking/sheet`。
+  - 渲染层 `sheetToHtml.ts`：`workbookToPrintBody(wb, { activeOnly, printArea, repeatRows })`——打印区域只渲染区域内行列（列宽/行高仍取原绝对索引）；**重复标题行渲染为 `<thead>`**（复用基础 CSS `thead{display:table-header-group}` → 跨页重复表头）；合并单元格与区域相交则裁剪、锚点落在区域外整块跳过（绝不输出越界 colspan）；打印区域/重复行**仅作用于活动工作表**；不传 opts 时输出与改造前逐字节一致（零回归）。
+  - UI：SheetEditor 顶栏「打印设置」→ Modal（纸张下拉由 `PAGE_SIZE_MM` 生成、方向、页边距、打印区域 +「用当前选区」、重复标题行 +「用选区首行」、仅打印活动表、恢复默认）；localStorage 键 `jk-sheet-print-v1` 持久化；「确定」时非法输入 toast 提示且不关闭对话框（**零 window.prompt/alert**）；「导出 PDF」按设置出纸（纸张/方向/页边距同时透传打印管线，避免 CSS 与 printToPDF 不一致）。
+  - 验收：`printSettings` 27 测 + `sheetToHtml` 追加用例；`scripts/pdf-export-smoke.mjs` 新增第 4 步打印设置探针（`__jkDebug.pdfProbe(settingsJson)`，真实 Electron 实测 A4 横向 + 打印区域 `A1:B5` + 重复第 1 行 → `%PDF-`、`hasThead=true`、consoleErrors 0）；typecheck / build / test 全绿。
+  - 已知限制：打印区域以**文本 A1 记法**表达（非 WPS「设置打印区域」菜单式记忆）；不含缩放比例/每页页数/「分页预览」；仍为 CSS 流式分页（非线性精确分页引擎）。
 - [x] **W-批3**：[x] 动画切换 + 放映模式（T3.3）+ [x] PPT 演讲者备注 + [x] Sheet 查找替换 + [x] PPT 表格 + [x] Sheet 图表（T2.5，2026-10-15：选区→PNG 生成/预览/下载，chartData 12 测）
 - [x] **W-批4（2026-10-15 全部落地）**：[x] 批注（Writer，comments 全链路 round-trip）+ [x] 修订（track changes，w:ins/w:del 解析导出 + 编辑器标记 + 接受/拒绝）+ [x] 数据透视表（Sheet，buildPivot 纯函数 + 11 测 + Modal）+ [x] 母版/版式（演示，解析保留 round-trip + 编辑器版式展示）+ [x] JS 宏实现（Worker 沙箱 + 宏管理，25 测；弱隔离·非硬沙箱）
 - [x] **W-长尾（2026-10-15）**：[x] Writer 脚注/尾注（footnotes/endnotes.xml 读写 + 引用节点 + 编辑 Modal）+ [x] Writer 分栏（w:cols）+ [x] PDF 水印（addWatermark：居中/平铺/透明度/角度，4 测）

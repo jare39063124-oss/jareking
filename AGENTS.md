@@ -98,7 +98,7 @@ done
   - **全模块导出 PDF**：Writer/Sheet/Presentation → Electron 原生打印管线（`shared/pdfPrint.ts` 纸张单一事实源 + `lib/printHtml.ts` + `sheet/sheetToHtml.ts` + `slide/presentationToHtml.ts` + `main/services/pdfExport.ts`，IPC `pdf:export-html`）；验收脚本 `scripts/pdf-export-smoke.mjs`；
   - AI：适配器（OpenAI 兼容/Claude/Gemini/Ollama）+ Planner + 本地 ops 执行。
 - **公共能力下沉**：图表渲染 `lib/chartRenderer.ts`、字体清单 `lib/fonts.ts`、下载助手 `lib/download.ts`（原散落各处，已收敛）。
-- **待做**：Writer 拼写检查、Sheet 图表散点类型、打印设置对话框、WPS 级精确分页。
+- **待做**：Writer 拼写检查、Sheet 图表散点类型、WPS 级精确分页（**打印设置对话框已于 2026-10-16 落地**：纸张/方向/页边距/打印区域/重复标题行，见 docs/todo.md W-批2续）。
 
 ## 5. 不要做
 - 不要 `rm -rf` / 删除用户文件；不要强推（`--force`）/ 重置 git 历史。

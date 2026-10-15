@@ -15,6 +15,7 @@
 import { toA1 } from '@jareking/sheet';
 import type { JkCell, JkCellStyle, JkMerge, JkSheet, JkWorkbook } from '@jareking/sheet';
 import { escapeHtml } from '../lib/printHtml';
+import type { PrintRange, RowRange } from './printSettings';
 
 /** 默认列宽（px）——未在 colWidths 中指定时使用 */
 const DEFAULT_COL_WIDTH_PX = 64;
@@ -122,13 +123,28 @@ function hasValue(cell: JkCell | undefined): boolean {
   return String(v).length > 0;
 }
 
-/** 单个工作表的 `<table>`（含列宽/行高/合并/样式） */
-function sheetToTable(sheet: JkSheet): string {
+/** 单表渲染的可选打印布局（仅活动表传入；缺省 = 整表，输出与历史版本逐字节一致） */
+interface SheetTableLayout {
+  /** 打印区域（0 基闭区间）；null / 缺省 = 整表 */
+  printArea?: PrintRange | null;
+  /** 重复标题行（0 基闭区间）；null / 缺省 = 不重复 */
+  repeatRows?: RowRange | null;
+}
+
+/**
+ * 单个工作表的 `<table>`（含列宽/行高/合并/样式）。
+ *
+ * @param layout 打印布局（仅活动表传入）。缺省时输出与历史版本**完全一致**（零回归）。
+ *  - 打印区域：只渲染区域内的行列；列宽/行高仍取原绝对索引（sheet.colWidths[c] / rowHeights[r]）。
+ *  - 合并单元格：与区域相交则裁剪到区域内；锚点落在区域外则整块跳过（绝不输出越界 colspan）。
+ *  - 重复标题行：渲染为 `<thead>`（基础 CSS thead{display:table-header-group} → 跨页重复）。
+ */
+function sheetToTable(sheet: JkSheet, layout?: SheetTableLayout): string {
   const cells = sheet.cells ?? {};
 
   // 有效行列范围：数据最大值 与 合并区域右下角 的较大者（尾部全空行/列不渲染）
-  let maxRow = -1;
-  let maxCol = -1;
+  let dataMaxRow = -1;
+  let dataMaxCol = -1;
   for (const [key, cell] of Object.entries(cells)) {
     if (!hasValue(cell)) continue;
     const comma = key.indexOf(',');
@@ -136,25 +152,61 @@ function sheetToTable(sheet: JkSheet): string {
     const r = Number(key.slice(0, comma));
     const c = Number(key.slice(comma + 1));
     if (!Number.isFinite(r) || !Number.isFinite(c)) continue;
-    if (r > maxRow) maxRow = r;
-    if (c > maxCol) maxCol = c;
+    if (r > dataMaxRow) dataMaxRow = r;
+    if (c > dataMaxCol) dataMaxCol = c;
   }
   const merges: JkMerge[] = sheet.merges ?? [];
   for (const m of merges) {
-    if (m.endRow > maxRow) maxRow = m.endRow;
-    if (m.endCol > maxCol) maxCol = m.endCol;
+    if (m.endRow > dataMaxRow) dataMaxRow = m.endRow;
+    if (m.endCol > dataMaxCol) dataMaxCol = m.endCol;
   }
 
-  const rows = maxRow + 1;
-  const cols = maxCol + 1;
+  // 渲染行列范围：整表 = [0, dataMax]；有打印区域则与区域取交集（只渲染区域内的行列）
+  let rowStart = 0;
+  let colStart = 0;
+  let rowEnd = dataMaxRow;
+  let colEnd = dataMaxCol;
+  const area = layout?.printArea;
+  if (area) {
+    rowStart = Math.max(0, area.startRow);
+    colStart = Math.max(0, area.startCol);
+    rowEnd = Math.min(dataMaxRow, area.endRow);
+    colEnd = Math.min(dataMaxCol, area.endCol);
+  }
+
+  // 重复标题行：与渲染行范围取交集（超界静默收敛；空交集视为不重复）
+  let theadRange: RowRange | null = null;
+  const repeat = layout?.repeatRows;
+  if (repeat) {
+    const s = Math.max(repeat.startRow, rowStart);
+    const e = Math.min(repeat.endRow, rowEnd);
+    if (s <= e) theadRange = { startRow: s, endRow: e };
+  }
 
   // 合并锚点表 & 被覆盖格集合（被覆盖的格跳过渲染）
   const anchor = new Map<string, JkMerge>();
   const covered = new Set<string>();
   for (const m of merges) {
-    anchor.set(`${m.startRow},${m.startCol}`, m);
-    for (let r = m.startRow; r <= m.endRow; r++) {
-      for (let c = m.startCol; c <= m.endCol; c++) {
+    // 锚点必须落在渲染区域内，否则整块合并跳过（避免越界 colspan 导致错列）
+    if (m.startRow < rowStart || m.startRow > rowEnd) continue;
+    if (m.startCol < colStart || m.startCol > colEnd) continue;
+    // 行方向跨段裁剪：不得跨出所在表段（thead / tbody），避免表格结构错乱
+    let sectionMaxRow = rowEnd;
+    if (theadRange) {
+      if (m.startRow >= theadRange.startRow && m.startRow <= theadRange.endRow) {
+        sectionMaxRow = theadRange.endRow; // 表头段：不跨入正文
+      } else if (m.startRow < theadRange.startRow) {
+        sectionMaxRow = theadRange.startRow - 1; // 表头之前的正文段
+      }
+    }
+    // 裁剪到区域内（clamp 后仍输出正确的 colspan/rowspan）
+    const endRow = Math.min(m.endRow, rowEnd, sectionMaxRow);
+    const endCol = Math.min(m.endCol, colEnd);
+    if (endRow < m.startRow || endCol < m.startCol) continue; // 收敛为空（理论不可达，兜底）
+    const norm: JkMerge = { startRow: m.startRow, startCol: m.startCol, endRow, endCol };
+    anchor.set(`${m.startRow},${m.startCol}`, norm);
+    for (let r = m.startRow; r <= endRow; r++) {
+      for (let c = m.startCol; c <= endCol; c++) {
         if (r === m.startRow && c === m.startCol) continue;
         covered.add(`${r},${c}`);
       }
@@ -165,17 +217,17 @@ function sheetToTable(sheet: JkSheet): string {
   const rowHeights = sheet.rowHeights ?? {};
 
   let colgroup = '<colgroup>';
-  for (let c = 0; c < cols; c++) {
+  for (let c = colStart; c <= colEnd; c++) {
     const w = colWidths[c] ?? DEFAULT_COL_WIDTH_PX;
     colgroup += `<col style="width:${pxToMm(w)}mm">`;
   }
   colgroup += '</colgroup>';
 
-  let body = '';
-  for (let r = 0; r < rows; r++) {
+  /** 渲染第 r 行为 `<tr>…</tr>`（列范围 [colStart, colEnd]，被覆盖格跳过） */
+  const renderRow = (r: number): string => {
     const h = rowHeights[r] ?? DEFAULT_ROW_HEIGHT_PX;
     let rowHtml = '';
-    for (let c = 0; c < cols; c++) {
+    for (let c = colStart; c <= colEnd; c++) {
       const key = `${r},${c}`;
       if (covered.has(key)) continue;
       const merge = anchor.get(key);
@@ -189,10 +241,34 @@ function sheetToTable(sheet: JkSheet): string {
       // toA1 提供单元格地址（复用既有列号换算，便于定位/调试）
       rowHtml += `<td data-cell="${toA1(r, c)}"${spanAttrs}${styleAttr}>${escapeHtml(cellText(cell))}</td>`;
     }
-    body += `<tr style="height:${pxToMm(h)}mm">${rowHtml}</tr>`;
+    return `<tr style="height:${pxToMm(h)}mm">${rowHtml}</tr>`;
+  };
+
+  // 重复行 → <thead>；其余 → <tbody>（无重复行时全部进 tbody，结构与历史一致）
+  let theadHtml = '';
+  let tbodyHtml = '';
+  for (let r = rowStart; r <= rowEnd; r++) {
+    if (theadRange && r >= theadRange.startRow && r <= theadRange.endRow) {
+      theadHtml += renderRow(r);
+    } else {
+      tbodyHtml += renderRow(r);
+    }
   }
 
-  return `<table>${colgroup}<tbody>${body}</tbody></table>`;
+  if (theadRange) {
+    return `<table>${colgroup}<thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table>`;
+  }
+  return `<table>${colgroup}<tbody>${tbodyHtml}</tbody></table>`;
+}
+
+/** `workbookToPrintBody` 的可选打印行为（缺省时输出与历史版本完全一致） */
+export interface WorkbookPrintOptions {
+  /** 仅渲染活动工作表（缺省渲染全部） */
+  activeOnly?: boolean;
+  /** 打印区域：**仅作用于活动工作表**，其余工作表仍整表输出 */
+  printArea?: PrintRange | null;
+  /** 重复标题行：**仅作用于活动工作表**，渲染为 <thead>（跨页重复） */
+  repeatRows?: RowRange | null;
 }
 
 /**
@@ -202,17 +278,32 @@ function sheetToTable(sheet: JkSheet): string {
  * `<div class="jk-page-break"></div>` 分页符。
  *
  * @param wb   工作簿
- * @param opts activeOnly=true 时仅渲染活动工作表（缺省渲染全部）
+ * @param opts 可选打印行为：
+ *  - `activeOnly`：仅渲染活动工作表；
+ *  - `printArea` / `repeatRows`：**仅作用于活动工作表**（其余工作表整表输出）。
+ *  不传 opts（或全空）时输出与历史版本完全一致（零回归）。
  */
-export function workbookToPrintBody(wb: JkWorkbook, opts?: { activeOnly?: boolean }): string {
+export function workbookToPrintBody(wb: JkWorkbook, opts?: WorkbookPrintOptions): string {
   const all: JkSheet[] = wb.sheets ?? [];
-  const sheets = opts?.activeOnly
-    ? [all[wb.activeSheetIndex ?? 0]].filter((s): s is JkSheet => !!s)
-    : all;
+  const activeIndex = wb.activeSheetIndex ?? 0;
+  // 是否对活动表应用「打印区域 / 重复标题行」（其余表不生效）
+  const applyLayout = !!(opts?.printArea || opts?.repeatRows);
 
-  // 每个工作表一节（标题 + 表格），仅**表与表之间**插入分页符
-  const sections = sheets.map(
-    (sheet) => `<h2 class="jk-sheet-title">${escapeHtml(sheet.name ?? '')}</h2>\n${sheetToTable(sheet)}`,
+  // 需渲染的工作表下标：activeOnly → 仅活动表；否则全部（保持原顺序）
+  const indices = (opts?.activeOnly ? [activeIndex] : all.map((_, i) => i)).filter(
+    (i) => i >= 0 && i < all.length,
   );
+
+  const sections = indices.map((i) => {
+    const sheet = all[i];
+    const table =
+      applyLayout && i === activeIndex
+        ? sheetToTable(sheet, {
+            printArea: opts?.printArea ?? null,
+            repeatRows: opts?.repeatRows ?? null,
+          })
+        : sheetToTable(sheet);
+    return `<h2 class="jk-sheet-title">${escapeHtml(sheet.name ?? '')}</h2>\n${table}`;
+  });
   return sections.join('\n<div class="jk-page-break"></div>\n');
 }
