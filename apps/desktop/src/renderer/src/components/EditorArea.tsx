@@ -1,10 +1,11 @@
-import { BookOpen, Cloud, FolderOpen, History, Pin } from 'lucide-react';
+import { Cloud, FolderOpen, History, Pin } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
 import { toast } from '../stores/toastStore';
 import { setPendingOpen } from '../stores/pendingOpenStore';
+import { PdfReader } from '../pdf/PdfReader';
 import { SheetEditor } from '../sheet/SheetEditor';
 import { SlideEditor } from '../slide/SlideEditor';
 import { WriterEditor } from '../writer/WriterEditor';
@@ -23,12 +24,13 @@ interface RecentFileRow {
 
 /**
  * 断言：模块可直接打开本地文件。
- * 说明：DocModule 取值为 writer/sheet/slide/pdf；其中 writer/sheet/slide 的编辑器
- * 均已实现「最近使用」直达打开（消费 PendingOpen），PDF 阅读器尚未实现故不放行。
+ * 说明：DocModule 取值为 writer/sheet/slide/pdf；四种编辑器均支持「最近使用」
+ * 直达打开（消费 PendingOpen）：writer/sheet/slide 各自解析文档，PDF 阅读器
+ * 直接渲染页面（PdfReader 挂载时消费 pendingOpen 读取字节）。
  * 注：PendingOpen.module 已统一为 DocModule（'slide'），不再使用 'presentation'。
  */
-function isOpenableModule(module: DocModule): module is 'writer' | 'sheet' | 'slide' {
-  return module === 'writer' || module === 'sheet' || module === 'slide';
+function isOpenableModule(module: DocModule): module is 'writer' | 'sheet' | 'slide' | 'pdf' {
+  return module === 'writer' || module === 'sheet' || module === 'slide' || module === 'pdf';
 }
 
 /** 最近使用（WPS 首页体验）：点击直达打开，悬停可定位到系统文件管理器 */
@@ -224,6 +226,14 @@ function ModulePlaceholder({ module }: { module: DocModule }) {
       </div>
     );
   }
+  if (module === 'pdf') {
+    // PDF 阅读器自管滚动/尺寸，用无内边距全幅容器
+    return (
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <PdfReader />
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted-bg/40 p-8">
       {renderCanvas(module)}
@@ -231,25 +241,13 @@ function ModulePlaceholder({ module }: { module: DocModule }) {
   );
 }
 
-/** 按模块渲染占位画布 */
-function renderCanvas(module: DocModule) {
+/** 按模块渲染占位画布（pdf 已在上方走全幅分支） */
+function renderCanvas(module: Exclude<DocModule, 'pdf'>) {
   switch (module) {
     case 'writer':
       return <WriterEditor />;
-    case 'pdf':
-      return <PdfCanvas />;
     case 'sheet':
     case 'slide':
       return null; // Sheet/Slide 走上方全幅分支
   }
-}
-
-/** PDF 占位画布：单页 */
-function PdfCanvas() {
-  return (
-    <div className="flex h-[680px] w-[480px] flex-col items-center justify-center gap-2 rounded-sm bg-surface shadow-card">
-      <BookOpen size={28} className="text-muted" aria-hidden="true" />
-      <span className="text-ui text-muted">PDF 阅读区（占位）</span>
-    </div>
-  );
 }

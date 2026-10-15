@@ -91,6 +91,8 @@ import type { LucideIcon } from 'lucide-react';
 import { useEffect } from 'react';
 import { Tabs } from './Tabs';
 import { toast, toastNotImplemented } from '../stores/toastStore';
+import { setPendingOpen } from '../stores/pendingOpenStore';
+import { useTabStore } from '../stores/tabStore';
 import {
   useUiStore,
   type PdfToolboxMode,
@@ -586,6 +588,42 @@ async function pickOfficeFileAndConvert(kind: OfficeKind): Promise<void> {
   }
 }
 
+/**
+ * 选择本机 PDF 文件并返回其磁盘路径与文件名（供「打开PDF」入口）。
+ *
+ * 与 pickOfficeFileAndConvert 同源思路：动态 `<input type="file">` 取 File → 经 preload
+ * 的 `getPathForFile` 拿真实磁盘路径（Electron 32+ 无 `File.path`）。绝不使用
+ * window.prompt / window.alert。用户取消（cancel 事件）则返回 null。
+ */
+async function pickPdfFile(): Promise<{ path: string; name: string } | null> {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/pdf,.pdf';
+  input.style.display = 'none';
+
+  const picked = new Promise<File | null>((resolve) => {
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null), { once: true });
+    input.addEventListener('cancel', () => resolve(null), { once: true });
+  });
+
+  document.body.appendChild(input);
+  input.click();
+
+  try {
+    const file = await picked;
+    if (!file) return null;
+    const path =
+      window.jareking.getPathForFile?.(file) ?? (file as File & { path?: string }).path;
+    if (!path) {
+      toast.warning('未能读取文件路径，请在桌面端中选择本地文件');
+      return null;
+    }
+    return { path, name: file.name };
+  } finally {
+    input.remove();
+  }
+}
+
 /** Ribbon 工具栏：菜单标签行（可切换 + 双击折叠）+ 当前标签下的工具组 */
 export function Ribbon() {
   const setPdfToolboxOpen = useUiStore((state) => state.setPdfToolboxOpen);
@@ -598,6 +636,8 @@ export function Ribbon() {
   const writerZoom = useUiStore((state) => state.writerZoom);
   const setWriterZoom = useUiStore((state) => state.setWriterZoom);
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
+  // 打开 PDF 阅读器：选择文件 → 设「待打开」→ 新建 pdf 标签，由 PdfReader 消费
+  const openTab = useTabStore((state) => state.openTab);
 
   // 订阅命令总线修订号：编辑器事务/选区变化后重读控件取值与激活态
   const revision = useEditorRevision();
@@ -624,6 +664,18 @@ export function Ribbon() {
 
   /** 工具点击：命令总线 → PDF 工具箱 → 缩放 → 占位提示 */
   const handleToolClick = (tool: Extract<RibbonTool, { kind: 'button' }>) => {
+    // 打开 PDF（PDF 工具 → 阅读与批注）：选文件 → 设「待打开」→ 新建 pdf 标签。
+    // 采用「pendingOpen + openTab」既有机制（与首页「最近使用」同源），PdfReader 挂载时消费，
+    // 从而避开「事件早于组件挂载」的竞态。
+    if (tool.id === 'pdf-open') {
+      void (async () => {
+        const picked = await pickPdfFile();
+        if (!picked) return;
+        setPendingOpen({ module: 'pdf', path: picked.path, name: picked.name });
+        openTab('pdf', picked.name);
+      })();
+      return;
+    }
     // 缩放（视图标签）：真实生效，作用于 Writer 纸张区
     if (tool.id === 'zoom-in') {
       setWriterZoom(writerZoom + 0.1);

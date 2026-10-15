@@ -8,13 +8,8 @@
  * 注：复杂字体（CID/CJK）若缺标准字体数据可能字形偏差，v1 用 useSystemFonts
  * 让 Chromium 回退系统字体；后续如需完美字形可补 standardFontDataUrl。
  */
-import * as pdfjsLib from 'pdfjs-dist';
-
-// Web Worker：Vite/electron-vite 会把该资源打包并注入正确 URL
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+// pdf.js 单例（含 Web Worker 配置）：与 PDF 阅读器共用同一份配置，避免重复/漂移
+import { pdfjsLib } from '../pdf/pdfjs';
 
 export interface RenderedPage {
   page: number;
