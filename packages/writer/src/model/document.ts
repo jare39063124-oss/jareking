@@ -70,6 +70,17 @@ export interface JkDocument extends ModelExtra {
    * 由解析器扫描正文 run 的 `revision` 汇总去重（同一作者取最近一次修订时间）。
    */
   revisions?: RevisionAuthor[];
+  /**
+   * 脚注条目列表（对应 word/footnotes.xml 的 w:footnote 正文条目集合）。
+   * 正文引用由各 `Paragraph` 内的 `FootnoteRef`（noteType='footnote'）承载，
+   * 二者通过 note id 关联。分隔符/续行符等特殊条目不入模型（导出时统一补写）。
+   */
+  footnotes?: JkNote[];
+  /**
+   * 尾注条目列表（对应 word/endnotes.xml 的 w:endnote 正文条目集合）。
+   * 正文引用由 `FootnoteRef`（noteType='endnote'）承载。
+   */
+  endnotes?: JkNote[];
 }
 
 /**
@@ -106,6 +117,24 @@ export interface JkComment {
   text: string;
   /** 是否已解决（jareking 内部状态，w:done="1" 时导出注释保留；v1 可选） */
   resolved?: boolean;
+}
+
+/**
+ * 脚注 / 尾注条目（对应 word/footnotes.xml 的 w:footnote、word/endnotes.xml 的 w:endnote）。
+ *
+ * 设计说明（四端一致）：`id` 为条目唯一标识，与正文 `FootnoteRef.id` 一一对应；
+ * `blocks` 承载条目正文（段落/表格），复用以 `w:body` 同构的块解析/序列化，
+ * 从而与正文共用 `parseContainerBlocks` / `serializeBlock`，避免另起一套。
+ *
+ * 说明：OOXML 中每个脚注/尾注部件还包含分隔符（w:type="separator"）与续行分隔符
+ * （w:type="continuationSeparator"）等特殊条目，解析时跳过、导出时统一补写，
+ * 故模型内只保留正文条目。
+ */
+export interface JkNote {
+  /** 脚注/尾注 id（对应 w:footnote@w:id / w:endnote@w:id，正数字符串） */
+  id: string;
+  /** 条目正文块（复用 body 的 Block；导出时按 body 同构序列化） */
+  blocks: Block[];
 }
 
 /* =========================================================================
@@ -264,11 +293,16 @@ export interface Break extends InlineBase {
   breakType: 'textWrapping' | 'page' | 'column';
 }
 
-/** 脚注引用（对应 w:footnoteReference）：指向脚注部件中的条目 */
+/** 脚注/尾注引用（对应 w:footnoteReference / w:endnoteReference）：指向脚注/尾注部件中的条目 */
 export interface FootnoteRef extends InlineBase {
   type: 'footnoteRef';
-  /** 脚注 id（对应 w:footnoteReference@w:id） */
+  /** 脚注/尾注 id（对应 w:footnoteReference@w:id / w:endnoteReference@w:id） */
   id?: string;
+  /**
+   * 引用类型：footnote=脚注（默认，w:footnoteReference），endnote=尾注（w:endnoteReference）。
+   * 复用同一行内类型以最小化四端改动；缺省视为脚注。
+   */
+  noteType?: 'footnote' | 'endnote';
 }
 
 /**
@@ -659,6 +693,21 @@ export interface Section extends ModelExtra {
    * 页脚内容块（默认页脚）。落盘方式同 header。
    */
   footer?: Block[];
+  /**
+   * 分栏设置（对应 w:sectPr 的 w:cols）。
+   * 缺省（undefined）表示单栏；导出时若存在才写出 `<w:cols>`。
+   */
+  columns?: Columns;
+}
+
+/** 分栏设置（对应 sectPr 的 w:cols） */
+export interface Columns {
+  /** 栏数（对应 w:cols@w:num；1 表示单栏，2/3 为多栏） */
+  count: number;
+  /** 栏间距（EMU，对应 w:cols@w:space） */
+  space?: number;
+  /** 是否显示栏间分隔线（对应 w:cols@w:sep） */
+  separator?: boolean;
 }
 
 /** 页边距（对应 w:pgMar，单位 EMU） */

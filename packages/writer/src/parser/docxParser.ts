@@ -27,6 +27,7 @@ import { XMLParser } from 'fast-xml-parser';
 import type {
   Block,
   Break,
+  Columns,
   CommentRange,
   ConcreteNumbering,
   DocDefaults,
@@ -39,6 +40,7 @@ import type {
   Indentation,
   JkComment,
   JkDocument,
+  JkNote,
   Numbering,
   NumberingFormat,
   NumberingLevel,
@@ -739,6 +741,23 @@ function parseBreak(br: any): Break {
   return { type: 'break', breakType: bt };
 }
 
+/**
+ * 若 run 内容为「脚注/尾注引用」（含 w:footnoteReference / w:endnoteReference）
+ * 则返回对应 FootnoteRef 行内元素，否则返回 null。
+ *
+ * 真实 OOXML 中引用标记位于 `<w:r>` 内（`<w:r><w:rPr>…</w:rPr><w:footnoteReference w:id="1"/></w:r>`），
+ * 故必须在解析 run 时识别（否则会被当作空文本 run 丢失）。
+ */
+function parseNoteRefRun(r: any): Inline | null {
+  if (r?.footnoteReference !== undefined) {
+    return { type: 'footnoteRef', id: getAttr(r.footnoteReference, '@_id') };
+  }
+  if (r?.endnoteReference !== undefined) {
+    return { type: 'footnoteRef', id: getAttr(r.endnoteReference, '@_id'), noteType: 'endnote' };
+  }
+  return null;
+}
+
 /** 深度拼接节点内所有文本（兼容 #text、数字节点与 t 子元素，处理多段文本/嵌套） */
 function deepText(node: any): string {
   if (node == null) return '';
@@ -811,6 +830,12 @@ function parseContainerInlines(
         // 批注引用 run（仅含 w:commentReference）：不计入模型 runs，避免 round-trip 累积空 run。
         // 其批注锚点位置由保序解析写入 Paragraph.commentRanges。
         if (isCommentReferenceRun(item)) continue;
+        // 脚注/尾注引用 run（含 w:footnoteReference / w:endnoteReference）：还原为 FootnoteRef 行内元素。
+        const noteRef = parseNoteRefRun(item);
+        if (noteRef) {
+          inlines.push(noteRef);
+          continue;
+        }
         // 真实 OOXML 中 fldChar / instrText 都包裹在 w:r 内（而非段落直子级）。
         // 优先识别「域 run」驱动复杂域状态机；否则按普通 run 处理。
         const fldCharType = getAttr(item?.fldChar, '@_fldCharType');
@@ -857,6 +882,8 @@ function parseContainerInlines(
       else if (tag === 'cr') inlines.push({ type: 'break', breakType: 'textWrapping' });
       else if (tag === 'footnoteReference')
         inlines.push({ type: 'footnoteRef', id: getAttr(item, '@_id') });
+      else if (tag === 'endnoteReference')
+        inlines.push({ type: 'footnoteRef', id: getAttr(item, '@_id'), noteType: 'endnote' });
       else if (unsupported) {
         unsupported.push(
           unsupportedFeature(
@@ -1054,6 +1081,33 @@ async function parseComments(zip: Zip): Promise<JkComment[]> {
   });
 }
 
+/**
+ * 解析 word/footnotes.xml 或 word/endnotes.xml → JkNote[]（缺失或无内容时返回空数组）。
+ *
+ * 逐条目（w:footnote / w:endnote）解析：跳过带 `w:type` 的分隔符/续行分隔符等特殊条目，
+ * 以及 id<=0 的保留条目；正文条目复用 `parseContainerBlocks`（与 body 同构）解析 blocks。
+ */
+async function parseNotes(zip: Zip, path: 'word/footnotes.xml' | 'word/endnotes.xml'): Promise<JkNote[]> {
+  const xml = await readPart(zip, path);
+  if (!xml) return [];
+  const obj = parseXml(xml);
+  const isFootnote = path.includes('footnotes');
+  const root = isFootnote ? obj.footnotes : obj.endnotes;
+  if (!root) return [];
+  const itemKey = isFootnote ? 'footnote' : 'endnote';
+  const notes: JkNote[] = [];
+  for (const n of ensureArray(root[itemKey])) {
+    // 跳过特殊条目：带 w:type（separator/continuationSeparator…）或 id<=0
+    if (getAttr(n, '@_type') !== undefined) continue;
+    const id = getAttr(n, '@_id');
+    if (id === undefined) continue;
+    const idNum = Number(id);
+    if (Number.isFinite(idNum) && idNum <= 0) continue;
+    notes.push({ id, blocks: parseContainerBlocks(n) });
+  }
+  return notes;
+}
+
 /* =========================================================================
  * 9. 块级元素（Paragraph / Table）与递归容器
  * ========================================================================= */
@@ -1156,6 +1210,25 @@ function parseSectionRefs(node: any, tag: 'headerReference' | 'footerReference')
 }
 
 /**
+ * 解析分栏设置（对应 w:sectPr/w:cols）。
+ * 全默认（单栏、无间距、无分隔线）时返回 undefined，保持模型精简。
+ */
+function parseColumns(cols: any): Columns | undefined {
+  if (!cols) return undefined;
+  const numRaw = getAttr(cols, '@_num');
+  const num = numRaw !== undefined ? Number(numRaw) : undefined;
+  const count = num !== undefined && Number.isFinite(num) && num > 0 ? num : 1;
+  const space = tw2emu(getAttr(cols, '@_space'));
+  const sepRaw = getAttr(cols, '@_sep');
+  const separator = sepRaw === '1' || sepRaw === 'true';
+  if (count === 1 && space === undefined && !separator) return undefined;
+  const out: Columns = { count };
+  if (space !== undefined) out.space = space;
+  if (separator) out.separator = true;
+  return out;
+}
+
+/**
  * 解析页眉/页脚部件（word/headerN.xml 或 word/footerN.xml）。
  * 根节点 <w:hdr>/<w:ftr> 下直接是 <w:p>/<w:tbl>，与 document.xml 的 body 子节点同构，
  * 因此复用 `parseContainerBlocks` 当作「mini body」处理。返回 Block[]。
@@ -1216,6 +1289,10 @@ function parseSectionProps(
   }
   section.headerRefs = parseSectionRefs(sectPr, 'headerReference');
   section.footerRefs = parseSectionRefs(sectPr, 'footerReference');
+
+  // 分栏设置（对应 w:cols）
+  const columns = parseColumns(sectPr.cols);
+  if (columns) section.columns = columns;
 
   // 回填页眉/页脚内容（MVP 只取 type==='default' 的内容，其余保留引用不读取）
   if (section.headerRefs && section.headerRefs.length) {
@@ -1335,12 +1412,14 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   const hfRelMap = new Map<string, string>();
   for (const rel of rels) hfRelMap.set(rel.id, rel.target);
 
-  const [styleDefs, numberingDefs, settings, media, comments] = await Promise.all([
+  const [styleDefs, numberingDefs, settings, media, comments, footnotes, endnotes] = await Promise.all([
     parseStyles(zip),
     parseNumbering(zip),
     parseSettings(zip),
     parseMedia(zip, rels),
     parseComments(zip),
+    parseNotes(zip, 'word/footnotes.xml'),
+    parseNotes(zip, 'word/endnotes.xml'),
   ]);
 
   const unsupported: UnsupportedFeature[] = [];
@@ -1382,6 +1461,8 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   };
 
   if (comments.length) doc.comments = comments;
+  if (footnotes.length) doc.footnotes = footnotes;
+  if (endnotes.length) doc.endnotes = endnotes;
 
   // 汇总修订作者（可选字段，便于 UI 展示）
   const revisionAuthors = collectRevisionAuthors(body);

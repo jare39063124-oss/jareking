@@ -18,6 +18,7 @@ import type {
   Alignment,
   Block,
   CommentRange,
+  FootnoteRef,
   Hyperlink,
   Inline,
   JkDocument,
@@ -190,8 +191,15 @@ function renderInline(
     }
     case 'break':
       return inline.breakType === 'page' ? '<hr />' : '<br />';
-    case 'footnoteRef':
-      return '';
+    case 'footnoteRef': {
+      // 脚注/尾注引用：渲染为带 data-jk-note(-type) 的 sup，
+      // 编辑器 jkNoteRef 节点据此保留语义，htmlToJk 再还原为 footnoteRef 行内元素。
+      const ref = inline as FootnoteRef;
+      const noteType = ref.noteType === 'endnote' ? 'endnote' : 'footnote';
+      const id = ref.id ?? '';
+      const label = /^\d+$/.test(id) ? id : '*';
+      return `<sup data-jk-note="${escapeHtml(id)}" data-jk-note-type="${noteType}">${label}</sup>`;
+    }
     case 'field': {
       // 域：以带 data-jk-field / data-jk-field-result 的 span 呈现，编辑器（jkField 节点）保留其语义
       const instr = escapeHtml((inline as { instr?: string }).instr ?? '');

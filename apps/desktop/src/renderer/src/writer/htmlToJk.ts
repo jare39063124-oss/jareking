@@ -225,6 +225,15 @@ function collectInlines(
     return;
   }
 
+  // 脚注/尾注引用（sup[data-jk-note]，编辑器 jkNoteRef 节点）：
+  // 还原为 footnoteRef 行内元素，noteType 决定导出为脚注还是尾注引用。
+  if (tag === 'sup' && el.getAttribute('data-jk-note') !== null) {
+    const id = el.getAttribute('data-jk-note') ?? '';
+    const noteType = el.getAttribute('data-jk-note-type') === 'endnote' ? 'endnote' : 'footnote';
+    out.push({ type: 'footnoteRef', id, noteType });
+    return;
+  }
+
   // 批注 span（data-jk-comment）：记录其覆盖的 run 区间后递归子节点（剥离外层 span）
   if (tag === 'span' && el.getAttribute('data-jk-comment')) {
     const id = el.getAttribute('data-jk-comment') ?? '';

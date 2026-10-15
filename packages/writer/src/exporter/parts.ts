@@ -256,6 +256,17 @@ export function serializeContentTypes(doc: JkDocument): string {
       `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>`,
     );
   }
+  // 脚注/尾注部件 Override（有内容时追加）
+  if ((doc.footnotes ?? []).length) {
+    overrides.push(
+      `<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>`,
+    );
+  }
+  if ((doc.endnotes ?? []).length) {
+    overrides.push(
+      `<Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>`,
+    );
+  }
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="${REL}">${defaults.join('')}${overrides.join('')}</Types>`;
 }

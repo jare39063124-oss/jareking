@@ -275,6 +275,7 @@ const RIBBON_TABS: RibbonTabDef[] = [
         tools: [
           { kind: 'button', id: 'margin', label: '页边距', icon: Layout },
           { kind: 'button', id: 'orientation', label: '纸张方向', icon: Columns2 },
+          { kind: 'button', id: 'columns', label: '分栏', icon: Columns2 },
         ],
       },
       {
@@ -294,8 +295,15 @@ const RIBBON_TABS: RibbonTabDef[] = [
         name: '目录',
         tools: [
           { kind: 'button', id: 'toc', label: '目录', icon: BookOpen },
-          { kind: 'button', id: 'footnote', label: '脚注', icon: Footprints },
           { kind: 'button', id: 'bookmark', label: '书签', icon: Bookmark },
+        ],
+      },
+      {
+        name: '脚注与尾注',
+        tools: [
+          { kind: 'button', id: 'insert-footnote', label: '插入脚注', icon: Footprints },
+          { kind: 'button', id: 'insert-endnote', label: '插入尾注', icon: Bookmark },
+          { kind: 'button', id: 'notes', label: '脚注/尾注', icon: ListTree },
         ],
       },
     ],

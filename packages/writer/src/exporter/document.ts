@@ -16,6 +16,7 @@ import type {
   Inline,
   JkComment,
   JkDocument,
+  JkNote,
   Paragraph,
   ParagraphProperties,
   Run,
@@ -213,9 +214,12 @@ function serializeInline(inline: Inline, ctx: Ctx = { imageId: 0, revisionId: 0 
       return serializeImage(inline, ctx);
     case 'break':
       return serializeBreak(inline);
-    case 'footnoteRef':
-      // footnoteReference 必须位于 w:r 内（OOXML 约束），包裹后导出
-      return `<w:r><w:footnoteReference w:id="${escapeXmlAttr(inline.id ?? '')}"/></w:r>`;
+    case 'footnoteRef': {
+      // 脚注/尾注引用必须位于 w:r 内（OOXML 约束），包裹后导出；
+      // 引用标记按 noteType 决定（footnote → w:footnoteReference，endnote → w:endnoteReference）。
+      const refTag = inline.noteType === 'endnote' ? 'w:endnoteReference' : 'w:footnoteReference';
+      return `<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><${refTag} w:id="${escapeXmlAttr(inline.id ?? '')}"/></w:r>`;
+    }
     case 'field': {
       // Word 域：以 fldSimple 还原，Word/WPS 打开后按指令重算（PAGE/NUMPAGES/DATE/TOC…）
       const result = inline.result
@@ -477,6 +481,15 @@ function buildSectPr(section: Section, breakType?: SectionBreak['breakType']): s
     }
     if (a.length) inner.push(`<w:pgMar ${a.join(' ')}/>`);
   }
+  // 分栏（对应 w:cols）：仅当节携带分栏设置时写出，缺省单栏不写（保持与解析器分析一致）
+  if (section.columns) {
+    const c = section.columns;
+    const ca: string[] = [`w:num="${c.count}"`];
+    const space = emuToTwips(c.space);
+    if (space !== undefined) ca.push(`w:space="${space}"`);
+    if (c.separator) ca.push('w:sep="1"');
+    inner.push(`<w:cols ${ca.join(' ')}/>`);
+  }
   for (const hr of section.headerRefs ?? []) {
     inner.push(
       `<w:headerReference w:type="${escapeXmlAttr(hr.refType)}" r:id="${escapeXmlAttr(hr.relId)}"/>`,
@@ -613,4 +626,45 @@ export function serializeCommentsPart(comments: JkComment[]): string {
     .join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:comments xmlns:w="${HF_W}">${items}</w:comments>`;
+}
+
+/* =========================================================================
+ * 7. 脚注 / 尾注部件（word/footnotes.xml / word/endnotes.xml）
+ * ========================================================================= */
+
+/**
+ * 生成脚注/尾注部件（根 <w:footnotes> 或 <w:endnotes>）。
+ *
+ * 结构对称：先写 OOXML 规范的「分隔符」（id=-1）与「续行分隔符」（id=0）条目
+ * （Word/WPS 打开所必需，否则脚注区可能不显示），再写正文条目。
+ * 每条正文条目内复用 `serializeBlock`（与 body 同构），空条目补 `<w:p/>` 占位。
+ */
+function serializeNotesPart(
+  notes: JkNote[],
+  rootTag: 'w:footnotes' | 'w:endnotes',
+  itemTag: 'w:footnote' | 'w:endnote',
+): string {
+  const ctx: Ctx = { imageId: 0, revisionId: 0 };
+  const sep = `<${itemTag} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></${itemTag}>`;
+  const cont = `<${itemTag} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></${itemTag}>`;
+  const items = (notes ?? [])
+    .map((n) => {
+      const blocks = n.blocks?.length
+        ? n.blocks.map((b) => serializeBlock(b, ctx)).join('')
+        : '<w:p/>';
+      return `<${itemTag} w:id="${escapeXmlAttr(n.id)}">${blocks}</${itemTag}>`;
+    })
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<${rootTag} xmlns:w="${HF_W}" xmlns:r="${HF_R}" xmlns:wp="${HF_WP}" xmlns:a="${HF_A}" xmlns:pic="${HF_PIC}" xmlns:m="${HF_M}">${sep}${cont}${items}</${rootTag}>`;
+}
+
+/** 生成 word/footnotes.xml（根 <w:footnotes>） */
+export function serializeFootnotesPart(notes: JkNote[]): string {
+  return serializeNotesPart(notes, 'w:footnotes', 'w:footnote');
+}
+
+/** 生成 word/endnotes.xml（根 <w:endnotes>） */
+export function serializeEndnotesPart(notes: JkNote[]): string {
+  return serializeNotesPart(notes, 'w:endnotes', 'w:endnote');
 }

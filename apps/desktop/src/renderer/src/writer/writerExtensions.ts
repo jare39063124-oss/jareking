@@ -22,6 +22,7 @@ import { FontSize } from './fontSize';
 import { JkField } from './jkField';
 import { JkImage } from './jkImage';
 import { JkFormula } from './jkFormula';
+import { JkNoteRef } from './jkNoteRef';
 import { JkCommentMark } from './jkComment';
 import { JkRevisionMark } from './jkRevision';
 
@@ -79,6 +80,7 @@ export const writerExtensions: Extensions = [
   JkImage,
   JkField,
   JkFormula,
+  JkNoteRef,
   JkCommentMark,
   // 修订（track changes）：数据承载 mark，主编辑器与页眉页脚共用；
   // 实时记录插件（JkTrackChanges）只挂主编辑器，见 WriterEditor。

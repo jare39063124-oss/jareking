@@ -15,7 +15,13 @@ import JSZip from 'jszip';
 
 import type { Block, JkDocument } from '../model/document.js';
 import { serializeDocumentXml } from './document.js';
-import { serializeHeaderPart, serializeFooterPart, serializeCommentsPart } from './document.js';
+import {
+  serializeHeaderPart,
+  serializeFooterPart,
+  serializeCommentsPart,
+  serializeFootnotesPart,
+  serializeEndnotesPart,
+} from './document.js';
 import {
   serializeContentTypes,
   serializeDocumentRels,
@@ -161,14 +167,61 @@ function allocateComments(work: JkDocument): string | null {
 }
 
 /**
+ * 依据文档脚注/尾注协调 footnotes/endnotes 部件关系（relId 形如 rIdFnN / rIdEnN），
+ * 返回需写出的部件内容（无内容返回 null）。直接修改 `work`（已深拷贝的文档）。
+ *
+ * 与 allocateComments 同范式：
+ * - 已有 footnotes/endnotes 关系（解析透传）→ 复用，避免 round-trip 关系重复累积；
+ * - 无内容但存在透传的关系 → 清理，避免悬空关系导致 Word 报损坏；
+ * - 新建关系时以 existingRelIds 去重，避免与图片 rId / rIdHfN 冲突。
+ */
+function allocateNotes(work: JkDocument): { footnotesXml: string | null; endnotesXml: string | null } {
+  const footnotes = work.footnotes ?? [];
+  const endnotes = work.endnotes ?? [];
+
+  const ensureRel = (
+    type: 'footnotes' | 'endnotes',
+    target: string,
+    has: boolean,
+    idPrefix: string,
+  ): void => {
+    const exist = (work.relationships ?? []).some((r) => r.type === type);
+    if (has && !exist) {
+      const taken = existingRelIds(work);
+      let seq = 0;
+      let relId = '';
+      do {
+        seq += 1;
+        relId = `rId${idPrefix}${seq}`;
+      } while (taken.has(relId));
+      work.relationships = [
+        ...(work.relationships ?? []),
+        { id: relId, type, target },
+      ];
+    } else if (!has && exist) {
+      work.relationships = (work.relationships ?? []).filter((r) => r.type !== type);
+    }
+  };
+
+  ensureRel('footnotes', 'footnotes.xml', footnotes.length > 0, 'Fn');
+  ensureRel('endnotes', 'endnotes.xml', endnotes.length > 0, 'En');
+
+  return {
+    footnotesXml: footnotes.length ? serializeFootnotesPart(footnotes) : null,
+    endnotesXml: endnotes.length ? serializeEndnotesPart(endnotes) : null,
+  };
+}
+
+/**
  * 把文档模型导出为 .docx 字节流（Uint8Array）。
  * @param doc JkDocument 文档模型
  */
 export async function exportDocx(doc: JkDocument): Promise<Uint8Array> {
-  // 深拷贝后分配页眉/页脚、批注 relId（不污染入参）
+  // 深拷贝后分配页眉/页脚、批注、脚注/尾注 relId（不污染入参）
   const work: JkDocument = cloneDoc(doc);
   const hfParts = allocateHeaderFooter(work);
   const commentsXml = allocateComments(work);
+  const notes = allocateNotes(work);
 
   const zip = new JSZip();
   zip.file('[Content_Types].xml', serializeContentTypes(work));
@@ -180,6 +233,10 @@ export async function exportDocx(doc: JkDocument): Promise<Uint8Array> {
 
   // 写出批注部件（word/comments.xml）
   if (commentsXml) zip.file('word/comments.xml', commentsXml);
+
+  // 写出脚注/尾注部件（word/footnotes.xml / word/endnotes.xml）
+  if (notes.footnotesXml) zip.file('word/footnotes.xml', notes.footnotesXml);
+  if (notes.endnotesXml) zip.file('word/endnotes.xml', notes.endnotesXml);
 
   const rels = serializeDocumentRels(work);
   if (rels) zip.file('word/_rels/document.xml.rels', rels);

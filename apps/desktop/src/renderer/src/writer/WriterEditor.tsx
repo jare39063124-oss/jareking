@@ -19,6 +19,7 @@ import { buildTocEntries, buildTocContent } from "./tocBuilder";
 import { takePendingOpen, peekPendingOpen } from "../stores/pendingOpenStore";
 import { JkFormula } from "./jkFormula";
 import { JK_COMMENT_MARK } from "./jkComment";
+import { JK_NOTE_REF } from "./jkNoteRef";
 import { linearToOmml, validateLinearFormula } from "@jareking/writer";
 import { Modal } from "../components/Modal";
 import { Input } from "../components/Input";
@@ -29,7 +30,7 @@ import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Link from '@tiptap/extension-link';
 import { exportDocx, parseDocx } from '@jareking/writer';
-import type { Block, Inline, JkComment, JkDocument, Run } from '@jareking/writer';
+import type { Block, Inline, JkComment, JkDocument, JkNote, Run, Section } from '@jareking/writer';
 import {
   applyChunkEdits,
   collectImageRelIds,
@@ -40,7 +41,7 @@ import {
   WRITER_CHUNK_BLOCK_THRESHOLD,
 } from './chunking';
 import type { ChunkRange } from './chunking';
-import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon, MessageSquarePlus } from 'lucide-react';
+import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon, MessageSquarePlus, Footprints, Columns2 } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { LoadingOverlay } from '../components/LoadingOverlay';
@@ -100,6 +101,32 @@ function formatCommentTime(iso?: string): string {
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 脚注/尾注条目 → 纯文本（段落以 \n 连接，便于在 Modal 内编辑） */
+function noteToText(note: JkNote): string {
+  return (note.blocks ?? [])
+    .map((b) =>
+      b.type === 'paragraph'
+        ? b.runs.map((r) => (r.type === 'run' ? r.text : '')).join('')
+        : '',
+    )
+    .join('\n');
+}
+
+/** 纯文本 → 脚注/尾注条目块（按行拆分为段落，空行保留为空段落） */
+function textToNoteBlocks(text: string): Block[] {
+  return text.split('\n').map((line) =>
+    line ? ({ type: 'paragraph', runs: [{ type: 'run', text: line }] } as Block) : ({ type: 'paragraph', runs: [] } as Block),
+  );
+}
+
+/** 现有脚注/尾注中的最大数字 id（新 id = max + 1，且至少为 1） */
+function maxNoteId(list: JkNote[]): number {
+  return list.reduce((max, n) => {
+    const v = Number(n.id);
+    return Number.isFinite(v) ? Math.max(max, v) : max;
+  }, 0);
 }
 
 /**
@@ -193,6 +220,22 @@ export function WriterEditor() {
   const [commentTick, setCommentTick] = useState(0);
   // 打开批注 Modal 时暂存的选区（Modal 获得焦点后编辑器选区可能变化，需固定范围）
   const pendingCommentRangeRef = useRef<{ from: number; to: number } | null>(null);
+
+  // —— 脚注 / 尾注（WPS 对齐：引用）——
+  // 文档级脚注/尾注条目（内存态，用 ref 持有，参照 commentsRef 模式）；
+  // 正文引用由编辑器 jkNoteRef 节点与模型 Paragraph 内的 FootnoteRef 承载，
+  // 保存时把本 ref 注入 jk.footnotes / jk.endnotes，并落盘为 footnotes.xml / endnotes.xml。
+  const notesRef = useRef<{ footnotes: JkNote[]; endnotes: JkNote[] }>({ footnotes: [], endnotes: [] });
+  const [notesOpen, setNotesOpen] = useState(false);
+  // 面板/编辑区重渲染信号（ref 变更不触发渲染，用 tick 强制刷新）
+  const [notesTick, setNotesTick] = useState(0);
+
+  // —— 分栏（WPS 对齐：页面布局）——
+  // 当前节的分栏设置（内存态）；保存时注入 jk.sections[0].columns，导出为 sectPr/w:cols。
+  const columnsRef = useRef<Section['columns']>(undefined);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [colCount, setColCount] = useState(2);
+  const [colSep, setColSep] = useState(false);
 
   // 表格底纹（单元格/表头/行/表格四级）保真逻辑与统一扩展集合见 ./writerExtensions。
   // 主编辑器与「页眉页脚」Modal 共用 writerExtensions，避免重复声明。
@@ -323,6 +366,13 @@ export function WriterEditor() {
     // 回填当前文档的批注列表（深拷贝，避免污染解析结果）
     commentsRef.current = (jk.comments ?? []).map((c) => ({ ...c }));
     setCommentTick((t) => t + 1);
+    // 回填脚注/尾注条目（深拷贝）与当前节分栏设置
+    notesRef.current = {
+      footnotes: (jk.footnotes ?? []).map((n) => ({ ...n, blocks: [...n.blocks] })),
+      endnotes: (jk.endnotes ?? []).map((n) => ({ ...n, blocks: [...n.blocks] })),
+    };
+    setNotesTick((t) => t + 1);
+    columnsRef.current = jk.sections?.[0]?.columns ? { ...jk.sections[0].columns } : undefined;
     const ranges = computeChunkRanges(jk.body.length);
     chunkRangesRef.current = ranges;
     const isChunked = jk.body.length > WRITER_CHUNK_BLOCK_THRESHOLD && ranges.length > 1;
@@ -468,6 +518,14 @@ export function WriterEditor() {
     }
   };
 
+  /** 把内存态的脚注/尾注与分栏设置注入导出模型（分块/非分块两路保存共用） */
+  const applyNotesAndColumns = (jk: JkDocument): void => {
+    if (!jk.sections || jk.sections.length === 0) jk.sections = [{ type: 'section' }];
+    jk.sections[0].columns = columnsRef.current;
+    jk.footnotes = notesRef.current.footnotes.length ? notesRef.current.footnotes : undefined;
+    jk.endnotes = notesRef.current.endnotes.length ? notesRef.current.endnotes : undefined;
+  };
+
   /** 从编辑器取回当前模型（非分块模式的真源）：HTML → JkDocument，并注入页眉页脚与批注 */
   const collectModelFromEditor = (): JkDocument => {
     const html = editor!.getHTML();
@@ -478,6 +536,7 @@ export function WriterEditor() {
     jk.sections[0].header = hfRef.current.header;
     jk.sections[0].footer = hfRef.current.footer;
     jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
+    applyNotesAndColumns(jk);
     return jk;
   };
 
@@ -502,6 +561,8 @@ export function WriterEditor() {
       jk.sections[0].footer = hfRef.current.footer;
       // 注入批注（两路保存都注入）：正文锚点由 htmlToJk/jkToHtml 往返，批注正文来自 ref
       jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
+      // 注入脚注/尾注与分栏设置（两路保存都注入）
+      applyNotesAndColumns(jk);
       const buf = await exportDocx(jk);
       downloadBlob(
         buf,
@@ -686,6 +747,58 @@ export function WriterEditor() {
     }
   };
 
+  /* -------------------- 脚注 / 尾注（WPS 对齐：引用） -------------------- */
+
+  /** 在光标处插入脚注/尾注引用，并新建一条空条目、打开编辑面板 */
+  const insertNote = (kind: 'footnote' | 'endnote') => {
+    const ed = editor;
+    if (!ed) return;
+    const list = kind === 'footnote' ? notesRef.current.footnotes : notesRef.current.endnotes;
+    const id = String(maxNoteId(list) + 1);
+    ed.chain().focus().insertContent({ type: JK_NOTE_REF, attrs: { noteId: id, noteType: kind } }).run();
+    const note: JkNote = { id, blocks: [{ type: 'paragraph', runs: [] }] };
+    notesRef.current =
+      kind === 'footnote'
+        ? { ...notesRef.current, footnotes: [...list, note] }
+        : { ...notesRef.current, endnotes: [...list, note] };
+    setNotesTick((t) => t + 1);
+    setNotesOpen(true);
+    toast.success(kind === 'footnote' ? '已插入脚注，请填写内容' : '已插入尾注，请填写内容');
+  };
+
+  /** 更新某条脚注/尾注正文（Modal 文本域 onChange）：写回内存态并触发重渲染 */
+  const updateNoteText = (kind: 'footnote' | 'endnote', id: string, text: string) => {
+    const blocks = textToNoteBlocks(text);
+    notesRef.current =
+      kind === 'footnote'
+        ? {
+            ...notesRef.current,
+            footnotes: notesRef.current.footnotes.map((n) => (n.id === id ? { ...n, blocks } : n)),
+          }
+        : {
+            ...notesRef.current,
+            endnotes: notesRef.current.endnotes.map((n) => (n.id === id ? { ...n, blocks } : n)),
+          };
+    setNotesTick((t) => t + 1);
+  };
+
+  /* -------------------- 分栏（WPS 对齐：页面布局） -------------------- */
+
+  /** 打开分栏对话框（回显当前设置） */
+  const openColumns = () => {
+    setColCount(columnsRef.current?.count ?? 1);
+    setColSep(columnsRef.current?.separator ?? false);
+    setColumnsOpen(true);
+  };
+
+  /** 应用分栏设置：写回内存态（保存时注入节 model）；单栏无分隔线视为缺省（清除设置） */
+  const applyColumns = () => {
+    columnsRef.current =
+      colCount <= 1 && !colSep ? undefined : { count: colCount, separator: colSep || undefined };
+    setColumnsOpen(false);
+    toast.success(colCount <= 1 ? '已设为单栏' : `已设为 ${colCount} 栏`);
+  };
+
   /**
    * 把编辑能力注册到命令总线：Ribbon 的按钮 / 控件由此驱动。
    * 依赖 editor，命令闭包读最新 editor；卸载时自动注销。
@@ -828,6 +941,15 @@ export function WriterEditor() {
       },
       'header-footer': {
         run: () => setHfOpen(true),
+      },
+      // —— 引用：脚注 / 尾注（WPS 对齐）——
+      'insert-footnote': { run: () => insertNote('footnote') },
+      'insert-endnote': { run: () => insertNote('endnote') },
+      notes: { run: () => setNotesOpen(true) },
+      // —— 页面布局：分栏（WPS 对齐）——
+      columns: {
+        run: () => openColumns(),
+        state: () => ({ value: String(columnsRef.current?.count ?? 1) }),
       },
       // —— 审阅：新建批注（WPS 对齐协作功能）——
       comment: {
@@ -1330,6 +1452,108 @@ export function WriterEditor() {
           />
           <p className="text-tiny text-muted">
             批注将锚定到当前选区文本；保存后写入 Word 原生批注（word/comments.xml）。Ctrl+Enter 快速确定。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 脚注 / 尾注编辑对话框（WPS 对齐：引用）：列出全部脚注/尾注逐条编辑；严禁 window.prompt/alert */}
+      <Modal
+        open={notesOpen}
+        onClose={() => setNotesOpen(false)}
+        title="脚注 / 尾注"
+        width={520}
+        footer={
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Footprints size={13} />}
+            onClick={() => setNotesOpen(false)}
+          >
+            完成
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1" data-notes-tick={notesTick}>
+          {notesRef.current.footnotes.length === 0 && notesRef.current.endnotes.length === 0 ? (
+            <p className="text-tiny text-muted">
+              暂无脚注或尾注。用「引用 → 插入脚注 / 插入尾注」在光标处添加。
+            </p>
+          ) : null}
+          {notesRef.current.footnotes.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <span className="text-tiny font-medium text-fg">脚注</span>
+              {notesRef.current.footnotes.map((n) => (
+                <div key={`fn-${n.id}`} className="flex flex-col gap-1">
+                  <label className="text-tiny text-muted">脚注 {n.id}</label>
+                  <textarea
+                    className="min-h-[64px] w-full resize-y rounded-sm border border-border bg-surface px-2 py-1.5 text-ui text-fg outline-none transition-colors placeholder:text-muted hover:border-accent focus-visible:border-accent"
+                    placeholder="输入脚注内容…"
+                    value={noteToText(n)}
+                    onChange={(e) => updateNoteText('footnote', n.id, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {notesRef.current.endnotes.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              <span className="text-tiny font-medium text-fg">尾注</span>
+              {notesRef.current.endnotes.map((n) => (
+                <div key={`en-${n.id}`} className="flex flex-col gap-1">
+                  <label className="text-tiny text-muted">尾注 {n.id}</label>
+                  <textarea
+                    className="min-h-[64px] w-full resize-y rounded-sm border border-border bg-surface px-2 py-1.5 text-ui text-fg outline-none transition-colors placeholder:text-muted hover:border-accent focus-visible:border-accent"
+                    placeholder="输入尾注内容…"
+                    value={noteToText(n)}
+                    onChange={(e) => updateNoteText('endnote', n.id, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <p className="text-tiny text-muted">
+            脚注/尾注正文在此编辑；保存后写入 word/footnotes.xml 与 word/endnotes.xml，Word/WPS 可继续编辑。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 分栏对话框（WPS 对齐：页面布局）：选择栏数与分隔线；写入当前节 Section.columns，导出为 sectPr/w:cols */}
+      <Modal
+        open={columnsOpen}
+        onClose={() => setColumnsOpen(false)}
+        title="分栏"
+        width={360}
+        footer={
+          <Button variant="primary" size="sm" icon={<Columns2 size={13} />} onClick={applyColumns}>
+            确定
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex items-center gap-2">
+            <span className="text-tiny text-muted">栏数</span>
+            {[1, 2, 3].map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColCount(c)}
+                aria-pressed={colCount === c}
+                className={`h-7 w-9 rounded-sm border text-tiny transition-colors ${
+                  colCount === c
+                    ? 'border-accent bg-accent/15 text-accent'
+                    : 'border-border hover:bg-hover'
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-center gap-2 text-tiny text-fg">
+            <input type="checkbox" checked={colSep} onChange={(e) => setColSep(e.target.checked)} />
+            显示分隔线
+          </label>
+          <p className="text-tiny text-muted">
+            作用于当前节；1 栏且无分隔线即恢复单栏。保存后写入 sectPr 的 w:cols。
           </p>
         </div>
       </Modal>
