@@ -47,7 +47,8 @@ async function readBytes(file: File): Promise<Uint8Array> {
 }
 
 function download(bytes: Uint8Array, name: string, mime = 'application/pdf'): void {
-  const blob = new Blob([bytes], { type: mime });
+  // Uint8Array（ArrayBufferLike）与 BlobPart 类型不完全重叠，断言不改变运行时行为
+  const blob = new Blob([bytes as BlobPart], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -181,7 +182,7 @@ export function PdfToolbox() {
         if (!target) throw new Error('请选择 PDF 文件');
         const pages = await pdfToImages(await readBytes(target));
         const results: ImageResult[] = pages.map((p) => {
-          const blob = new Blob([p.png], { type: 'image/png' });
+          const blob = new Blob([p.png as BlobPart], { type: 'image/png' });
           const url = URL.createObjectURL(blob);
           return { page: p.page, url, name: `${target.name.replace(/\.pdf$/i, '')}-第${p.page}页.png` };
         });

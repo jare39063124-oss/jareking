@@ -23,12 +23,13 @@ import CfZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN
 import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
 import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
-import type { FUniver } from '@univerjs/core';
+import type { FUniver } from '@univerjs/presets';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
 import { Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
+import { Modal } from '../components/Modal';
 import { toast } from '../stores/toastStore';
 import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
@@ -180,13 +181,15 @@ export function SheetEditor() {
         // 字符串 'zh-CN' 会导致内部 LOCALE_META 查表 undefined 而抛错
         locale: LocaleType.ZH_CN,
         locales: {
+          // 各 preset 的 locale 为嵌套结构，经 Object.assign 合并为单层字典供 Univer 使用；
+          // 此处断言为 Record<string,string> 仅为满足 locales 索引签名，不改变运行时结构
           [LocaleType.ZH_CN]: Object.assign(
             {},
-            UniverZhCN as Record<string, string>,
-            SortZhCN as Record<string, string>,
-            FilterZhCN as Record<string, string>,
-            CfZhCN as Record<string, string>,
-            DvZhCN as Record<string, string>,
+            UniverZhCN as unknown as Record<string, string>,
+            SortZhCN as unknown as Record<string, string>,
+            FilterZhCN as unknown as Record<string, string>,
+            CfZhCN as unknown as Record<string, string>,
+            DvZhCN as unknown as Record<string, string>,
           ),
         },
         theme: defaultTheme,
@@ -340,7 +343,10 @@ export function SheetEditor() {
         },
         // 数字重载对照测试（T4.5 排查 getRange 字符串重载是否失效）
         setValueAt: (row: number, col: number, v: unknown) => {
-          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+          // 调试探针：以宽松视图访问，允许写入任意值（仅自动化冒烟使用）
+          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet() as
+            | Record<string, any>
+            | undefined;
           if (!s) return 'no-sheet';
           s.getRange(row, col).setValue(v);
           return 'ok';
@@ -350,7 +356,10 @@ export function SheetEditor() {
           return v === undefined || v === null ? null : v;
         },
         probeProtect: async () => {
-          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+          // 调试探针：hasProtection / unprotect 在 1.0.4 类型中未暴露，用宽松视图动态探测
+          const s = apiRef.current?.getActiveWorkbook()?.getActiveSheet() as
+            | Record<string, any>
+            | undefined;
           if (!s) return 'no-sheet';
           const proto = Object.getPrototypeOf(s);
           const methods = Object.getOwnPropertyNames(proto).filter((n) => n.toLowerCase().includes('protect'));
@@ -416,7 +425,7 @@ export function SheetEditor() {
       if (!jk) throw new Error('no active workbook');
       const buf = await exportXlsx(jk);
       downloadBlob(
-        buf,
+        buf as BlobPart,
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         '导出.xlsx',
       );

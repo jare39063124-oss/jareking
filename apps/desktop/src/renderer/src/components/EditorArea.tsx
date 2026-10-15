@@ -21,6 +21,16 @@ interface RecentFileRow {
   pinned: number;
 }
 
+/**
+ * 断言：模块可直接打开本地文件。
+ * 说明：DocModule 取值为 writer/sheet/slide/pdf（演示模块记为 slide），
+ * 而 PendingOpen.module 契约用 writer/sheet/presentation；两者交集为 writer/sheet，
+ * 故仅这两者可经「最近使用」直达打开（与既有运行时行为一致）。
+ */
+function isOpenableModule(module: DocModule): module is 'writer' | 'sheet' {
+  return module === 'writer' || module === 'sheet';
+}
+
 /** 最近使用（WPS 首页体验）：点击直达打开，悬停可定位到系统文件管理器 */
 function RecentDocs() {
   const openTab = useTabStore((state) => state.openTab);
@@ -48,7 +58,7 @@ function RecentDocs() {
 
   const open = (row: RecentFileRow) => {
     const module = row.document.module as DocModule;
-    if (!['writer', 'sheet', 'presentation'].includes(module) || !row.document.filePath) {
+    if (!isOpenableModule(module) || !row.document.filePath) {
       toast.warning('该文件暂不支持直接打开，请用「打开」按钮手动选择');
       return;
     }

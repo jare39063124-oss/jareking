@@ -5,7 +5,7 @@
  * 公式：op 不带 = 前缀，Univer setFormula 需要 = 前缀，在此补齐。
  * 单 op try/catch，失败跳过不中断。
  */
-import type { FUniver } from '@univerjs/core';
+import type { FUniver } from '@univerjs/presets';
 import type { SheetOp } from '@jareking/ai';
 import { parseA1Range } from '@jareking/sheet';
 
@@ -43,11 +43,12 @@ export function applySheetOps(api: FUniver, ops: SheetOp[]): SheetApplyResult {
           const rows = op.values.length;
           const cols = Math.max(...op.values.map((r) => r.length));
           const range = sheet.getRange(anchor.startRow, anchor.startCol, rows, cols);
-          // 补齐行内短列（null 填充），满足 Univer 矩形要求
+          // 补齐行内短列（null 填充），满足 Univer 矩形要求；
+          // 类型断言仅对齐 setValues 的 CellValue 签名（运行时不变，null 由 Univer 视为空）
           const matrix = op.values.map((row) =>
             Array.from({ length: cols }, (_, i) => row[i] ?? null),
           );
-          range.setValues(matrix);
+          range.setValues(matrix as unknown as Parameters<typeof range.setValues>[0]);
           applied.push(op.op);
           break;
         }

@@ -68,7 +68,7 @@ function registerIpcHandlers(): void {
     IPC.DOC_RECENT_PIN,
     (_event, payload?: { documentId: string; pinned: boolean }) => {
       if (!payload?.documentId) return false;
-      library.library.pin(payload.documentId, payload.pinned ? 1 : 0);
+      library.library.pin(payload.documentId, payload.pinned);
       return true;
     },
   );

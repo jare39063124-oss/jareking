@@ -37,16 +37,21 @@ function resetWorker(): void {
   worker = null;
 }
 
+/** 解析类型 → 对应模型（xlsx→JkWorkbook，pptx→JkPresentation），供调用方精确收窄返回值 */
+export type ParseKindModel<K extends ParseKind> = K extends 'xlsx' ? JkWorkbook : JkPresentation;
+
 /**
  * 在 Worker 中解析文件，返回模型。
  * 注意：传入的 buffer 会被转移（neutered），调用方解析后不应再读取它。
+ * 返回类型随 kind 收窄（'xlsx' → JkWorkbook，'pptx' → JkPresentation），
+ * 调用方无需再对返回值做联合类型收窄 / 断言。
  */
-export async function parseInWorker(
-  kind: ParseKind,
+export async function parseInWorker<K extends ParseKind>(
+  kind: K,
   buf: Uint8Array,
-): Promise<JkWorkbook | JkPresentation> {
+): Promise<ParseKindModel<K>> {
   const w = getWorker();
-  return new Promise<JkWorkbook | JkPresentation>((resolve, reject) => {
+  return new Promise<ParseKindModel<K>>((resolve, reject) => {
     let settled = false;
 
     const cleanup = () => {
@@ -61,7 +66,7 @@ export async function parseInWorker(
       if (data && data.ok) {
         settled = true;
         cleanup();
-        resolve(data.model as JkWorkbook | JkPresentation);
+        resolve(data.model as ParseKindModel<K>);
       } else {
         settled = true;
         cleanup();

@@ -113,7 +113,8 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
 
 /** 取最近几轮对话（供 planner 上下文；排除撤销类状态噪音） */
 export function recentAiHistory(max = 6): { role: 'user' | 'assistant'; content: string }[] {
-  return get()
+  return useAiChatStore
+    .getState()
     .messages.slice(-max)
     .map((m) => ({ role: m.role, content: m.content }));
 }
