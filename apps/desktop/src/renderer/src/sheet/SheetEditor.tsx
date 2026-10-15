@@ -23,10 +23,9 @@ import CfZhCN from '@univerjs/preset-sheets-conditional-formatting/locales/zh-CN
 import { UniverSheetsDataValidationPreset } from '@univerjs/preset-sheets-data-validation';
 import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
-import { exportXlsx, sheetToCsv, type JkWorkbook } from '@jareking/sheet';
 import type { FUniver } from '@univerjs/core';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
-import { Download, FileSpreadsheet, FolderOpen, RefreshCw, Search, Sparkles } from 'lucide-react';
+import { Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -43,10 +42,30 @@ import {
   replaceCells,
   toA1,
   cellValueStr,
+  normalizeColor,
+  normalizeCellStyle,
   type JkWorkbook,
+  type JkCellStyle,
   type FindResult,
   type FindOpts,
 } from '@jareking/sheet';
+
+/**
+ * 防御式调用 FRange 的样式 setter：方法不存在或抛错时仅 warn，不阻断其余属性写入。
+ * Univer 各版本 setter 签名略有差异，统一走此封装保证「部分失败不全盘崩溃」。
+ */
+function safeSet(range: unknown, method: string, ...args: unknown[]): void {
+  try {
+    const r = range as Record<string, unknown>;
+    if (typeof r?.[method] === 'function') {
+      (r[method] as (...a: unknown[]) => void)(...args);
+    } else {
+      console.warn(`[设置单元格格式] FRange.${method} 不存在，已跳过`);
+    }
+  } catch (e) {
+    console.warn(`[设置单元格格式] FRange.${method} 调用失败:`, e);
+  }
+}
 
 /** 首载演示工作簿（体现 值/公式/合并/列宽 四类能力） */
 function demoWorkbook(): JkWorkbook {
@@ -127,6 +146,17 @@ export function SheetEditor() {
   const [matchCase, setMatchCase] = useState(false);
   const [wholeCell, setWholeCell] = useState(false);
   const [findResults, setFindResults] = useState<FindResult[]>([]);
+
+  // 设置单元格格式（WPS 对齐批2续）UI 状态
+  const [formatOpen, setFormatOpen] = useState(false);
+  /** 对话框内表单状态（受控）；空串 / 未勾选 → undefined，便于 normalizeCellStyle 跳过 */
+  const [cellStyle, setCellStyle] = useState<Partial<JkCellStyle>>({});
+  /** 边框色（原生 color input，默认黑） */
+  const [borderColor, setBorderColor] = useState('#000000');
+  /** 当前页签：数字 / 对齐 / 字体 / 填充 / 边框 */
+  const [fmtTab, setFmtTab] = useState<'number' | 'align' | 'font' | 'fill' | 'border'>('number');
+  /** 边框下拉选择（无/全部框线/外边框/单边），映射到 cellStyle.borders */
+  const [borderChoice, setBorderChoice] = useState<string>('none');
 
   const configs = useAiStore((s) => s.configs);
   const aiLoaded = useAiStore((s) => s.loaded);
@@ -338,6 +368,24 @@ export function SheetEditor() {
     }
   }, [ready]);
 
+  /** 全局快捷键 Ctrl/Cmd+1：打开「设置单元格格式」对话框（WPS/Excel 经典聚合对话框）。
+   * 仅在焦点不在输入框 / 文本域（含 Univer 单元格编辑态）时响应，避免与 Univer 自带
+   * 快捷键及 AI 输入框冲突。 */
+  useEffect(() => {
+    if (!ready) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = document.activeElement?.tagName;
+      // 输入框 / 文本域（含 Univer 单元格编辑输入框）中不触发
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === '1' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setFormatOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [ready]);
+
   /** 当前 Univer 工作簿快照 → JkWorkbook（保存侧共用） */
   const currentJkWorkbook = (): JkWorkbook | null => {
     const api = apiRef.current;
@@ -455,6 +503,167 @@ export function SheetEditor() {
     if (findQuery) onFindAll();
   };
 
+  /** 读取当前选区（活动单元格）样式用于对话框预填。
+   * 防御：活动表 / 选区缺失则回退活动单元格 (0,0)；个体 getter 不存在则跳过该项。 */
+  const readSelectionStyle = (): Partial<JkCellStyle> => {
+    const api = apiRef.current;
+    if (!api) return {};
+    const fwb = api.getActiveWorkbook();
+    const sheet = fwb?.getActiveSheet() as unknown as Record<string, any> | undefined;
+    if (!sheet) return {};
+
+    // 选区解析：优先 getActiveRange / getActiveCell（实测 getSelectionRange 在本版本不存在），
+    // 均拿不到则回退活动单元格 (0,0)
+    let range: any = null;
+    if (typeof sheet.getActiveRange === 'function') range = sheet.getActiveRange();
+    if (!range && typeof sheet.getActiveCell === 'function') range = sheet.getActiveCell();
+    if (!range) range = sheet.getRange(0, 0);
+    if (!range) return {};
+
+    const out: Partial<JkCellStyle> = {};
+
+    // —— 字体名 / 字号 / 换行 / 对齐 / 背景：本版本 FRange 实测存在对应 getter ——
+    if (typeof range.getFontFamily === 'function') {
+      const ff = range.getFontFamily();
+      if (ff) out.fontFamily = ff;
+    }
+    if (typeof range.getFontSize === 'function') {
+      const fs = range.getFontSize();
+      if (typeof fs === 'number') out.fontSize = fs;
+    }
+    if (typeof range.getWrap === 'function') {
+      if (range.getWrap()) out.wrapText = true;
+    }
+    if (typeof range.getHorizontalAlignment === 'function') {
+      // 返回 'left' | 'center' | 'normal'(右对齐) | 'general'
+      const h = range.getHorizontalAlignment();
+      if (h === 'left') out.align = 'left';
+      else if (h === 'center') out.align = 'center';
+      else if (h === 'normal') out.align = 'right';
+    }
+    if (typeof range.getVerticalAlignment === 'function') {
+      // 返回 'top' | 'middle' | 'bottom' | 'general'
+      const v = range.getVerticalAlignment();
+      if (v === 'top' || v === 'middle' || v === 'bottom') out.valign = v;
+    }
+    if (typeof range.getBackground === 'function') {
+      const bg = normalizeColor(range.getBackground());
+      if (bg) out.bgColor = bg;
+    }
+
+    // —— 粗体 / 斜体 / 下划线 / 删除线 / 字体色 / 数字格式：本版本 FRange 无独立 getter ——
+    // 改用 getCellStyleData()（返回 IStyleData，含 bl/it/ul/st/cl/bg/n 等）反向映射。
+    // 实测不存在的 getter：getBold / getItalic / getUnderline / getStrikeThrough /
+    //   getFontColor / getFill / getPattern / getWrapText / getSelectionRange。
+    const styleData: any =
+      typeof range.getCellStyleData === 'function' ? range.getCellStyleData('cell') : null;
+    if (styleData && typeof styleData === 'object') {
+      if (styleData.bl === 1) out.bold = true;
+      if (styleData.it === 1) out.italic = true;
+      if (styleData.ul && styleData.ul.s === 1) out.underline = true;
+      if (styleData.st && styleData.st.s === 1) out.strike = true;
+      const fg = normalizeColor(styleData.cl?.rgb);
+      if (fg) out.color = fg;
+      if (styleData.n && typeof styleData.n.pattern === 'string' && styleData.n.pattern !== 'General') {
+        out.numFmt = styleData.n.pattern;
+      }
+    }
+
+    return out;
+  };
+
+  /** 应用单元格样式到当前选区（活动单元格 / 选区）。
+   * 先 normalizeCellStyle 清洗表单态，再逐属性调用 Univer FRange setter 写回；
+   * 每个 setter 经 safeSet 防御（typeof + try/catch），失败仅 warn 不阻断。 */
+  const applyCellStyle = (style: Partial<JkCellStyle>, borderColorArg = '#000000'): void => {
+    const api = apiRef.current;
+    if (!api) return;
+    const cleaned = normalizeCellStyle(style);
+    const fwb = api.getActiveWorkbook();
+    const sheet = fwb?.getActiveSheet() as unknown as Record<string, any> | undefined;
+    if (!sheet) return;
+
+    // 选区解析（同 readSelectionStyle）
+    let range: any = null;
+    if (typeof sheet.getActiveRange === 'function') range = sheet.getActiveRange();
+    if (!range && typeof sheet.getActiveCell === 'function') range = sheet.getActiveCell();
+    if (!range) range = sheet.getRange(0, 0);
+    if (!range) return;
+
+    // 数字格式：本应用未加载 sheets-numfmt 预设，setNumberFormat 通常不可用；
+    // 优先尝试，失败时回退 setValue({ s: { n: { pattern } } })（核心路径，始终可用）。
+    if (cleaned.numFmt) {
+      try {
+        if (typeof range.setNumberFormat === 'function') {
+          range.setNumberFormat(cleaned.numFmt);
+        } else {
+          range.setValue({ s: { n: { pattern: cleaned.numFmt } } });
+        }
+      } catch (e) {
+        console.warn('[设置单元格格式] 数字格式写入失败:', e);
+      }
+    }
+
+    // 对齐
+    if (cleaned.align) {
+      // FRange.setHorizontalAlignment 接受 'left' | 'center' | 'normal'（'normal' = 右对齐）
+      const map: Record<string, string> = { left: 'left', center: 'center', right: 'normal' };
+      const v = map[cleaned.align];
+      if (v) safeSet(range, 'setHorizontalAlignment', v);
+    }
+    if (cleaned.valign) safeSet(range, 'setVerticalAlignment', cleaned.valign);
+
+    // 换行
+    if (cleaned.wrapText) safeSet(range, 'setWrap', true);
+
+    // 字体
+    if (cleaned.fontFamily) safeSet(range, 'setFontFamily', cleaned.fontFamily);
+    if (typeof cleaned.fontSize === 'number') safeSet(range, 'setFontSize', cleaned.fontSize);
+    if (cleaned.bold) safeSet(range, 'setFontWeight', 'bold');
+    if (cleaned.italic) safeSet(range, 'setFontStyle', 'italic');
+    // 下划线 / 删除线：FRange 用 setFontLine 单一属性承载（'underline' | 'line-through'），
+    // 若两者同时勾选，按 facade 语义后者覆盖前者（v1 已知限制，后续可改走底层 style 命令）。
+    if (cleaned.underline) safeSet(range, 'setFontLine', 'underline');
+    if (cleaned.strike) safeSet(range, 'setFontLine', 'line-through');
+
+    // 字体色 / 背景色
+    if (cleaned.color) safeSet(range, 'setFontColor', cleaned.color);
+    if (cleaned.bgColor) safeSet(range, 'setBackground', cleaned.bgColor);
+
+    // 边框：从 univerAPI.Enum 取得 BorderType / BorderStyleTypes（避免直接 import 深路径）。
+    const b = cleaned.borders;
+    if (b) {
+      const enums = (api as unknown as { Enum?: any }).Enum;
+      const BorderType = enums?.BorderType;
+      const BorderStyleTypes = enums?.BorderStyleTypes;
+      if (BorderType && BorderStyleTypes) {
+        const color = normalizeColor(borderColorArg) ?? '#000000';
+        const line = BorderStyleTypes.THIN;
+        const all = !!(b.top && b.right && b.bottom && b.left);
+        if (all) {
+          // 四边全选 → 整网格框线
+          safeSet(range, 'setBorder', BorderType.ALL, line, color);
+        } else {
+          if (b.top) safeSet(range, 'setBorder', BorderType.TOP, line, color);
+          if (b.right) safeSet(range, 'setBorder', BorderType.RIGHT, line, color);
+          if (b.bottom) safeSet(range, 'setBorder', BorderType.BOTTOM, line, color);
+          if (b.left) safeSet(range, 'setBorder', BorderType.LEFT, line, color);
+        }
+      }
+    }
+
+    toast.success('已应用单元格格式');
+  };
+
+  /** 打开对话框时的统一入口：预填选区样式、重置边框选项与颜色、再打开 */
+  const openFormatDialog = () => {
+    setCellStyle(readSelectionStyle());
+    setBorderChoice('none');
+    setBorderColor('#000000');
+    setFmtTab('number');
+    setFormatOpen(true);
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 顶栏：文件操作（编辑能力由 Univer 自带工具栏提供） */}
@@ -473,6 +682,9 @@ export function SheetEditor() {
         </Button>
         <Button variant="ghost" size="sm" icon={<Search size={13} />} onClick={() => setFindOpen(true)}>
           查找替换
+        </Button>
+        <Button variant="ghost" size="sm" icon={<Paintbrush size={13} />} onClick={openFormatDialog}>
+          设置单元格格式
         </Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
@@ -609,6 +821,272 @@ export function SheetEditor() {
           )}
           {findQuery && findResults.length === 0 && (
             <p className="text-tiny text-muted">未找到匹配项。</p>
+          )}
+        </div>
+      </Modal>
+
+      {/* 设置单元格格式（WPS 对齐批2续）：Ctrl+1 经典聚合对话框，严禁 window.prompt/alert */}
+      <Modal
+        open={formatOpen}
+        onClose={() => setFormatOpen(false)}
+        title="设置单元格格式"
+        width={460}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setFormatOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                applyCellStyle(cellStyle, borderColor);
+                setFormatOpen(false);
+              }}
+            >
+              确定
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          {/* 顶部页签 */}
+          <div className="flex gap-1 border-b border-border pb-2">
+            {(
+              [
+                { key: 'number', label: '数字' },
+                { key: 'align', label: '对齐' },
+                { key: 'font', label: '字体' },
+                { key: 'fill', label: '填充' },
+                { key: 'border', label: '边框' },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setFmtTab(t.key)}
+                className={`rounded px-2 py-1 text-tiny transition-colors ${
+                  fmtTab === t.key ? 'bg-hover text-accent' : 'text-muted hover:text-fg'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* 数字 */}
+          {fmtTab === 'number' && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-tiny text-muted">分类</span>
+              <select
+                className="w-full rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                value={cellStyle.numFmt ?? ''}
+                onChange={(e) => setCellStyle((s) => ({ ...s, numFmt: e.target.value || undefined }))}
+              >
+                <option value="">常规</option>
+                <option value="0.00">数值 (0.00)</option>
+                <option value="¥#,##0.00">货币 (¥#,##0.00)</option>
+                <option value="¥#,##0.00">会计专用 (¥#,##0.00)</option>
+                <option value="yyyy-mm-dd">日期 (yyyy-mm-dd)</option>
+                <option value="hh:mm:ss">时间 (hh:mm:ss)</option>
+                <option value="0.00%">百分比 (0.00%)</option>
+                <option value="0.00E+00">科学计数 (0.00E+00)</option>
+                <option value="@">文本 (@)</option>
+              </select>
+              <p className="text-tiny text-muted">当前格式：{cellStyle.numFmt || '常规'}</p>
+            </div>
+          )}
+
+          {/* 对齐 */}
+          {fmtTab === 'align' && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">水平</span>
+                <select
+                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={cellStyle.align ?? ''}
+                  onChange={(e) =>
+                    setCellStyle((s) => ({
+                      ...s,
+                      align: (e.target.value || undefined) as JkCellStyle['align'],
+                    }))
+                  }
+                >
+                  <option value="">默认</option>
+                  <option value="left">左对齐</option>
+                  <option value="center">居中</option>
+                  <option value="right">右对齐</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">垂直</span>
+                <select
+                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={cellStyle.valign ?? ''}
+                  onChange={(e) =>
+                    setCellStyle((s) => ({
+                      ...s,
+                      valign: (e.target.value || undefined) as JkCellStyle['valign'],
+                    }))
+                  }
+                >
+                  <option value="">默认</option>
+                  <option value="top">顶端对齐</option>
+                  <option value="middle">居中</option>
+                  <option value="bottom">底端对齐</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-1.5 text-tiny text-fg">
+                <input
+                  type="checkbox"
+                  checked={!!cellStyle.wrapText}
+                  onChange={(e) => setCellStyle((s) => ({ ...s, wrapText: e.target.checked || undefined }))}
+                />
+                自动换行
+              </label>
+            </div>
+          )}
+
+          {/* 字体 */}
+          {fmtTab === 'font' && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">字体</span>
+                <select
+                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={cellStyle.fontFamily ?? ''}
+                  onChange={(e) => setCellStyle((s) => ({ ...s, fontFamily: e.target.value || undefined }))}
+                >
+                  <option value="">默认</option>
+                  <option value="宋体">宋体</option>
+                  <option value="黑体">黑体</option>
+                  <option value="微软雅黑">微软雅黑</option>
+                  <option value="楷体">楷体</option>
+                  <option value="仿宋">仿宋</option>
+                  <option value="等线">等线</option>
+                  <option value="Arial">Arial</option>
+                  <option value="Times New Roman">Times New Roman</option>
+                  <option value="Calibri">Calibri</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">字号</span>
+                <input
+                  type="number"
+                  min={8}
+                  max={72}
+                  className="w-24 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={cellStyle.fontSize ?? ''}
+                  onChange={(e) =>
+                    setCellStyle((s) => ({
+                      ...s,
+                      fontSize: e.target.value ? Number(e.target.value) : undefined,
+                    }))
+                  }
+                />
+              </div>
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-1.5 text-tiny text-fg">
+                  <input
+                    type="checkbox"
+                    checked={!!cellStyle.bold}
+                    onChange={(e) => setCellStyle((s) => ({ ...s, bold: e.target.checked || undefined }))}
+                  />
+                  加粗
+                </label>
+                <label className="flex items-center gap-1.5 text-tiny text-fg">
+                  <input
+                    type="checkbox"
+                    checked={!!cellStyle.italic}
+                    onChange={(e) => setCellStyle((s) => ({ ...s, italic: e.target.checked || undefined }))}
+                  />
+                  斜体
+                </label>
+                <label className="flex items-center gap-1.5 text-tiny text-fg">
+                  <input
+                    type="checkbox"
+                    checked={!!cellStyle.underline}
+                    onChange={(e) => setCellStyle((s) => ({ ...s, underline: e.target.checked || undefined }))}
+                  />
+                  下划线
+                </label>
+                <label className="flex items-center gap-1.5 text-tiny text-fg">
+                  <input
+                    type="checkbox"
+                    checked={!!cellStyle.strike}
+                    onChange={(e) => setCellStyle((s) => ({ ...s, strike: e.target.checked || undefined }))}
+                  />
+                  删除线
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">字体色</span>
+                <input
+                  type="color"
+                  className="h-7 w-12 rounded border border-border bg-surface"
+                  value={cellStyle.color ?? '#000000'}
+                  onChange={(e) => setCellStyle((s) => ({ ...s, color: e.target.value || undefined }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* 填充 */}
+          {fmtTab === 'fill' && (
+            <div className="flex items-center gap-2">
+              <span className="w-16 text-tiny text-muted">填充色</span>
+              <input
+                type="color"
+                className="h-7 w-12 rounded border border-border bg-surface"
+                value={cellStyle.bgColor ?? '#FFFFFF'}
+                onChange={(e) => setCellStyle((s) => ({ ...s, bgColor: e.target.value || undefined }))}
+              />
+            </div>
+          )}
+
+          {/* 边框 */}
+          {fmtTab === 'border' && (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">样式</span>
+                <select
+                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={borderChoice}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setBorderChoice(v);
+                    // 把下拉选项映射为 borders 布尔对象（"无" → undefined 表示不改边框）
+                    const map: Record<string, JkCellStyle['borders'] | undefined> = {
+                      none: undefined,
+                      all: { top: true, right: true, bottom: true, left: true },
+                      outside: { top: true, right: true, bottom: true, left: true },
+                      top: { top: true },
+                      bottom: { bottom: true },
+                      left: { left: true },
+                      right: { right: true },
+                    };
+                    setCellStyle((s) => ({ ...s, borders: map[v] }));
+                  }}
+                >
+                  <option value="none">无</option>
+                  <option value="all">全部框线</option>
+                  <option value="outside">外边框</option>
+                  <option value="top">上框线</option>
+                  <option value="bottom">下框线</option>
+                  <option value="left">左框线</option>
+                  <option value="right">右框线</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-16 text-tiny text-muted">边框色</span>
+                <input
+                  type="color"
+                  className="h-7 w-12 rounded border border-border bg-surface"
+                  value={borderColor}
+                  onChange={(e) => setBorderColor(e.target.value)}
+                />
+              </div>
+            </div>
           )}
         </div>
       </Modal>

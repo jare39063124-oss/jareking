@@ -10,3 +10,4 @@ export * from './parser/xlsxParser.js';
 export * from './exporter/index.js';
 export * from './exporter/csv.js';
 export * from './findReplace.js';
+export * from './cellStyle.js';

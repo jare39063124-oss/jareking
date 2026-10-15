@@ -16,7 +16,8 @@
     "paths": {
       "@renderer/*": ["src/renderer/src/*"],
       "@jareking/core": ["../../packages/core/src/index.ts"],
-      "@jareking/ai": ["../../packages/ai/src/index.ts"]
+      "@jareking/ai": ["../../packages/ai/src/index.ts"],
+      "@jareking/sheet": ["../../packages/sheet/src/index.ts"]
     }
   }
 }
