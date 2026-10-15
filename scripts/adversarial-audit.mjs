@@ -1314,7 +1314,9 @@ foreach ($f in $files) {
     if ($done) {
       $line = @(Receive-Job $job -ErrorAction SilentlyContinue)[-1]
       if ($line -like 'OK|*') {
-        $n = [int](($line -split '\|')[1])
+        # 注：模板字面量中需写 '\\|'，生成的 PS 才是正则 '\|'（匹配字面量竖线）；
+        # 若写成 '\|' 会被 JS 转义成 '|'，等价于「空模式交替」→ 逐字符拆分，[int] 转换崩溃。
+        $n = [int]$line.Substring(3)
         $result['opens'] += [pscustomobject]@{ file = $leaf; kind = $f.kind; ok = $true; progId = 'KWPP.Application'; slides = $n }
         Log ("ppt OK slides=$n")
       } else {

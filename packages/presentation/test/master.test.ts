@@ -230,19 +230,25 @@ describe('母版/版式导出', () => {
     const masterXml = await zip.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
     expect(masterXml).toContain('主题母版');
     expect(masterXml).toContain('FFFFFF');
+    // Bug2 修复：母版须含 <p:sldLayoutIdLst> 与 txStyles
+    expect(masterXml).toContain('<p:sldLayoutIdLst>');
+    expect(masterXml).toContain('<p:sldLayoutId ');
+    expect(masterXml).toContain('<p:txStyles>');
 
     const layoutXml = await zip.file('ppt/slideLayouts/slideLayout1.xml')!.async('string');
     expect(layoutXml).toContain('标题和内容');
     expect(layoutXml).toContain('type="title"');
     expect(layoutXml).toContain('type="body"');
 
-    // 关系：presentation → slideMaster；layout → slideMaster；master → theme；slide → slideLayout
+    // 关系：presentation → slideMaster；layout → slideMaster；master → theme + slideLayout；slide → slideLayout
     const presRels = await zip.file('ppt/_rels/presentation.xml.rels')!.async('string');
     expect(presRels).toContain('/slideMaster"');
     const layoutRels = await zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels')!.async('string');
     expect(layoutRels).toContain('/slideMaster"');
     const masterRels = await zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')!.async('string');
     expect(masterRels).toContain('/theme"');
+    // Bug2 修复：母版 rels 须同时含 theme 与 slideLayout
+    expect(masterRels).toContain('/slideLayout"');
     const slideRels = await zip.file('ppt/slides/_rels/slide1.xml.rels')!.async('string');
     expect(slideRels).toContain('/slideLayout"');
 
@@ -294,7 +300,7 @@ describe('母版/版式 round-trip', () => {
     expect(text).toBeDefined();
   });
 
-  it('无母版/版式的演示文稿导出后解析：字段为 undefined，且不回归', async () => {
+  it('无母版/版式的演示文稿导出后自带默认骨架（母版/版式/主题），round-trip 字段不再是 undefined', async () => {
     const plain: JkPresentation = {
       slides: [{ shapes: [] }],
       slideWidth: 9144000,
@@ -303,7 +309,92 @@ describe('母版/版式 round-trip', () => {
     const bytes = await exportPptx(plain);
     const parsed = await parsePptx(bytes);
     expect(parsed.slides).toHaveLength(1);
-    expect(parsed.masters).toBeUndefined();
-    expect(parsed.layouts).toBeUndefined();
+    // Bug1 修复后：导出器合成默认骨架 → 回读得到 1 个母版 + 1 个版式（此前为 undefined）
+    expect(parsed.masters).toHaveLength(1);
+    expect(parsed.layouts).toHaveLength(1);
+    // 页自动关联到默认版式
+    expect(parsed.slides[0].layout).toBe('ppt/slideLayouts/slideLayout1.xml');
+  });
+});
+
+/* =========================================================================
+ * 4) 默认骨架兜底（P0 回归守卫）
+ * -------------------------------------------------------------------------
+ * 对抗审计 T29/T36/T37（P0）：默认演示（无 masters/layouts）导出的 pptx 仅有
+ * 5 个部件、缺母版/版式/主题，导致 WPS/PowerPoint 打开挂起/要求修复。
+ * 修复后：**任何** JkPresentation 都能导出被 WPS/Office 打开的合法包，
+ * 本用例即为该回归的单测守卫。
+ * ========================================================================= */
+
+describe('默认骨架兜底（P0 回归守卫）', () => {
+  it('无 masters 的 JkPresentation → exportPptx：含 slideMaster1/slideLayout1/theme1 + presentation.xml 含 sldMasterIdLst', async () => {
+    // 模拟「新建演示」默认模型：不带 masters / layouts（见 SlideEditor.demoPresentation）
+    const plain: JkPresentation = {
+      slides: [
+        {
+          shapes: [
+            {
+              type: 'text',
+              x: 914400,
+              y: 685800,
+              w: 7315200,
+              h: 1143000,
+              paragraphs: [{ runs: [{ text: '默认骨架', bold: true, fontSize: 40 }] }],
+            },
+          ],
+        },
+      ],
+      slideWidth: 9144000,
+      slideHeight: 6858000,
+    };
+    const bytes = await exportPptx(plain);
+    const zip = await JSZip.loadAsync(bytes);
+
+    // 1) 母版 / 版式 / 主题部件齐备（此前缺失 → WPS 打不开）
+    expect(zip.file('ppt/slideMasters/slideMaster1.xml')).toBeTruthy();
+    expect(zip.file('ppt/slideLayouts/slideLayout1.xml')).toBeTruthy();
+    expect(zip.file('ppt/theme/theme1.xml')).toBeTruthy();
+
+    // 2) presentation.xml 必须含 <p:sldMasterIdLst> 且 id=2147483648，且顺序在 sldIdLst 之前
+    const presXml = await zip.file('ppt/presentation.xml')!.async('string');
+    expect(presXml).toContain('<p:sldMasterIdLst>');
+    expect(presXml).toMatch(/<p:sldMasterId id="2147483648" r:id="rId\d+"\/>/);
+    expect(presXml.indexOf('<p:sldMasterIdLst>')).toBeLessThan(presXml.indexOf('<p:sldIdLst>'));
+    // 既有 sldIdLst / sldSz / notesSz 保留
+    expect(presXml).toContain('<p:sldSz');
+    expect(presXml).toContain('<p:notesSz');
+
+    // 3) 母版含 <p:sldLayoutIdLst>（关联版式）与 txStyles；母版 rels 同时含 theme 与 slideLayout
+    const masterXml = await zip.file('ppt/slideMasters/slideMaster1.xml')!.async('string');
+    expect(masterXml).toContain('<p:sldLayoutIdLst>');
+    expect(masterXml).toContain('<p:sldLayoutId id="2147483649"');
+    expect(masterXml).toContain('<p:txStyles>');
+    expect(masterXml).toContain('<p:titleStyle>');
+    expect(masterXml).toContain('<p:bodyStyle>');
+    const masterRels = await zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels')!.async('string');
+    expect(masterRels).toContain('/theme"');
+    expect(masterRels).toContain('/slideLayout"');
+
+    // 4) 版式 rels 含 slideMaster 关系
+    const layoutRels = await zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels')!.async('string');
+    expect(layoutRels).toContain('/slideMaster"');
+
+    // 5) 每页 rels 补 slideLayout 关系
+    const slideRels = await zip.file('ppt/slides/_rels/slide1.xml.rels')!.async('string');
+    expect(slideRels).toContain('/slideLayout"');
+    expect(slideRels).toContain('../slideLayouts/slideLayout1.xml');
+
+    // 6) content-types 补全母版/版式/主题声明
+    const ct = await zip.file('[Content_Types].xml')!.async('string');
+    expect(ct).toContain('/ppt/slideMasters/slideMaster1.xml');
+    expect(ct).toContain('/ppt/slideLayouts/slideLayout1.xml');
+    expect(ct).toContain('/ppt/theme/theme1.xml');
+
+    // 7) 主题含完整方案（clrScheme/fontScheme/fmtScheme 四组列表各 ≥3 项）
+    const themeXml = await zip.file('ppt/theme/theme1.xml')!.async('string');
+    expect(themeXml).toContain('<a:clrScheme');
+    expect(themeXml).toContain('<a:fontScheme');
+    expect(themeXml).toContain('<a:fmtScheme');
+    expect(themeXml).toMatch(/<a:latin typeface=/);
   });
 });

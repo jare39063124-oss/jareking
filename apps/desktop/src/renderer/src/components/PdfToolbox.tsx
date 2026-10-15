@@ -116,6 +116,10 @@ export function PdfToolbox() {
   const needMulti = mode === 'merge' || mode === 'images';
   const needSource = mode === 'insert' || mode === 'replace';
 
+  // 水印文案含非拉丁字符（中文/emoji 等）——需可嵌入的中文字体；
+  // 仅作前端软提示（不阻断），真正的嵌入/校验在 @jareking/pdf 数据层完成。
+  const wmHasNonLatin = /[^\u0000-\u00ff]/.test(wmText);
+
   const reset = () => {
     setNote(null);
     setTarget(null);
@@ -335,6 +339,11 @@ export function PdfToolbox() {
                 placeholder="如 机密 / CONFIDENTIAL"
               />
             </div>
+            {wmHasNonLatin && (
+              <p className="pl-20 text-tiny text-muted">
+                提示：文字含中文等非拉丁字符，需可嵌入的中文字体；若当前环境缺少该字体，将给出明确错误而非输出乱码。
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <span className="w-20 shrink-0 text-body text-fg">字号</span>
               <input

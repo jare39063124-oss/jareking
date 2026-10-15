@@ -5,8 +5,15 @@
  * EMU 原值回写、字号 pt → sz 百分之一磅、旋转度 → rot ×60000、
  * 颜色 #RRGGBB → srgbClr、图片字节经图片签名嗅探扩展名写入 ppt/media/*。
  * 表格经 p:graphicFrame → a:tbl 写回原生表格（WPS/PowerPoint 可直接打开编辑）。
- * 母版/版式：解析到 masters/layouts 时写回最小合法 part + 关系 + content-types，
- * 支持最小模型的 round-trip；动画/主题细节 v1 不生成（保真报告记录降级）。
+ *
+ * 母版/版式/主题（Bug1/Bug2 修复）：
+ *   - 当 JkPresentation **未携带** masters/layouts（如「新建演示」的默认模型）时，
+ *     导出器**合成最小但完全合法的默认骨架**（theme / slideMaster / slideLayout +
+ *     对应关系 + content-types + 每页 slideLayout 关系），保证**任何**演示文稿
+ *     都能导出被 WPS/PowerPoint 正常打开的 pptx；
+ *   - 当携带 masters/layouts 时走既有路径，但同样补全 OOXML 要求的结构
+ *     （母版含 <p:sldLayoutIdLst> 与 txStyles、母版 rels 同时含 theme 与 slideLayout）。
+ * 动画/主题细节 v1 不生成（保真报告记录降级）。
  */
 import JSZip from 'jszip';
 import type {
@@ -26,6 +33,9 @@ const escapeXmlText = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escapeXmlAttr = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** OOXML 关系命名空间根（拼接各关系 Type 后缀） */
+const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
 /** 字节签名 → 扩展名（PNG/JPEG/GIF/BMP/WEBP） */
 function sniffImageExt(bytes: Uint8Array): string {
@@ -289,8 +299,17 @@ function serializeNotesSlide(notes: string): string {
 }
 
 /* =========================================================================
- * 母版 / 版式 / 主题序列化（最小合法部件，支撑最小模型 round-trip）
+ * 母版 / 版式 / 主题序列化（最小但完全合法，支撑 WPS/PowerPoint 打开）
  * ========================================================================= */
+
+/** 合成骨架用默认主题名（与 Office 默认主题一致） */
+const DEFAULT_THEME_NAME = 'Office Theme';
+/** 合成默认母版 / 版式的部件名 */
+const DEFAULT_MASTER_PART = 'ppt/slideMasters/slideMaster1.xml';
+const DEFAULT_LAYOUT_PART = 'ppt/slideLayouts/slideLayout1.xml';
+/** p:sldMasterId / p:sldLayoutId 起始 id（沿用 Office 约定） */
+const SLD_MASTER_ID_BASE = 2147483648;
+const SLD_LAYOUT_ID_BASE = 2147483649;
 
 /** 从部件名提取序号（slideLayout1.xml → 1；缺省回退 fallback） */
 function partNum(partName: string | undefined, fallback: number): number {
@@ -298,44 +317,126 @@ function partNum(partName: string | undefined, fallback: number): number {
   return m ? Number(m[1]) : fallback;
 }
 
-/** 主题部件（最小合法 a:theme；仅用于承载主题名，供解析回读） */
+/**
+ * 主题部件（完整最小合法 a:theme，WPS/PowerPoint 可直接读取）。
+ *
+ * 严格校验（ECMA-376）要求 clrScheme 的 12 个色槽、fontScheme 的 major/minor 字体
+ * （含 a:latin）、fmtScheme 的四组样式列表（fillStyleLst / lnStyleLst /
+ * effectStyleLst / bgFillStyleLst，各 ≥3 项）齐备，缺项会被拒绝加载，
+ * 故此处内置一份标准 Office 主题结构（仅主题名可按需覆盖）。
+ */
 function serializeTheme(themeName: string): string {
-  const name = escapeXmlAttr(themeName);
-  // 配色/字体/格式方案各给最小占位，WPS/PowerPoint 可读取名称与配色
-  const schemeClr = (tag: string, val: string) => `<a:${tag}><a:srgbClr val="${val}"/></a:${tag}>`;
+  const name = escapeXmlAttr(themeName || DEFAULT_THEME_NAME);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="${name}">
   <a:themeElements>
     <a:clrScheme name="${name}">
       <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
       <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
-      ${schemeClr('dk2', '44546A')}${schemeClr('lt2', 'E7E6E6')}
-      ${schemeClr('accent1', '4472C4')}${schemeClr('accent2', 'ED7D31')}${schemeClr('accent3', 'A5A5A5')}
-      ${schemeClr('accent4', 'FFC000')}${schemeClr('accent5', '5B9BD5')}${schemeClr('accent6', '70AD47')}
-      ${schemeClr('hlink', '0563C1')}${schemeClr('folHlink', '954F72')}
+      <a:dk2><a:srgbClr val="44546A"/></a:dk2>
+      <a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>
+      <a:accent1><a:srgbClr val="4472C4"/></a:accent1>
+      <a:accent2><a:srgbClr val="ED7D31"/></a:accent2>
+      <a:accent3><a:srgbClr val="A5A5A5"/></a:accent3>
+      <a:accent4><a:srgbClr val="FFC000"/></a:accent4>
+      <a:accent5><a:srgbClr val="5B9BD5"/></a:accent5>
+      <a:accent6><a:srgbClr val="70AD47"/></a:accent6>
+      <a:hlink><a:srgbClr val="0563C1"/></a:hlink>
+      <a:folHlink><a:srgbClr val="954F72"/></a:folHlink>
     </a:clrScheme>
     <a:fontScheme name="${name}">
-      <a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
-      <a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>
+      <a:majorFont>
+        <a:latin typeface="Calibri Light" panose="020F0302020204030204"/>
+        <a:ea typeface=""/>
+        <a:cs typeface=""/>
+      </a:majorFont>
+      <a:minorFont>
+        <a:latin typeface="Calibri" panose="020F0502020204030204"/>
+        <a:ea typeface=""/>
+        <a:cs typeface=""/>
+      </a:minorFont>
     </a:fontScheme>
     <a:fmtScheme name="${name}">
-      <a:fillStyleLst>${'<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'.repeat(3)}</a:fillStyleLst>
-      <a:lnStyleLst>${'<a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>'.repeat(3)}</a:lnStyleLst>
-      <a:effectStyleLst>${'<a:effectStyle><a:effectLst/></a:effectStyle>'.repeat(3)}</a:effectStyleLst>
-      <a:bgFillStyleLst>${'<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'.repeat(3)}</a:bgFillStyleLst>
+      <a:fillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:gradFill rotWithShape="1">
+          <a:gsLst>
+            <a:gs pos="0"><a:schemeClr val="phClr"><a:lumMod val="110000"/><a:satMod val="105000"/><a:tint val="67000"/></a:schemeClr></a:gs>
+            <a:gs pos="50000"><a:schemeClr val="phClr"><a:lumMod val="105000"/><a:satMod val="103000"/><a:tint val="73000"/></a:schemeClr></a:gs>
+            <a:gs pos="100000"><a:schemeClr val="phClr"><a:lumMod val="105000"/><a:satMod val="109000"/><a:tint val="81000"/></a:schemeClr></a:gs>
+          </a:gsLst>
+          <a:lin ang="5400000" scaled="0"/>
+        </a:gradFill>
+        <a:gradFill rotWithShape="1">
+          <a:gsLst>
+            <a:gs pos="0"><a:schemeClr val="phClr"><a:satMod val="103000"/><a:lumMod val="102000"/><a:tint val="94000"/></a:schemeClr></a:gs>
+            <a:gs pos="50000"><a:schemeClr val="phClr"><a:satMod val="110000"/><a:lumMod val="100000"/><a:shade val="100000"/></a:schemeClr></a:gs>
+            <a:gs pos="100000"><a:schemeClr val="phClr"><a:lumMod val="99000"/><a:satMod val="120000"/><a:shade val="78000"/></a:schemeClr></a:gs>
+          </a:gsLst>
+          <a:lin ang="5400000" scaled="0"/>
+        </a:gradFill>
+      </a:fillStyleLst>
+      <a:lnStyleLst>
+        <a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>
+        <a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>
+        <a:ln w="19050" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>
+      </a:lnStyleLst>
+      <a:effectStyleLst>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst><a:outerShdw blurRad="57150" dist="19050" dir="5400000" algn="ctr" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="63000"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle>
+      </a:effectStyleLst>
+      <a:bgFillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"><a:tint val="95000"/><a:satMod val="170000"/></a:schemeClr></a:solidFill>
+        <a:gradFill rotWithShape="1">
+          <a:gsLst>
+            <a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="93000"/><a:satMod val="150000"/><a:shade val="98000"/><a:lumMod val="102000"/></a:schemeClr></a:gs>
+            <a:gs pos="50000"><a:schemeClr val="phClr"><a:tint val="98000"/><a:satMod val="130000"/><a:shade val="90000"/><a:lumMod val="103000"/></a:schemeClr></a:gs>
+            <a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="63000"/><a:satMod val="120000"/></a:schemeClr></a:gs>
+          </a:gsLst>
+          <a:lin ang="5400000" scaled="0"/>
+        </a:gradFill>
+      </a:bgFillStyleLst>
     </a:fmtScheme>
   </a:themeElements>
+  <a:objectDefaults/>
+  <a:extraClrSchemeLst/>
 </a:theme>`;
 }
 
-/** 幻灯片母版部件（最小合法 p:sldMaster；承载名称与背景色） */
-function serializeSlideMaster(master: JkSlideMaster): string {
-  const name = escapeXmlAttr(master.name ?? 'Office Theme');
+/** 生成九级段落属性（保证 txStyles 各风格非空，符合严格校验） */
+function serializeStyleLevels(marLStep: number, indent: number): string {
+  let out = '';
+  for (let i = 0; i < 9; i++) {
+    out += `<a:lvl${i + 1}pPr marL="${marLStep * i}" indent="${indent}"/>`;
+  }
+  return out;
+}
+
+/**
+ * 幻灯片母版部件（最小合法 p:sldMaster）。
+ *
+ * 关键（Bug2 修复）：依次写出 <p:cSld>（含空 spTree）、<p:clrMap>、
+ * <p:sldLayoutIdLst>（关联本母版所辖版式）与 <p:txStyles>（title/body/otherStyle
+ * 各含 9 级段落属性）。缺 sldLayoutIdLst 或 txStyles 会被 WPS/PowerPoint
+ * 的严格校验判定为损坏 → 打不开/要求修复。
+ *
+ * @param layoutRels 本母版所辖版式的（关系 id，布局 id）列表，与母版 rels 一一对应
+ */
+function serializeSlideMaster(
+  master: JkSlideMaster,
+  layoutRels: { rid: string; layoutId: number }[],
+): string {
+  const name = escapeXmlAttr(master.name ?? DEFAULT_THEME_NAME);
   const bg = master.bgColor
     ? `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${escapeXmlAttr(
         master.bgColor.replace(/^#/, ''),
       )}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`
     : '';
+  const layoutIdLst = layoutRels
+    .map((r) => `<p:sldLayoutId id="${r.layoutId}" r:id="${escapeXmlAttr(r.rid)}"/>`)
+    .join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:cSld name="${name}">
@@ -346,12 +447,29 @@ function serializeSlideMaster(master: JkSlideMaster): string {
     </p:spTree>
   </p:cSld>
   <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+  <p:sldLayoutIdLst>${layoutIdLst}</p:sldLayoutIdLst>
+  <p:txStyles>
+    <p:titleStyle>${serializeStyleLevels(0, 0)}</p:titleStyle>
+    <p:bodyStyle>${serializeStyleLevels(342900, -342900)}</p:bodyStyle>
+    <p:otherStyle>${serializeStyleLevels(0, 0)}</p:otherStyle>
+  </p:txStyles>
 </p:sldMaster>`;
 }
 
-/** 版式部件（最小合法 p:sldLayout；承载名称与占位符类型） */
+/** 由占位符推断 p:sldLayout@type（ST_SlideLayoutType 枚举；无占位符 → blank） */
+function layoutTypeOf(layout: JkSlideLayout): string {
+  const ph = layout.placeholders ?? [];
+  const hasTitle = ph.some((t) => t === 'title' || t === 'ctrTitle');
+  const hasBody = ph.some((t) => t === 'body' || t === 'subTitle' || t === 'obj');
+  if (hasTitle && hasBody) return 'obj';
+  if (hasTitle) return 'titleOnly';
+  return 'blank';
+}
+
+/** 版式部件（最小合法 p:sldLayout；type 按占位符推断，无则 blank） */
 function serializeSlideLayout(layout: JkSlideLayout): string {
   const name = escapeXmlAttr(layout.name ?? 'Layout');
+  const type = layoutTypeOf(layout);
   const phs = (layout.placeholders ?? [])
     .map(
       (t, i) =>
@@ -363,7 +481,7 @@ function serializeSlideLayout(layout: JkSlideLayout): string {
     )
     .join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" type="${type}" preserve="1">
   <p:cSld name="${name}"><p:spTree>
     <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
     <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
@@ -371,6 +489,128 @@ function serializeSlideLayout(layout: JkSlideLayout): string {
   </p:spTree></p:cSld>
   <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
 </p:sldLayout>`;
+}
+
+/* =========================================================================
+ * 母版 / 版式骨架规划（解析归属关系，缺失时合成默认项）
+ * ========================================================================= */
+
+/** 规划后的版式（含序号与所属母版序号） */
+interface PlannedLayout {
+  idx: number;
+  layout: JkSlideLayout;
+  masterIdx: number;
+}
+
+/** 规划后的母版（含主题部件、所辖版式的关系 id 与布局 id） */
+interface PlannedMaster {
+  idx: number;
+  master: JkSlideMaster;
+  themeName: string;
+  /** 本母版所辖版式（关系 id rId2 起；layoutId 全局唯一） */
+  layoutRels: { layoutIdx: number; rid: string; layoutId: number }[];
+  /** presentation.xml.rels 中指向本母版的关系 id（稍后分配） */
+  presRid: string;
+}
+
+/**
+ * 规整母版 / 版式骨架：去重、缺失时合成默认项、解析归属、保证母版均有版式。
+ *
+ * 返回：处理后的 masters / layouts、版式序号索引、规划结果（母版/版式）。
+ * 该函数是「任何 JkPresentation 都能导出被 WPS/Office 打开的 pptx」的核心保障。
+ */
+function planSkeleton(pres: JkPresentation): {
+  plannedMasters: PlannedMaster[];
+  plannedLayouts: PlannedLayout[];
+  layoutIdxByPart: Map<string, number>;
+} {
+  // 输入母版 / 版式（过滤空项）；按 partName 去重、保留出现顺序
+  const masters: JkSlideMaster[] = [];
+  const seenMaster = new Set<string>();
+  for (const m of pres.masters ?? []) {
+    if (!m || !m.partName || seenMaster.has(m.partName)) continue;
+    seenMaster.add(m.partName);
+    masters.push(m);
+  }
+  const layouts: JkSlideLayout[] = [];
+  const seenLayout = new Set<string>();
+  for (const l of pres.layouts ?? []) {
+    if (!l || !l.partName || seenLayout.has(l.partName)) continue;
+    seenLayout.add(l.partName);
+    layouts.push(l);
+  }
+
+  // 母版缺失 → 合成默认母版（保证 sldMasterIdLst 非空）
+  if (masters.length === 0) {
+    masters.push({
+      partName: DEFAULT_MASTER_PART,
+      name: DEFAULT_THEME_NAME,
+      themeName: DEFAULT_THEME_NAME,
+    });
+  }
+  const masterIdxByPart = new Map<string, number>();
+  masters.forEach((m, i) => masterIdxByPart.set(m.partName, partNum(m.partName, i + 1)));
+
+  // 版式缺失 → 合成默认空白版式（归属第一个母版）
+  if (layouts.length === 0) {
+    layouts.push({
+      partName: DEFAULT_LAYOUT_PART,
+      name: 'Blank',
+      masterPartName: masters[0].partName,
+    });
+  }
+  // 版式序号：保留原始序号（缺省按出现顺序）；按 partName 去重
+  let layoutSeq = 0;
+  const layoutIdxByPart = new Map<string, number>();
+  for (const l of layouts) {
+    if (layoutIdxByPart.has(l.partName)) continue;
+    layoutIdxByPart.set(l.partName, partNum(l.partName, ++layoutSeq));
+  }
+
+  // 版式 → 母版：显式 masterPartName 命中则用之，否则归第一个母版
+  const firstMasterIdx = masterIdxByPart.get(masters[0].partName)!;
+  const plannedLayouts: PlannedLayout[] = [];
+  for (const [partName, idx] of layoutIdxByPart) {
+    const layout = layouts.find((x) => x.partName === partName)!;
+    const explicit = layout.masterPartName ? masterIdxByPart.get(layout.masterPartName) : undefined;
+    plannedLayouts.push({ idx, layout, masterIdx: explicit ?? firstMasterIdx });
+  }
+
+  // 保证每个母版至少有一个版式（OOXML 要求 p:sldLayoutIdLst 非空）：
+  // 为无归属版式的母版合成一个空白版式
+  const covered = new Set(plannedLayouts.map((p) => p.masterIdx));
+  let nextLayoutIdx =
+    Math.max(0, ...plannedLayouts.map((p) => p.idx), ...masterIdxByPart.values()) + 1;
+  for (const [partName, masterIdx] of masterIdxByPart) {
+    if (covered.has(masterIdx)) continue;
+    const partNameNew = `ppt/slideLayouts/slideLayout${nextLayoutIdx}.xml`;
+    const idx = nextLayoutIdx++;
+    const layout: JkSlideLayout = { partName: partNameNew, name: 'Blank', masterPartName: partName };
+    layoutIdxByPart.set(partNameNew, idx);
+    plannedLayouts.push({ idx, layout, masterIdx });
+    covered.add(masterIdx);
+  }
+  plannedLayouts.sort((a, b) => a.idx - b.idx);
+
+  // 母版规划：主题名（缺省用默认）、所辖版式的关系 id 与布局 id
+  const plannedMasters: PlannedMaster[] = [];
+  let layoutIdSeq = SLD_LAYOUT_ID_BASE;
+  for (const [partName, idx] of masterIdxByPart) {
+    const master = masters.find((m) => m.partName === partName)!;
+    let ridSeq = 2; // rId1 固定给 theme
+    const layoutRels = plannedLayouts
+      .filter((lp) => lp.masterIdx === idx)
+      .map((lp) => ({ layoutIdx: lp.idx, rid: `rId${ridSeq++}`, layoutId: layoutIdSeq++ }));
+    plannedMasters.push({
+      idx,
+      master,
+      themeName: master.themeName ?? DEFAULT_THEME_NAME,
+      layoutRels,
+      presRid: '',
+    });
+  }
+
+  return { plannedMasters, plannedLayouts, layoutIdxByPart };
 }
 
 /** JkPresentation → pptx 字节流 */
@@ -392,31 +632,19 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
     notesPresRid[idx] = presRidSeq;
   }
 
-  // 母版 / 版式：仅当存在时写回最小部件（支撑最小模型 round-trip）
-  const masters = pres.masters ?? [];
-  const layouts = pres.layouts ?? [];
-  // partName → 部件序号（保留原始序号，缺省按出现顺序），去重
-  const masterIdxByPart = new Map<string, number>();
-  masters.forEach((m, i) => {
-    if (!masterIdxByPart.has(m.partName)) masterIdxByPart.set(m.partName, partNum(m.partName, i + 1));
-  });
-  const layoutIdxByPart = new Map<string, number>();
-  layouts.forEach((l, i) => {
-    if (!layoutIdxByPart.has(l.partName)) layoutIdxByPart.set(l.partName, partNum(l.partName, i + 1));
-  });
-  const masterParts = [...masterIdxByPart.entries()].map(([partName, idx]) => ({
-    idx,
-    master: masters.find((x) => x.partName === partName)!,
-  }));
-  const layoutParts = [...layoutIdxByPart.entries()].map(([partName, idx]) => ({
-    idx,
-    layout: layouts.find((x) => x.partName === partName)!,
-  }));
+  // 母版 / 版式骨架：缺失时合成最小合法默认骨架（Bug1/Bug2 修复）
+  const { plannedMasters, plannedLayouts, layoutIdxByPart } = planSkeleton(pres);
   // presentation → slideMaster 关系（rId 续在备注之后）
-  const masterPresRel = masterParts.map(({ idx }) => {
+  for (const pm of plannedMasters) {
     presRidSeq++;
-    return { idx, rid: `rId${presRidSeq}` };
-  });
+    pm.presRid = `rId${presRidSeq}`;
+  }
+  // 每页实际使用的版式序号：slide.layout 命中已规划版式则用之，否则回退到首个版式
+  const fallbackLayoutIdx = plannedLayouts[0].idx;
+  const slideLayoutIdxOf = (layoutPart: string | undefined): number => {
+    const idx = layoutPart ? layoutIdxByPart.get(layoutPart) : undefined;
+    return idx ?? fallbackLayoutIdx;
+  };
 
   // [Content_Types].xml
   zip.file(
@@ -441,20 +669,19 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
             `<Override PartName="/ppt/notesSlides/notesSlide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`,
         )
         .join('') +
-      masterParts
+      plannedMasters
         .map(
           ({ idx }) =>
             `<Override PartName="/ppt/slideMasters/slideMaster${idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>`,
         )
         .join('') +
-      layoutParts
+      plannedLayouts
         .map(
           ({ idx }) =>
             `<Override PartName="/ppt/slideLayouts/slideLayout${idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>`,
         )
         .join('') +
-      masterParts
-        .filter(({ master }) => master.themeName)
+      plannedMasters
         .map(
           ({ idx }) =>
             `<Override PartName="/ppt/theme/theme${idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>`,
@@ -469,24 +696,21 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>`,
   );
 
-  // presentation.xml（每页一个 rId；rId1 起）
+  // presentation.xml：先 <p:sldMasterIdLst>（母版必存在），再 <p:sldIdLst>，
+  // 最后 <p:sldSz>/<p:notesSz>（顺序须符合 CT_Presentation 的 sequence）。
+  // 0 页时省略 <p:sldIdLst>（sldIdLst 若出现则 sldId 至少 1 项）。
   const slideRids = slides.map((_, i) => `rId${i + 1}`);
   zip.file(
     'ppt/presentation.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-      (masterPresRel.length
-        ? `<p:sldMasterIdLst>${masterPresRel
-            .map(({ idx, rid }) => `<p:sldMasterId id="${2147483648 + idx}" r:id="${rid}"/>`)
-            .join('')}</p:sldMasterIdLst>`
-        : '') +
-      `<p:sldIdLst>${slides
-        .map((_, i) => `<p:sldId id="${256 + i}" r:id="${slideRids[i]}"/>`)
-        .join('')}</p:sldIdLst>` +
-      (notesIdxWithText.length
-        ? `<p:notesSldIdLst>${notesIdxWithText
-            .map((i) => `<p:notesSldId id="${512 + i}" r:id="rId${notesPresRid[i]}"/>`)
-            .join('')}</p:notesSldIdLst>`
+      `<p:sldMasterIdLst>${plannedMasters
+        .map((pm, mi) => `<p:sldMasterId id="${SLD_MASTER_ID_BASE + mi}" r:id="${pm.presRid}"/>`)
+        .join('')}</p:sldMasterIdLst>` +
+      (slides.length
+        ? `<p:sldIdLst>${slides
+            .map((_, i) => `<p:sldId id="${256 + i}" r:id="${slideRids[i]}"/>`)
+            .join('')}</p:sldIdLst>`
         : '') +
       `<p:sldSz cx="${Math.round(pres.slideWidth)}" cy="${Math.round(pres.slideHeight)}"/>` +
       `<p:notesSz cx="6858000" cy="9144000"/></p:presentation>`,
@@ -499,50 +723,50 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
       slideRids
         .map(
           (rid, i) =>
-            `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`,
+            `<Relationship Id="${rid}" Type="${REL_NS}/slide" Target="slides/slide${i + 1}.xml"/>`,
         )
         .join('') +
       notesIdxWithText
         .map(
           (i) =>
-            `<Relationship Id="rId${notesPresRid[i]}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="notesSlides/notesSlide${i + 1}.xml"/>`,
+            `<Relationship Id="rId${notesPresRid[i]}" Type="${REL_NS}/notesSlide" Target="notesSlides/notesSlide${i + 1}.xml"/>`,
         )
         .join('') +
-      masterPresRel
+      plannedMasters
         .map(
-          ({ idx, rid }) =>
-            `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster${idx}.xml"/>`,
+          (pm) =>
+            `<Relationship Id="${pm.presRid}" Type="${REL_NS}/slideMaster" Target="slideMasters/slideMaster${pm.idx}.xml"/>`,
         )
         .join('') +
       `</Relationships>`,
   );
 
-  // 母版部件 + 主题部件 + 母版 rels（指向主题）
-  for (const { idx, master } of masterParts) {
-    zip.file(`ppt/slideMasters/slideMaster${idx}.xml`, serializeSlideMaster(master));
-    if (master.themeName) {
-      zip.file(`ppt/theme/theme${idx}.xml`, serializeTheme(master.themeName));
-      zip.file(
-        `ppt/slideMasters/_rels/slideMaster${idx}.xml.rels`,
-        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme${idx}.xml"/></Relationships>`,
-      );
-    }
+  // 母版部件 + 主题部件 + 母版 rels（theme + 所辖版式）
+  for (const pm of plannedMasters) {
+    zip.file(`ppt/slideMasters/slideMaster${pm.idx}.xml`, serializeSlideMaster(pm.master, pm.layoutRels));
+    zip.file(`ppt/theme/theme${pm.idx}.xml`, serializeTheme(pm.themeName));
+    const rels: string[] = [
+      `<Relationship Id="rId1" Type="${REL_NS}/theme" Target="../theme/theme${pm.idx}.xml"/>`,
+      ...pm.layoutRels.map(
+        (lr) =>
+          `<Relationship Id="${lr.rid}" Type="${REL_NS}/slideLayout" Target="../slideLayouts/slideLayout${lr.layoutIdx}.xml"/>`,
+      ),
+    ];
+    zip.file(
+      `ppt/slideMasters/_rels/slideMaster${pm.idx}.xml.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.join('')}</Relationships>`,
+    );
   }
 
-  // 版式部件 + 版式 rels（指向所属母版）
-  for (const { idx, layout } of layoutParts) {
-    zip.file(`ppt/slideLayouts/slideLayout${idx}.xml`, serializeSlideLayout(layout));
-    const masterIdx = layout.masterPartName
-      ? masterIdxByPart.get(layout.masterPartName)
-      : undefined;
-    if (masterIdx !== undefined) {
-      zip.file(
-        `ppt/slideLayouts/_rels/slideLayout${idx}.xml.rels`,
-        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster${masterIdx}.xml"/></Relationships>`,
-      );
-    }
+  // 版式部件 + 版式 rels（均指向所属母版）
+  for (const lp of plannedLayouts) {
+    zip.file(`ppt/slideLayouts/slideLayout${lp.idx}.xml`, serializeSlideLayout(lp.layout));
+    zip.file(
+      `ppt/slideLayouts/_rels/slideLayout${lp.idx}.xml.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL_NS}/slideMaster" Target="../slideMasters/slideMaster${lp.masterIdx}.xml"/></Relationships>`,
+    );
   }
 
   // 每页：slide XML + 图片收集 + 每页 rels + 备注页
@@ -580,13 +804,13 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
     const rels: string[] = [];
     for (const im of images) {
       rels.push(
-        `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
+        `<Relationship Id="${im.relId}" Type="${REL_NS}/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
       );
     }
     // 对象超链接关系：仅外部 URL，TargetMode="External"；每条 hyperlink 一个关系
     for (const h of hyperlinks) {
       rels.push(
-        `<Relationship Id="${h.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${escapeXmlAttr(h.url)}" TargetMode="External"/>`,
+        `<Relationship Id="${h.relId}" Type="${REL_NS}/hyperlink" Target="${escapeXmlAttr(h.url)}" TargetMode="External"/>`,
       );
     }
     // 图片已用 rId2…rId(1+images.length)，超链接续用 rId(images.length+2)…，
@@ -594,25 +818,21 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
     let relSeq = images.length + 2 + hyperlinks.length;
     if (notesText) {
       rels.push(
-        `<Relationship Id="rId${relSeq++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`,
+        `<Relationship Id="rId${relSeq++}" Type="${REL_NS}/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`,
       );
     }
-    // 版式关联：仅当本页 layout 指向已写出的版式部件
-    const slideLayoutIdx = slide.layout ? layoutIdxByPart.get(slide.layout) : undefined;
-    if (slideLayoutIdx !== undefined) {
-      rels.push(
-        `<Relationship Id="rId${relSeq++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout${slideLayoutIdx}.xml"/>`,
-      );
-    }
-    if (rels.length) {
-      zip.file(
-        `ppt/slides/_rels/slide${i + 1}.xml.rels`,
-        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    // 版式关联：每页必须且仅关联一个版式（缺失时回退到首个版式）——
+    // 缺该关系会导致 WPS/PowerPoint 判定幻灯片损坏
+    rels.push(
+      `<Relationship Id="rId${relSeq++}" Type="${REL_NS}/slideLayout" Target="../slideLayouts/slideLayout${slideLayoutIdxOf(slide.layout)}.xml"/>`,
+    );
+    zip.file(
+      `ppt/slides/_rels/slide${i + 1}.xml.rels`,
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-          rels.join('') +
-          `</Relationships>`,
-      );
-    }
+        rels.join('') +
+        `</Relationships>`,
+    );
 
     // 图片字节（target 序号与 rels 中出现顺序一致）
     let imgNo = mediaSeq - images.length;

@@ -1,7 +1,7 @@
 # jareking 对抗性审计报告（adversarial-audit）
 
 > 生成者：QA 严过关 · 并行任务 3/3 · 由 `scripts/adversarial-audit.mjs` 自动生成
-> 生成时间：2026-10-15T18:13:35.494Z
+> 生成时间：2026-10-15T18:25:51.332Z
 > 运行环境：win32 / Node v22.22.2
 
 ## 1. 概述
@@ -44,62 +44,30 @@
 | T22 | PDF | 图片转 PDF（2 图 → 2 页） | 页数=2，%PDF- 头 | 单图=1 页，双图=2 页，head=%PDF- | ✅ |
 | T23 | PDF | 合并（2 份 1 页 → 2 页） | 页数=2 | 合并后页数=2 | ✅ |
 | T24 | PDF | 链式：图片→合并→水印（ASCII 文本） | 页数守恒且输出合法 PDF | 页数=2 head=%PDF- size 2345→3377 | ✅ |
-| T25 | PDF | 水印：非 Latin（中文）文本 | 不崩溃或给出可读的输入校验错误 | 抛出异常：WinAnsi cannot encode "机" (0x673a) | ❌ P1 |
+| T25 | PDF | 水印：非 Latin（中文）文本 | 不崩溃或给出可读的输入校验错误 | 抛出异常：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\Windows\\Fonts\\simhei.ttf"）/ opts.fontBytes 指定中文字体。 | ❌ P1 |
 | T26 | PDF | 页面工具：提取/旋转/删除 | 页数按预期变化 | 提取=2 旋转=3 删除=2 | ✅ |
 | T27 | Integrity | docx 混排产物 zip 完整性（含关系可达） | 无损坏条目/部件齐/无悬空关系 | 通过（11 个部件） | ✅ |
 | T28 | Integrity | 含 5MB 图片 docx 产物完整性（媒体可达） | word/media 存在且被关系指向 | 完整性=true media 部件=true | ✅ |
-| T29 | Presentation | 导出包结构：默认演示（无母版）应自带母版/版式/主题 | 含 ppt/slideMasters/*、ppt/slideLayouts/*、ppt/theme/*，且 presentation.xml 含 <p:sldMasterIdLst> | slideMaster=false slideLayout=false theme=false sldMasterIdLst=false | ❌ P0 |
-| T30 | Presentation | 导出包结构：母版应含 <p:sldLayoutIdLst> 并关联版式 | slideMaster 含 <p:sldLayoutIdLst>；母版 rels 含 slideLayout 关系 | sldLayoutIdLst=false 母版→版式关系=false | ❌ P1 |
+| T29 | Presentation | 导出包结构：默认演示（无母版）应自带母版/版式/主题 | 含 ppt/slideMasters/*、ppt/slideLayouts/*、ppt/theme/*，且 presentation.xml 含 <p:sldMasterIdLst> | slideMaster=true slideLayout=true theme=true sldMasterIdLst=true | ✅ |
+| T30 | Presentation | 导出包结构：母版应含 <p:sldLayoutIdLst> 并关联版式 | slideMaster 含 <p:sldLayoutIdLst>；母版 rels 含 slideLayout 关系 | sldLayoutIdLst=true 母版→版式关系=true | ✅ |
 | T31 | CrossSoft | WPS 打开 jareking-doc-1.docx | 能被本机 WPS 正常打开并读回结构 | 段落=4 表格=0 | ✅ |
 | T32 | CrossSoft | WPS 打开 jareking-doc-2.docx | 能被本机 WPS 正常打开并读回结构 | 段落=2 表格=0 | ✅ |
 | T33 | CrossSoft | WPS 打开 jareking-doc-3.docx | 能被本机 WPS 正常打开并读回结构 | 段落=7 表格=1 | ✅ |
 | T34 | CrossSoft | WPS 打开 jareking-sheet-1.xlsx | 能被本机 WPS 正常打开并读回结构 | sheets=1 首表UsedRange=2x2 | ✅ |
 | T35 | CrossSoft | WPS 打开 jareking-sheet-2.xlsx | 能被本机 WPS 正常打开并读回结构 | sheets=2 首表UsedRange=1x2 | ✅ |
-| T36 | CrossSoft | WPS 打开 jareking-slide-1.pptx | 能被本机 WPS 正常打开并读回结构 | 打开失败：TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复） | ❌ P0 |
-| T37 | CrossSoft | WPS 打开 jareking-slide-2.pptx | 能被本机 WPS 正常打开并读回结构 | 打开失败：TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复） | ❌ P0 |
+| T36 | CrossSoft | WPS 打开 jareking-slide-1.pptx | 能被本机 WPS 正常打开并读回结构 | slides=1 | ✅ |
+| T37 | CrossSoft | WPS 打开 jareking-slide-2.pptx | 能被本机 WPS 正常打开并读回结构 | slides=2 | ✅ |
 
-**小计**：共 37 项 —— 通过 31 / 设计内降级 1 / 失败 5。
+**小计**：共 37 项 —— 通过 35 / 设计内降级 1 / 失败 1。
 
 ## 3. Bug 清单（分级）
-
-### [P0] T29 Presentation · 导出包结构：默认演示（无母版）应自带母版/版式/主题
-- **源码定位**：packages/presentation/src/exporter/index.ts（仅当 pres.masters/layouts 存在才写母版/主题）+ apps/desktop/src/renderer/src/slide/SlideEditor.tsx:74 demoPresentation()（默认模型无 masters）
-- **复现**：`node scripts/adversarial-audit.mjs` 即可；该用例编号 T29
-- **期望**：含 ppt/slideMasters/*、ppt/slideLayouts/*、ppt/theme/*，且 presentation.xml 含 <p:sldMasterIdLst>
-- **实际**：slideMaster=false slideLayout=false theme=false sldMasterIdLst=false
-- **证据**：`导出包仅 5 个部件：[Content_Types].xml, _rels/.rels, ppt/presentation.xml, ppt/_rels/presentation.xml.rels, ppt/slides/slide1.xml；缺母版/主题，WPS/PowerPoint 无法正常打开`
-- **影响**：阻断级：可能导致文件无法打开 / 保存即损坏 / 跨软件打不开。
-
-### [P0] T36 CrossSoft · WPS 打开 jareking-slide-1.pptx
-- **源码定位**：packages/presentation/src/exporter/index.ts（母版/主题/版式关联缺失）
-- **复现**：`node scripts/adversarial-audit.mjs` 即可；该用例编号 T36
-- **期望**：能被本机 WPS 正常打开并读回结构
-- **实际**：打开失败：TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复）
-- **证据**：`progId=KWPP.Application err=TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复）`
-- **影响**：阻断级：可能导致文件无法打开 / 保存即损坏 / 跨软件打不开。
-
-### [P0] T37 CrossSoft · WPS 打开 jareking-slide-2.pptx
-- **源码定位**：packages/presentation/src/exporter/index.ts（母版/主题/版式关联缺失）
-- **复现**：`node scripts/adversarial-audit.mjs` 即可；该用例编号 T37
-- **期望**：能被本机 WPS 正常打开并读回结构
-- **实际**：打开失败：TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复）
-- **证据**：`progId=KWPP.Application err=TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复）`
-- **影响**：阻断级：可能导致文件无法打开 / 保存即损坏 / 跨软件打不开。
 
 ### [P1] T25 PDF · 水印：非 Latin（中文）文本
 - **源码定位**：packages/pdf/src/index.ts:310（watermark 字体） + PdfToolbox.tsx:136-148（无输入校验）
 - **复现**：`node scripts/adversarial-audit.mjs` 即可；该用例编号 T25
 - **期望**：不崩溃或给出可读的输入校验错误
-- **实际**：抛出异常：WinAnsi cannot encode "机" (0x673a)
-- **证据**：`packages/pdf/src/index.ts:310 doc.embedFont(StandardFonts.Helvetica) → font.widthOfTextAtSize 对非 Latin 输入抛 WinAnsi；apps/desktop/src/renderer/src/components/PdfToolbox.tsx:136-148 直接透传用户输入（无 CJK 校验）。原始错误：WinAnsi cannot encode "机" (0x673a)`
-- **影响**：严重级：支持范围内的内容丢失或结构走样，round-trip 不可逆。
-
-### [P1] T30 Presentation · 导出包结构：母版应含 <p:sldLayoutIdLst> 并关联版式
-- **源码定位**：packages/presentation/src/exporter/index.ts（serializeSlideMaster + 母版 rels 生成）
-- **复现**：`node scripts/adversarial-audit.mjs` 即可；该用例编号 T30
-- **期望**：slideMaster 含 <p:sldLayoutIdLst>；母版 rels 含 slideLayout 关系
-- **实际**：sldLayoutIdLst=false 母版→版式关系=false
-- **证据**：`slideMaster1.xml 仅含 cSld+clrMap；母版 rels 仅含 theme —— 母版与版式未建立 OOXML 要求的关联`
+- **实际**：抛出异常：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\Windows\\Fonts\\simhei.ttf"）/ opts.fontBytes 指定中文字体。
+- **证据**：`packages/pdf/src/index.ts:310 doc.embedFont(StandardFonts.Helvetica) → font.widthOfTextAtSize 对非 Latin 输入抛 WinAnsi；apps/desktop/src/renderer/src/components/PdfToolbox.tsx:136-148 直接透传用户输入（无 CJK 校验）。原始错误：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\Windows\\Fonts\\simhei.ttf"）/ opts.fontBytes 指定中文字体。`
 - **影响**：严重级：支持范围内的内容丢失或结构走样，round-trip 不可逆。
 
 ## 4. 跨软件可读性结论
@@ -123,8 +91,8 @@
 | jareking-doc-3.docx | word | ✅ | 段落=7 表格=1 |
 | jareking-sheet-1.xlsx | excel | ✅ | sheets=1 首表UsedRange=2x2 |
 | jareking-sheet-2.xlsx | excel | ✅ | sheets=2 首表UsedRange=1x2 |
-| jareking-slide-1.pptx | ppt | ❌ TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复） | - |
-| jareking-slide-2.pptx | ppt | ❌ TIMEOUT: WPS 演示打开 >45s 未返回（疑似挂起/需修复） | - |
+| jareking-slide-1.pptx | ppt | ✅ | slides=1 |
+| jareking-slide-2.pptx | ppt | ✅ | slides=2 |
 
 ## 5. 源码定位与路由判定（交工程师 / 主理人转派）
 
@@ -132,10 +100,7 @@
 
 | 源码文件（定位） | 关联用例 | 级别 |
 |---|---|---|
-| `packages/presentation/src/exporter/index.ts（仅当 pres.masters/layouts 存在才写母版/主题）+ apps/desktop/src/renderer/src/slide/SlideEditor.tsx:74 demoPresentation()（默认模型无 masters）` | T29(P0) | P0 |
-| `packages/presentation/src/exporter/index.ts（母版/主题/版式关联缺失）` | T36(P0), T37(P0) | P0 |
 | `packages/pdf/src/index.ts:310（watermark 字体） + PdfToolbox.tsx:136-148（无输入校验）` | T25(P1) | P1 |
-| `packages/presentation/src/exporter/index.ts（serializeSlideMaster + 母版 rels 生成）` | T30(P1) | P1 |
 
 
 ## 6. 证据链：pptx 跨软件失败根因隔离（对抗实验）
@@ -163,8 +128,7 @@
 
 ## 8. 总体结论与建议
 
-- 汇总：P0=3，P1=2，P2=0，设计内降级=1，通过=31。
+- 汇总：P0=0，P1=1，P2=0，设计内降级=1，通过=35。
 - **总体结论**：存在阻断/严重缺陷，需工程师修复后复测（见 §3）。
 - 建议：将本脚本纳入交付前门禁（`node scripts/adversarial-audit.mjs`）；把「悬空关系检测」并入导出门禁。
-- **修复建议（pptx）**：导出器应在 `pres.masters/layouts` 缺失时**合成最小默认母版/版式/主题**，写出 `<p:sldLayoutIdLst>` 与「母版→版式」关系；或在应用「新建演示」默认模型中内置一份母版。
 - **修复建议（水印）**：`addWatermark` 对非 Latin 输入改用可嵌入的 CJK 字体（或按字符集校验并给出明确错误）；UI 侧同步做输入校验。

@@ -9,7 +9,7 @@
  * 坐标约定：页码规格面向用户（从 1 开始），内部统一转 0 基索引。
  * 支持格式："1,3-5"（含 "last"/"-1" 表示末页）。
  */
-import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont } from 'pdf-lib';
 
 /* =========================================================================
  * 页码规格解析
@@ -254,8 +254,16 @@ export async function getPdfInfo(pdfBytes: Uint8Array): Promise<{ pageCount: num
  * 文字水印
  * -------------------------------------------------------------------------
  * 基于 pdf-lib 的 page.drawText，在每页叠加文字水印（居中单个 或 整页平铺）。
- * 使用 pdf-lib 内建标准字体 Helvetica（无需外部字体文件），与本包其它写文本
- * 能力一致（如需中文水印需嵌入中文字体，另行扩展）。
+ *
+ * 字体策略（Bug3 修复，杜绝「静默产出乱码」）：
+ *   - 拉丁文本：沿用 pdf-lib 内建标准字体 Helvetica（无需外部字体文件）。
+ *   - 非拉丁文本（中文/emoji 等，WinAnsi 无法编码）：优先运行时嵌入一个 CJK 字体
+ *     —— 从本机系统字体加载（simhei.ttf / msyh.ttc / simsun.ttc …，**绝不随安装包
+ *     分发任何字体文件**，规避版权），或由调用方经 opts.fontPath / opts.fontBytes 指定；
+ *     该路径需运行时可用 `@pdf-lib/fontkit`（pdf-lib 嵌入 TTF/OTF/TTC 的硬性依赖，
+ *     本项目不新增运行时依赖，故仅在依赖树中存在时自动启用）。
+ *   - 若无法嵌入 CJK 字体：抛出**可操作的明确错误**（而非返回损坏 PDF 或乱码），
+ *     UI 侧据此以 toast 友好提示。
  * ========================================================================= */
 
 export interface WatermarkOptions {
@@ -271,6 +279,137 @@ export interface WatermarkOptions {
   color?: string;
   /** 平铺（true=整页重复矩阵，默认 false=页面居中单个） */
   tile?: boolean;
+  /**
+   * 可选：显式指定中文字体文件路径（.ttf/.otf，Node / Electron 主进程环境）。
+   * 仅在文本含非拉丁字符时生效；需运行时可用 `@pdf-lib/fontkit`。
+   */
+  fontPath?: string;
+  /**
+   * 可选：直接提供字体二进制（优先级高于 fontPath）。
+   * 便于无 fs 环境（渲染进程）注入字体，或单元测试注入受控字体。
+   */
+  fontBytes?: Uint8Array;
+}
+
+/**
+ * 判定文本中「标准拉丁字体（WinAnsi）无法编码」的字符（去重）。
+ * 覆盖范围：可打印 ASCII（0x20-0x7E）+ Latin-1 补充（0xA0-0xFF）；
+ * 制表/换行/回车为空白控制符，忽略。中文/emoji/其它文种字符均会落入返回集。
+ */
+function findNonLatinChars(text: string): string[] {
+  const bad: string[] = [];
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0x09 || cp === 0x0a || cp === 0x0d) continue;
+    if (cp >= 0x20 && cp <= 0x7e) continue;
+    if (cp >= 0xa0 && cp <= 0xff) continue;
+    if (!bad.includes(ch)) bad.push(ch);
+  }
+  return bad;
+}
+
+/** 标准拉丁字体（Helvetica/WinAnsi）能否编码该文本（用临时文档探测，不污染目标文档） */
+async function canEncodeWithLatin(text: string): Promise<boolean> {
+  const probe = await PDFDocument.create();
+  const font = await probe.embedFont(StandardFonts.Helvetica);
+  try {
+    font.encodeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 可选加载 `@pdf-lib/fontkit`。
+ *
+ * 本项目**不新增运行时依赖**：fontkit 仅在依赖树中已存在时才可用。
+ * 用变量承载模块名（并用 @vite-ignore）避免打包器静态解析该可选依赖；
+ * 缺失时返回 null（后续走「明确报错」兜底）。
+ */
+async function loadFontkitOptional(): Promise<unknown | null> {
+  const spec = '@pdf-lib/fontkit';
+  try {
+    const mod: any = await import(/* @vite-ignore */ spec);
+    return mod?.default ?? mod ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 读取本机字体文件字节（Node / Electron 环境）；不可读时抛出明确错误 */
+async function readFontFile(p: string): Promise<Uint8Array> {
+  const fsSpec = 'node:fs/promises';
+  const fs: any = await import(/* @vite-ignore */ fsSpec).catch(() => null);
+  if (!fs?.readFile) {
+    throw new Error(`当前环境无法读取本地字体文件（仅 Node/Electron 主进程可用）：${p}`);
+  }
+  try {
+    const buf = await fs.readFile(p);
+    return new Uint8Array(buf);
+  } catch (e) {
+    throw new Error(`读取字体文件失败：${p}（${e instanceof Error ? e.message : String(e)}）`);
+  }
+}
+
+/**
+ * Windows 常见中文字体候选（仅**运行时读取本机字体**，绝不随包分发）。
+ * 优先 .ttf（simhei.ttf），其余为兜底。
+ */
+const SYSTEM_CJK_FONT_CANDIDATES = [
+  'C:\\Windows\\Fonts\\simhei.ttf',
+  'C:\\Windows\\Fonts\\msyh.ttc',
+  'C:\\Windows\\Fonts\\simsun.ttc',
+  'C:\\Windows\\Fonts\\simkai.ttf',
+  'C:\\Windows\\Fonts\\simfang.ttf',
+];
+
+/** 依次尝试加载本机中文字体；全部不可用时返回 undefined */
+async function loadSystemCjkFont(): Promise<Uint8Array | undefined> {
+  for (const p of SYSTEM_CJK_FONT_CANDIDATES) {
+    try {
+      const bytes = await readFontFile(p);
+      if (bytes?.length) return bytes;
+    } catch {
+      // 该候选不存在/不可读 → 试下一个
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 为非拉丁文本获取可嵌入字体。
+ *
+ * 优先 opts.fontBytes，其次 opts.fontPath，再退回本机系统字体；均不可用（或
+ * 运行时缺 fontkit）时抛出**可操作的明确错误**——**不得**返回损坏 PDF 或乱码。
+ */
+async function embedUnicodeFont(
+  doc: PDFDocument,
+  opts: WatermarkOptions,
+  badChars: string[],
+): Promise<PDFFont> {
+  const sample = badChars.slice(0, 8).join('');
+  const fontkit = await loadFontkitOptional();
+  if (!fontkit) {
+    throw new Error(
+      `水印文字含非拉丁字符（如「${sample}」），当前环境无法嵌入该字体：` +
+      `pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。` +
+      `请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\\\Windows\\\\Fonts\\\\simhei.ttf"）/ opts.fontBytes 指定中文字体。`,
+    );
+  }
+
+  let bytes: Uint8Array | undefined = opts.fontBytes;
+  if (!bytes && opts.fontPath) bytes = await readFontFile(opts.fontPath);
+  if (!bytes) bytes = await loadSystemCjkFont();
+  if (!bytes) {
+    throw new Error(
+      `水印文字含非拉丁字符（如「${sample}」），但未找到可嵌入的中文字体。` +
+      `请通过 opts.fontPath 指定字体文件（如 "C:\\\\Windows\\\\Fonts\\\\simhei.ttf"），或改用拉丁字符水印。`,
+    );
+  }
+
+  (doc as unknown as { registerFontkit: (k: unknown) => void }).registerFontkit(fontkit);
+  return doc.embedFont(bytes, { subset: true });
 }
 
 /** 解析 #RRGGBB / #RGB 颜色为 pdf-lib 的 rgb()；非法输入回退到中灰 */
@@ -293,6 +432,9 @@ function parseHexColor(hex: string): ReturnType<typeof rgb> {
  *   保证旋转后仍覆盖页面四角）。
  *
  * 坐标约定：pdf-lib 的 `drawText` 以文字基线左端为锚点，`rotate` 绕锚点旋转。
+ *
+ * 字体：拉丁文本用内建 Helvetica；含非拉丁字符（如中文）时尝试嵌入 CJK 字体，
+ * 无法嵌入则抛出可操作的明确错误（不会静默产出乱码或损坏 PDF）。
  */
 export async function addWatermark(pdfBytes: Uint8Array, opts: WatermarkOptions): Promise<Uint8Array> {
   const text = typeof opts.text === 'string' ? opts.text : '';
@@ -307,7 +449,13 @@ export async function addWatermark(pdfBytes: Uint8Array, opts: WatermarkOptions)
   const tile = opts.tile ?? false;
 
   const doc = await loadPdf(pdfBytes);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
+  // 字体选择：可被标准拉丁字体编码 → Helvetica；否则尝试嵌入 CJK 字体
+  let font: PDFFont;
+  if (await canEncodeWithLatin(text)) {
+    font = await doc.embedFont(StandardFonts.Helvetica);
+  } else {
+    font = await embedUnicodeFont(doc, opts, findNonLatinChars(text));
+  }
   const rad = (rotate * Math.PI) / 180;
 
   for (const page of doc.getPages()) {
