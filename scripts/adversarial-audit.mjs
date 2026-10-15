@@ -57,6 +57,7 @@ const {
   imagesToPdf,
   mergePdfs,
   addWatermark,
+  addImageWatermark,
   getPageCount,
   extractPages,
   rotatePages,
@@ -955,28 +956,61 @@ async function runPdf() {
     return { ok, actual: `页数=${n} head=${head} size ${merged.length}→${wm.length}` };
   });
 
-  await runCase('PDF', '水印：非 Latin（中文）文本', '不崩溃或给出可读的输入校验错误', async () => {
-    const base = await imagesToPdf([png]);
-    try {
-      const wm = await addWatermark(base, { text: '机密', fontSize: 40, opacity: 0.2, rotate: 45 });
-      const n = await getPageCount(wm);
-      return { ok: true, actual: `支持中文水印（页数=${n}）` };
-    } catch (e) {
-      // 中文水印抛 WinAnsi 异常 → 真实缺陷（P1）：addWatermark 固定用标准字体 Helvetica，
-      // 对非 Latin 输入无降级/无输入校验；PdfToolbox 直接透传用户输入。
+  // T25（修复后口径）：中文水印路线变更为
+  // 「矢量 addWatermark 对 CJK 明确报错（预期降级）+ 位图 addImageWatermark 产出合法 PDF」。
+  // 采用较严谨的 (a) 方案：同时断言两条路径 —— 既验证矢量路径不会静默产出乱码/损坏 PDF，
+  // 也验证位图路径（PdfToolbox 中文水印的实际链路：canvas→PNG→addImageWatermark）真正可用。
+  // 背景：本项目未引入 @pdf-lib/fontkit（遵守「不新增运行时依赖」），故矢量路径在本机走
+  // 「明确可读错误」兜底；若运行环境已注册 fontkit（或经 opts.fontBytes/fontPath 注入字体），
+  // 则矢量路径成功亦接受 —— 两种情况均不得「静默损坏」。
+  await runCase(
+    'PDF',
+    '水印：中文/非 Latin（矢量明确降级 + 位图路径可用）',
+    '矢量 addWatermark 对 CJK 抛出明确可读错误（非 WinAnsi 原始异常、不静默损坏）；位图 addImageWatermark 产出合法 PDF 且页数守恒',
+    async () => {
+      const base = await imagesToPdf([png]);
+      // 路径 1：矢量文本水印（内建拉丁字体）——对 CJK 应明确降级，绝不静默产乱码/损坏 PDF
+      let vectorOk = false;
+      let vectorDetail = '';
+      try {
+        const wm = await addWatermark(base, { text: '机密', fontSize: 40, opacity: 0.2, rotate: 45 });
+        const n = await getPageCount(wm);
+        const head = String.fromCharCode(...wm.slice(0, 5));
+        // 已注册 fontkit 的环境：允许成功，但输出必须仍是合法 PDF（页数守恒 + %PDF- 头）
+        vectorOk = n === 1 && head === '%PDF-';
+        vectorDetail = vectorOk
+          ? `矢量成功嵌入 CJK（页数=${n} head=${head}）`
+          : `矢量成功但输出异常（页数=${n} head=${head}）`;
+      } catch (e) {
+        const msg = String((e && e.message) ?? e);
+        // 明确可读错误：含 CJK/字体关键词；且不得是 WinAnsi/cannot encode 原始异常（那属未处理降级）
+        const readable = /非拉丁|中文|CJK|字体|fontkit|fontPath/.test(msg);
+        const notRawWinAnsi = !/WinAnsi|cannot encode/.test(msg);
+        vectorOk = readable && notRawWinAnsi;
+        vectorDetail = `矢量对 CJK 明确报错（预期降级）：${msg.slice(0, 72)}…`;
+      }
+      // 路径 2：位图水印（PdfToolbox 中文水印的实际链路）——必须产出合法 PDF 且页数守恒
+      const wmImg = await addImageWatermark(base, {
+        imageBytes: PNG_1x1,
+        mime: 'png',
+        opacity: 0.2,
+        rotate: 45,
+      });
+      const n2 = await getPageCount(wmImg);
+      const head2 = String.fromCharCode(...wmImg.slice(0, 5));
+      const bitmapOk = n2 === 1 && head2 === '%PDF-';
+      const ok = vectorOk && bitmapOk;
       return {
-        ok: false,
-        severity: 'P1',
-        actual: `抛出异常：${e.message}`,
-        evidence:
-          `packages/pdf/src/index.ts:310 doc.embedFont(StandardFonts.Helvetica) → ` +
-          `font.widthOfTextAtSize 对非 Latin 输入抛 WinAnsi；` +
-          `apps/desktop/src/renderer/src/components/PdfToolbox.tsx:136-148 直接透传用户输入（无 CJK 校验）。` +
-          `原始错误：${e.message}`,
-        sourceLoc: 'packages/pdf/src/index.ts:310（watermark 字体） + PdfToolbox.tsx:136-148（无输入校验）',
+        ok,
+        actual: `${vectorDetail}；位图 addImageWatermark：页数=${n2} head=${head2}`,
+        severity: ok ? undefined : 'P1',
+        evidence: ok
+          ? undefined
+          : `位图路径异常（页数=${n2} head=${head2}）或矢量降级不明确（vectorOk=${vectorOk}）`,
+        sourceLoc: ok ? undefined : 'packages/pdf/src/index.ts（addWatermark / addImageWatermark）',
       };
-    }
-  });
+    },
+  );
 
   await runCase('PDF', '页面工具：提取/旋转/删除', '页数按预期变化', async () => {
     const three = await imagesToPdf([png, png, png]);
@@ -1486,19 +1520,36 @@ function buildReport(cross) {
   }
   lines.push('');
 
-  // §6 证据链（pptx 根因隔离）
-  lines.push('## 6. 证据链：pptx 跨软件失败根因隔离（对抗实验）');
+  // §6 证据链（pptx 根因隔离 + 本轮修复复验）
+  const pptxFail = failures.filter(
+    (r) =>
+      (r.module === 'CrossSoft' && r.case.includes('.pptx')) ||
+      (r.module === 'Presentation' && (r.case.includes('母版') || r.case.includes('导出包结构'))),
+  );
+  lines.push('## 6. 证据链：pptx 跨软件可读性（根因隔离 + 本轮修复复验）');
   lines.push('');
-  lines.push('为区分「环境/COM 问题」与「jareking 导出物问题」，做了三组对照（均用本机 WPS COM）：');
+  lines.push('### 6.1 修复前根因隔离（历史对抗实验）');
+  lines.push('');
+  lines.push('为区分「环境/COM 问题」与「jareking 导出物问题」，曾做三组对照（均用本机 WPS COM）：');
   lines.push('');
   lines.push('| 实验 | 样本 | 结果 |');
   lines.push('|---|---|---|');
   lines.push('| ① 控制组 | WPS 自身 `Presentations.Add()` 新建并另存的 pptx（含完整母版/主题） | ✅ 正常打开（slides=1） |');
   lines.push('| ② 交换组 | WPS 骨架 + **仅替换**为 jareking 的 `slide1.xml` | ✅ 正常打开 → 证明 jareking 的**页 XML 正确** |');
-  lines.push('| ③ 被测组 | jareking 导出的 pptx（默认无母版 / 手工注入母版两版） | ❌ 均挂起（>45s 未返回） |');
+  lines.push('| ③ 被测组（修复前） | jareking 导出的 pptx（默认无母版 / 手工注入母版两版） | ❌ 均挂起（>45s 未返回） |');
   lines.push('');
-  lines.push('→ 结论：**故障在 jareking 的 pptx 包骨架**（缺母版/主题；母版缺 `p:sldLayoutIdLst` 与母版→版式关系），');
-  lines.push('  而非页内容、也非 WPS COM 环境。docx/xlsx 同环境可正常打开，进一步排除环境因素。');
+  lines.push('→ 当时结论：故障在 jareking 的 pptx **包骨架**（缺母版/主题；母版缺 `p:sldLayoutIdLst` 与母版→版式关系），');
+  lines.push('  而非页内容、也非 WPS COM 环境（docx/xlsx 同环境可正常打开，进一步排除环境因素）。');
+  lines.push('');
+  lines.push('### 6.2 本轮修复与复验（工程师已修复 P0 pptx 骨架 / P1 母版结构）');
+  lines.push('');
+  lines.push('- **源码修复**：`packages/presentation/src/exporter/index.ts` 在 `pres.masters/layouts` 缺失时由 `planSkeleton()` **合成最小合法默认骨架**（`theme1.xml` + `slideMaster1.xml` + `slideLayout1.xml`），并写出 `presentation.xml` 的 `<p:sldMasterIdLst>` 及全部 rels（母版↔主题/版式、每页↔版式）；`serializeSlideMaster` 补 `<p:sldLayoutIdLst>`。部件数 5 → 11。');
+  lines.push('- **结构自证（无需 COM）**：见 §2 的 T29/T30 —— 导出包含 `ppt/slideMasters/*`、`ppt/slideLayouts/*`、`ppt/theme/*`、`<p:sldMasterIdLst>`；母版含 `<p:sldLayoutIdLst>` 且 rels 含 slideLayout 关系。');
+  lines.push(
+    pptxFail.length === 0
+      ? '- **真实 COM 复验**：本机 WPS 演示（`KWPP.Application`）打开 jareking 导出的 pptx **不再挂起**，读回 slides 数正确（见 §4）。✅'
+      : '- **真实 COM 复验**：仍存在 pptx 打开失败项（见 §3 / §4）。❌',
+  );
   lines.push('');
 
   // §7 未覆盖项与局限
@@ -1529,6 +1580,8 @@ function buildReport(cross) {
   }
   if (failures.some((r) => r.module === 'PDF')) {
     lines.push('- **修复建议（水印）**：`addWatermark` 对非 Latin 输入改用可嵌入的 CJK 字体（或按字符集校验并给出明确错误）；UI 侧同步做输入校验。');
+  } else {
+    lines.push('- **水印结论（本轮复验）**：中文水印经**双路径**提供 —— 矢量 `addWatermark` 对 CJK **明确降级**（抛出可读错误，非 WinAnsi 原始异常、不静默产乱码/损坏 PDF），位图 `addImageWatermark`（PdfToolbox 经 canvas→PNG 调用）产出合法 PDF；见 §2 的 T25。');
   }
   lines.push('');
 

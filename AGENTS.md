@@ -49,6 +49,9 @@ pnpm test                                    # 全绿
 ### 1.8 改 UI 接线后跑冒烟
 改 `Modal` / `Ribbon` / `AIPanel` 等 UI 接线后，**必须重跑** `scripts/gui-smoke.mjs`（见 agent-guide 3.2）。
 
+### 1.9 改 OOXML 解析/导出后跑对抗审计
+改 docx/xlsx/pptx/pdf 的**解析器或导出器**后，必须跑 `node scripts/adversarial-audit.mjs`（边界/恶意输入 + round-trip 保真 + 包完整性含**悬空关系** + **WPS COM 跨软件打开**）。⚠️ 反例教训：pptx 导出器曾因**缺母版/版式/主题骨架**导致导出的 pptx 在 WPS/PowerPoint **打不开**（P0，跨软件不可读）——导出骨架类改动必跑本脚本。
+
 ## 2. 构建 / 验证 / 提交 / 推送（速查）
 
 ```bash
@@ -86,7 +89,7 @@ done
 | `docs/macros.md` | 宏方案（JS 宏 Worker 沙箱） | 宏相关 |
 
 ## 4. 当前基线（每次变化请更新；截至 2026-10-16）
-- **测试**：writer 58 / desktop 131 / presentation 18 / core 38 / sheet 55 / pdf 8。
+- **测试**：writer 58 / desktop 148 / presentation 19 / core 46 / sheet 55 / pdf 15 / ai 16。
 - **已实现**：
   - Writer：docx 读写（L2）+ 域/页码/目录 + **批注** + **修订** + 查找替换 + 页眉页脚 + 脚注/尾注 + 分栏 + 公式（OMML）+ **样式管理器**；
   - Sheet：xlsx + 公式 + 样式双向映射 + 查找替换 + **单元格格式对话框（Ctrl+1）** + **插入图表（选区→PNG 预览/下载）** + **数据透视表** + **分列/删除重复项**；

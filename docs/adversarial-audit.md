@@ -1,7 +1,7 @@
 # jareking 对抗性审计报告（adversarial-audit）
 
 > 生成者：QA 严过关 · 并行任务 3/3 · 由 `scripts/adversarial-audit.mjs` 自动生成
-> 生成时间：2026-10-15T18:25:51.332Z
+> 生成时间：2026-10-15T18:42:34.043Z
 > 运行环境：win32 / Node v22.22.2
 
 ## 1. 概述
@@ -44,7 +44,7 @@
 | T22 | PDF | 图片转 PDF（2 图 → 2 页） | 页数=2，%PDF- 头 | 单图=1 页，双图=2 页，head=%PDF- | ✅ |
 | T23 | PDF | 合并（2 份 1 页 → 2 页） | 页数=2 | 合并后页数=2 | ✅ |
 | T24 | PDF | 链式：图片→合并→水印（ASCII 文本） | 页数守恒且输出合法 PDF | 页数=2 head=%PDF- size 2345→3377 | ✅ |
-| T25 | PDF | 水印：非 Latin（中文）文本 | 不崩溃或给出可读的输入校验错误 | 抛出异常：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\Windows\\Fonts\\simhei.ttf"）/ opts.fontBytes 指定中文字体。 | ❌ P1 |
+| T25 | PDF | 水印：中文/非 Latin（矢量明确降级 + 位图路径可用） | 矢量 addWatermark 对 CJK 抛出明确可读错误（非 WinAnsi 原始异常、不静默损坏）；位图 addImageWatermark 产出合法 PDF 且页数守恒 | 矢量对 CJK 明确报错（预期降级）：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/f…；位图 addImageWatermark：页数=1 head=%PDF- | ✅ |
 | T26 | PDF | 页面工具：提取/旋转/删除 | 页数按预期变化 | 提取=2 旋转=3 删除=2 | ✅ |
 | T27 | Integrity | docx 混排产物 zip 完整性（含关系可达） | 无损坏条目/部件齐/无悬空关系 | 通过（11 个部件） | ✅ |
 | T28 | Integrity | 含 5MB 图片 docx 产物完整性（媒体可达） | word/media 存在且被关系指向 | 完整性=true media 部件=true | ✅ |
@@ -58,17 +58,11 @@
 | T36 | CrossSoft | WPS 打开 jareking-slide-1.pptx | 能被本机 WPS 正常打开并读回结构 | slides=1 | ✅ |
 | T37 | CrossSoft | WPS 打开 jareking-slide-2.pptx | 能被本机 WPS 正常打开并读回结构 | slides=2 | ✅ |
 
-**小计**：共 37 项 —— 通过 35 / 设计内降级 1 / 失败 1。
+**小计**：共 37 项 —— 通过 36 / 设计内降级 1 / 失败 0。
 
 ## 3. Bug 清单（分级）
 
-### [P1] T25 PDF · 水印：非 Latin（中文）文本
-- **源码定位**：packages/pdf/src/index.ts:310（watermark 字体） + PdfToolbox.tsx:136-148（无输入校验）
-- **复现**：`node scripts/adversarial-audit.mjs` 即可；该用例编号 T25
-- **期望**：不崩溃或给出可读的输入校验错误
-- **实际**：抛出异常：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\Windows\\Fonts\\simhei.ttf"）/ opts.fontBytes 指定中文字体。
-- **证据**：`packages/pdf/src/index.ts:310 doc.embedFont(StandardFonts.Helvetica) → font.widthOfTextAtSize 对非 Latin 输入抛 WinAnsi；apps/desktop/src/renderer/src/components/PdfToolbox.tsx:136-148 直接透传用户输入（无 CJK 校验）。原始错误：水印文字含非拉丁字符（如「机密」），当前环境无法嵌入该字体：pdf-lib 嵌入 TTF/OTF/TTC 自定义字体需依赖 @pdf-lib/fontkit（本项目未引入该运行时依赖）。请改用拉丁字符，或在已注册 fontkit 的环境中通过 opts.fontPath（如 "C:\\Windows\\Fonts\\simhei.ttf"）/ opts.fontBytes 指定中文字体。`
-- **影响**：严重级：支持范围内的内容丢失或结构走样，round-trip 不可逆。
+**未发现任何失败项（P0/P1/P2 均为空）。** 全部断言通过或属设计内降级。
 
 ## 4. 跨软件可读性结论
 
@@ -96,25 +90,28 @@
 
 ## 5. 源码定位与路由判定（交工程师 / 主理人转派）
 
-以下失败项均为**可复现的源码缺陷**：断言期望正确（符合 ECMA-376 / 用户验收目标），实现不符 → 归因 **源码 bug**（非测试问题）。
+无需要路由的源码缺陷（无源码级失败项）。
 
-| 源码文件（定位） | 关联用例 | 级别 |
-|---|---|---|
-| `packages/pdf/src/index.ts:310（watermark 字体） + PdfToolbox.tsx:136-148（无输入校验）` | T25(P1) | P1 |
+## 6. 证据链：pptx 跨软件可读性（根因隔离 + 本轮修复复验）
 
+### 6.1 修复前根因隔离（历史对抗实验）
 
-## 6. 证据链：pptx 跨软件失败根因隔离（对抗实验）
-
-为区分「环境/COM 问题」与「jareking 导出物问题」，做了三组对照（均用本机 WPS COM）：
+为区分「环境/COM 问题」与「jareking 导出物问题」，曾做三组对照（均用本机 WPS COM）：
 
 | 实验 | 样本 | 结果 |
 |---|---|---|
 | ① 控制组 | WPS 自身 `Presentations.Add()` 新建并另存的 pptx（含完整母版/主题） | ✅ 正常打开（slides=1） |
 | ② 交换组 | WPS 骨架 + **仅替换**为 jareking 的 `slide1.xml` | ✅ 正常打开 → 证明 jareking 的**页 XML 正确** |
-| ③ 被测组 | jareking 导出的 pptx（默认无母版 / 手工注入母版两版） | ❌ 均挂起（>45s 未返回） |
+| ③ 被测组（修复前） | jareking 导出的 pptx（默认无母版 / 手工注入母版两版） | ❌ 均挂起（>45s 未返回） |
 
-→ 结论：**故障在 jareking 的 pptx 包骨架**（缺母版/主题；母版缺 `p:sldLayoutIdLst` 与母版→版式关系），
-  而非页内容、也非 WPS COM 环境。docx/xlsx 同环境可正常打开，进一步排除环境因素。
+→ 当时结论：故障在 jareking 的 pptx **包骨架**（缺母版/主题；母版缺 `p:sldLayoutIdLst` 与母版→版式关系），
+  而非页内容、也非 WPS COM 环境（docx/xlsx 同环境可正常打开，进一步排除环境因素）。
+
+### 6.2 本轮修复与复验（工程师已修复 P0 pptx 骨架 / P1 母版结构）
+
+- **源码修复**：`packages/presentation/src/exporter/index.ts` 在 `pres.masters/layouts` 缺失时由 `planSkeleton()` **合成最小合法默认骨架**（`theme1.xml` + `slideMaster1.xml` + `slideLayout1.xml`），并写出 `presentation.xml` 的 `<p:sldMasterIdLst>` 及全部 rels（母版↔主题/版式、每页↔版式）；`serializeSlideMaster` 补 `<p:sldLayoutIdLst>`。部件数 5 → 11。
+- **结构自证（无需 COM）**：见 §2 的 T29/T30 —— 导出包含 `ppt/slideMasters/*`、`ppt/slideLayouts/*`、`ppt/theme/*`、`<p:sldMasterIdLst>`；母版含 `<p:sldLayoutIdLst>` 且 rels 含 slideLayout 关系。
+- **真实 COM 复验**：本机 WPS 演示（`KWPP.Application`）打开 jareking 导出的 pptx **不再挂起**，读回 slides 数正确（见 §4）。✅
 
 ## 7. 未覆盖项与局限（如实声明）
 
@@ -128,7 +125,52 @@
 
 ## 8. 总体结论与建议
 
-- 汇总：P0=0，P1=1，P2=0，设计内降级=1，通过=35。
-- **总体结论**：存在阻断/严重缺陷，需工程师修复后复测（见 §3）。
+- 汇总：P0=0，P1=0，P2=0，设计内降级=1，通过=36。
+- **总体结论**：核心链路的边界/恶意输入均未崩溃，round-trip 保真与包完整性达标，未见阻断/严重缺陷。
 - 建议：将本脚本纳入交付前门禁（`node scripts/adversarial-audit.mjs`）；把「悬空关系检测」并入导出门禁。
-- **修复建议（水印）**：`addWatermark` 对非 Latin 输入改用可嵌入的 CJK 字体（或按字符集校验并给出明确错误）；UI 侧同步做输入校验。
+- **水印结论（本轮复验）**：中文水印经**双路径**提供 —— 矢量 `addWatermark` 对 CJK **明确降级**（抛出可读错误，非 WinAnsi 原始异常、不静默产乱码/损坏 PDF），位图 `addImageWatermark`（PdfToolbox 经 canvas→PNG 调用）产出合法 PDF；见 §2 的 T25。
+
+## 9. GUI 冒烟与定向验证（本轮新增能力）
+
+> 在真实 Electron 应用（`cd apps/desktop && env -u ELECTRON_RUN_AS_NODE ./node_modules/.bin/electron . --remote-debugging-port=9222 --jk-debug`）上执行；构建产物 `apps/desktop/out`（2026-10-16 构建，含本轮修复）。
+
+### 9.1 GUI 冒烟（`scripts/gui-smoke.mjs`）
+
+- 结果：**✅ 通过**，`consoleErrors = []`（无未过滤控制台错误 / 未捕获异常）。
+- 关键断言全绿：Writer（ProseMirror / 一键整理 / 千分符 / 目录 / 页码 / 公式 / 加粗）、Sheet（Univer canvas）、幻灯片（Konva / 放映 / 动画切换）、AI（配置保存 / Key 不泄漏 / mock 网关调用 / 文档变更 / 图表插入）、PDF 工具箱入口。
+- 说明：**本轮未出现「早期步骤因 AI 配置 IPC 冷启动失败」**——脚本开头的历史 AI 配置清理成功（清理 1 条遗留配置），随后全部 AI 断言通过。
+
+### 9.2 PDF 阅读器定向验证（`scripts/pdf-reader-smoke.mjs`）
+
+- 路径：Ribbon「PDF 工具 → 打开PDF」→ CDP 拦截文件选择器注入自造 3 页 PDF（`%PDF-`，3149 字节）→ 阅读器渲染。
+- 断言（全部 ✅）：
+  - 渲染出 `<canvas>`（2 个，含 dpr 放大 backing store）与文本层（`.jk-pdf-text-layer`）；
+  - 状态栏读回 `sample-3page.pdf | 单页 · 共 3 页` → 总页数正确；
+  - 翻页：点「下一页」页码输入框 `1 → 2`；
+  - 缩放：默认「适应宽度」按下（`aria-pressed=true`）→ 点「放大」后切自由缩放（`false`）、缩放显示 `110%`；
+  - 无控制台错误。
+
+### 9.3 中文水印定向验证（`scripts/pdf-reader-smoke.mjs`）
+
+- 路径：Ribbon「PDF 工具 → 添加水印」→ 水印面板输入「机密」（面板出现「位图水印」提示）→ 选目标 PDF（1 页）→「开始处理」。
+- 断言（全部 ✅）：运行时捕获产出 Blob → **头 = `%PDF-`、大小 = 4548 字节**；note 显示「✅ 已导出「sample-1page-已加水印.pdf」」；无控制台错误。
+- 结论：**中文水印经 `PdfToolbox` 的 canvas→PNG→`addImageWatermark` 位图链路端到端可用**（零新依赖、零字体分发）。
+
+### 9.4 复验观察（非缺陷）
+
+- pdf.js worker/资源首次加载较慢：打开 PDF 后约需 15~20s 才完成首帧渲染（其后操作即时）。定向脚本已延长轮询窗口以容纳冷启动；如后续优化首屏，可考虑预热 worker。
+
+## 10. 剩余问题与未覆盖（如实）
+
+- **剩余 bug：无**（P0/P1/P2 = 0）。设计内降级 1 项（T14：单格合并 A1:A1 被规范化丢弃，Excel/WPS 本身不支持）。
+- 未覆盖 / 局限（沿用 §7，另补本轮）：
+  - **视觉保真**：跨软件仅比对结构计数；PDF 阅读器仅验证「渲染/翻页/缩放存在且生效」，未逐像素比对渲染结果。
+  - **中文水印位图链路依赖本机中文字体**（Microsoft YaHei / SimSun / SimHei），缺字体会回退 `sans-serif`（可能字形偏差）。
+  - **pdf.js 首屏加载时延**（§9.4）未做性能基线。
+  - MS Office 真机、旧二进制格式（.doc/.xls/.ppt）、SmartArt / OLE / 宏(VBA) / 数字签名 / 加密文档仍未覆盖。
+
+## 11. 路由判定
+
+- **判定：NoOne（全部通过）**。无源码级失败项；P0/P1 均已闭环（P0 pptx 骨架、P1 母版结构已修复并由本机 WPS COM 复验打开；中文水印路线变更后 T25 已反映真实状态，不再误报为阻断项）。
+- 建议：将 `scripts/adversarial-audit.mjs` 与 `scripts/pdf-reader-smoke.mjs` 纳入交付前门禁（前者需 PowerShell 两步执行跨软件校验）；把「悬空关系检测」并入导出门禁。
+

@@ -190,7 +190,8 @@
 > **2026-10-15 补（WPS 对齐批）**：PDF 工具箱「转换」组补 2 项真实功能——**PDF 转 TXT**（pdfjs 文本提取，纯函数 `pdfToText`，4 测 Node 通过）、**PDF 转图片**（pdfjs 渲染 canvas→PNG，渲染进程，结果区缩略图预览 + 逐张/全部下载）。PDF↔Office 双向、加密、水印、压缩、OCR 仍待 T5 引擎层。
 > **2026-10-15 补（Office→PDF 落地）**：功能区「PDF 工具」的「Office 转 PDF」组三按钮（Word/Excel/PPT → PDF）由 `toastNotImplemented` 空壳改为**真驱动本机引擎**——主进程 `services/officeConvert.ts` 用 `child_process.spawn` 调 `powershell.exe` 执行由 `shared/officePdfScript.ts`（纯函数，**8 条单测**）生成的脚本：ProgID 按 `Word/Excel/PowerPoint.Application` 优先、WPS `KWPS/KET(et)/KWPP(wpp)` 备选，只读打开原件 → 导出 PDF → `Quit()` → 释放 COM，临时 `.ps1` 用后即删，含 120s 超时强杀。纯本地、零成本、零服务端（贴合 jareking v1 约束）。**真实 COM 转换需在本机已装 Microsoft Office/WPS 的 Windows 上验收**（无头/沙箱环境无法实测，故以脚本生成器纯函数单测作为硬验证）；**WPS 个人版 COM 支持可能有限，Office 优先**。**PDF→Office、加密、水印、压缩、OCR 仍待排期**（T5.1~T5.3）。
 
-- [ ] **T5.1** 阅读器：PDF.js 渲染、缩放翻页、文本选择复制、目录书签、全文搜索、连续/单页模式
+- [x] **T5.1** 阅读器：PDF.js 渲染、缩放翻页、文本选择复制、目录书签、全文搜索、连续/单页模式
+  - **2026-10-16 MVP 落地**：`apps/desktop/src/renderer/src/pdf/`（`PdfReader` + `pdfjs` 单例 + `pdfView` 纯函数 17 测）；pdfjs 渲染（canvas + DPR）、单页/连续、缩放/适应宽度、翻页/跳页、**文本层选择复制**、目录书签、全文搜索（跳页）。入口：Ribbon「打开PDF」真实打开 + pdf 模块标签 + 最近文档直达。验收：`scripts/pdf-reader-smoke.mjs`（真实 Electron 打开 3 页 PDF，canvas/文本层/翻页/缩放断言，consoleErrors=0）。**未做**：搜索高亮、打印、批注、OCR、缩略图侧栏、加密 PDF 密码框。
 - [ ] **T5.2** 编辑器（门控）：pdf-lib 页面增删/合并/拆分/旋转/提取、注释、基础文本编辑
 - [x] **T5.3** 创建：Writer/Sheet/Presentation 导出 PDF（打印管线，字体嵌入）
   - **2026-10-16 落地（W-批2 剩余项一并完成）**：三模块「文件 → 导出 PDF」走 Electron 原生打印管线——纯函数打印 HTML（`buildPrintDocument` + `sheetToHtml` / `presentationToHtml` / Writer 复用 `jkToHtml`）→ 隐藏 BrowserWindow `webContents.printToPDF` → 下载 PDF。字体由 Chromium 打印管线自动嵌入（依赖本机系统字体）。验收：`scripts/pdf-export-smoke.mjs`（真实 Electron，三探针 `%PDF-` + A4 纵/横 MediaBox 实测）。**未含**：WPS 级精确分页、打印设置对话框（纸张/区域/重复标题行）——列后续专项。
@@ -259,6 +260,23 @@
 ## 对抗性复检后续（2026-10-15，来源：首轮复检 #46/#47/#48）
 
 > 复检发现的高危项已逐步处理，分级与结果见 `docs/agent-guide.md` 第 6 节。此处登记**已落地**与**暂缓但不丢项**的清单，供后续迭代不遗漏。
+
+### ✅ AI 算力计量接口（2026-10-16，为后续 AI 功能 / T6.1 铺路）
+
+- **契约（单一事实源）**：`packages/core/src/contracts/ai.ts` 新增 `AiPricingRule`（模型前缀定价）/`AiUsageRecord`（用量流水）/`AiMeteringSummary`/`AiMetering`（计量服务接口）。
+- **实现**：`packages/ai/src/metering.ts`——`DEFAULT_PRICING_RULES`（gpt/claude/deepseek/qwen/glm/`*` 兜底）、`pickPricingRule`（精确→前缀最长→兜底）、`computePoints`（向上取整，>0 用量至少 1 分）、`createAiMeteringService`（内存 + `persist` 回调）。
+- **账本**：`packages/core/src/account/aiMeteringLedger.ts` + `ai_usage` 表（v2 迁移，增量）+ `recordAndDebit`（**单事务**写流水与扣分，余额不足整体回滚）。
+- **IPC/UI**：`ai:meter:summary`/`ai:meter:records` + 设置面板「算力用量」分区（汇总 + 最近流水）。
+- **状态**：接口层就绪，**尚未接入现有 AI 调用链路**（aiRunner/aiStore/AIPanel 零改动、行为不变）；接入时应调 `recordAndDebit(usage, { model, configId?, feature? })`。core 46 测 / ai 16 测。
+
+### ✅ 对抗性审计（2026-10-16）—— P0/P1 全部清零
+
+- **工具**：`scripts/adversarial-audit.mjs`（37 项：边界/恶意输入、round-trip 保真、包完整性含**悬空关系**检测、**WPS COM 跨软件实测**）+ 报告 `docs/adversarial-audit.md`。
+- **修复的真实缺陷**：
+  - **P0**：pptx 导出骨架缺 `slideMasters/slideLayouts/theme`（WPS/PowerPoint 打开挂起）→ 导出器合成最小合法默认骨架（部件 5→11 + `sldMasterIdLst` + 各 rels），实测 WPS 可打开。
+  - **P1**：母版 `serializeSlideMaster` 缺 `sldLayoutIdLst` + 母版→版式关系 → 补全。
+  - **P1**：PDF 中文水印（矢量 WinAnsi 无法编码 CJK）→ 新增位图 `addImageWatermark` + `PdfToolbox` canvas→PNG 链路（**零新依赖、零字体打包**）。
+- **复验结论**：P0=0 / P1=0；跨软件 `docx×3 / xlsx×2 / pptx×2` **全部 ✅**；GUI 冒烟 `consoleErrors=0`；PDF 阅读器与中文水印端到端通过。设计内降级 1 项（单格合并 A1:A1 规范化，Excel 本身不支持）。
 
 ### ✅ 已落地（本次）
 
