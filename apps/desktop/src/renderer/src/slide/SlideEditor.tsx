@@ -729,7 +729,7 @@ export function SlideEditor() {
   /** 最近文档直达（WPS 对齐 N5）：消费首页「最近使用」点击 */
   useEffect(() => {
     const p = takePendingOpen();
-    if (!p || p.module !== 'presentation' || !/\.pptx$/i.test(p.path)) return;
+    if (!p || p.module !== 'slide' || !/\.pptx$/i.test(p.path)) return;
     void (async () => {
       try {
         setFileLoading(true);

@@ -23,12 +23,12 @@ interface RecentFileRow {
 
 /**
  * 断言：模块可直接打开本地文件。
- * 说明：DocModule 取值为 writer/sheet/slide/pdf（演示模块记为 slide），
- * 而 PendingOpen.module 契约用 writer/sheet/presentation；两者交集为 writer/sheet，
- * 故仅这两者可经「最近使用」直达打开（与既有运行时行为一致）。
+ * 说明：DocModule 取值为 writer/sheet/slide/pdf；其中 writer/sheet/slide 的编辑器
+ * 均已实现「最近使用」直达打开（消费 PendingOpen），PDF 阅读器尚未实现故不放行。
+ * 注：PendingOpen.module 已统一为 DocModule（'slide'），不再使用 'presentation'。
  */
-function isOpenableModule(module: DocModule): module is 'writer' | 'sheet' {
-  return module === 'writer' || module === 'sheet';
+function isOpenableModule(module: DocModule): module is 'writer' | 'sheet' | 'slide' {
+  return module === 'writer' || module === 'sheet' || module === 'slide';
 }
 
 /** 最近使用（WPS 首页体验）：点击直达打开，悬停可定位到系统文件管理器 */

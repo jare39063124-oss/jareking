@@ -6,9 +6,11 @@
  * 用 store 而非事件：openTab 后 Editor 异步挂载，事件会早于挂载发出而丢失。
  */
 import { create } from 'zustand';
+import type { DocModule } from './tabStore';
 
 export interface PendingOpen {
-  module: 'writer' | 'sheet' | 'presentation';
+  /** 目标模块（直接复用 DocModule 单一来源，避免与 'slide'/'presentation' 命名漂移） */
+  module: DocModule;
   path: string;
   name: string;
 }
