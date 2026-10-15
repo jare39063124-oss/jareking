@@ -90,4 +90,16 @@ describe('buildChartData', () => {
     ]);
     expect(d.labels).toEqual(['1', '2']);
   });
+
+  it('单行多列（仅表头行、无数据行）→ 标签为空、系列存在但值为空', () => {
+    const d = buildChartData([['品类', '营收']]);
+    expect(d.labels).toEqual([]);
+    expect(d.series).toEqual([{ name: '营收', values: [] }]);
+  });
+
+  it('单行单列（数值）→ 单点数据、标签用行序', () => {
+    const d = buildChartData([[42]]);
+    expect(d.labels).toEqual(['1']);
+    expect(d.series).toEqual([{ name: '系列1', values: [42] }]);
+  });
 });

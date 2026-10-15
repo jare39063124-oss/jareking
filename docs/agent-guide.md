@@ -65,8 +65,7 @@ jareking/
 | `writer/jkToHtml.ts` / `htmlToJk.ts` | 文档模型 ↔ HTML（编辑器 ↔ 模型 ↔ 文件 的枢纽，**任何格式漂移先查这里**） |
 | `writer/opsExecutor.ts` | AI ops 的本地确定性执行；新增 Writer AI 能力在此接 |
 | `sheet/univerAdapter.ts` | Univer ↔ JkWorkbook 双向映射（`JK→Univer` 打开、`Univer→JK` 保存）；**样式回写目前是空实现，见第 7 节** |
-| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、查找替换、**插入图表（T2.5）**、持有 `__jkDebug` |
-| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、单元格格式（Ctrl+1）、**插入图表（T2.5，选区→PNG 生成/预览/下载）**、持有 `__jkDebug` |
+| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、查找替换、单元格格式（Ctrl+1）、**插入图表（T2.5，选区→PNG 生成/预览/下载）**、持有 `__jkDebug` |
 | `sheet/chartData.ts` | 单元格矩阵 → 图表数据（`buildChartData`，纯函数；Sheet 图表复用 `lib/chartRenderer`） |
 | `slide/SlideEditor.tsx` | Konva 舞台；所有幻灯片/形状一次性渲染（无懒加载）；`addChart` 复用 `lib/chartRenderer`；持有 `__jkSlideDebug` |
 | `lib/chartRenderer.ts` | 零依赖 canvas→PNG 图表（bar/line/pie），**PPT 与 Sheet 共用**（原 `slide/chartRenderer.ts` 下沉，公共能力） |
