@@ -40,7 +40,8 @@ export class MediaRegistry {
     const e = this.map.get(relId);
     if (!e) return undefined;
     if (!e.blobUrl) {
-      const blob = new Blob([e.bytes], { type: e.mime || 'application/octet-stream' });
+      // Uint8Array（ArrayBufferLike）与 BlobPart 的类型不完全重叠，此处断言不改变运行时行为
+      const blob = new Blob([e.bytes as BlobPart], { type: e.mime || 'application/octet-stream' });
       e.blobUrl = URL.createObjectURL(blob);
     }
     return e.blobUrl;

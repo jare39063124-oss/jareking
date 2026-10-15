@@ -22,6 +22,7 @@ import type {
   Inline,
   JkDocument,
   Paragraph,
+  ParagraphProperties,
   Run,
   RunProperties,
   Table as JkTable,

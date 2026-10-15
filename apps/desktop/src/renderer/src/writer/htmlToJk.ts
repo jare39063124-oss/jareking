@@ -24,6 +24,7 @@ import type {
   Numbering,
   NumberingLevel,
   Paragraph,
+  ParagraphProperties,
   Relationship,
   Run,
   RunProperties,
@@ -332,7 +333,7 @@ function readFirstLineIndent(el: Element): number | undefined {
  * 从元素 style 读取 line-height → spacing.line/lineRule。
  * 无单位倍数（1.5 → 360/auto）；带 pt 绝对值（28pt → 560/exact）。
  */
-function readLineHeight(el: Element): Paragraph['pPr']['spacing'] | undefined {
+function readLineHeight(el: Element): ParagraphProperties['spacing'] | undefined {
   const style = el.getAttribute('style') ?? '';
   const m = /(?:^|;)\s*line-height:\s*([\d.]+)\s*(pt|px)?/.exec(style);
   if (!m) return undefined;

@@ -67,7 +67,9 @@ export const ParagraphTextAlign = TextAlign.extend({
         ({ commands }) => {
           let ok = true;
           for (const [key, value] of Object.entries(attrs)) {
-            ok = commands.setNodeAttribute('paragraph', key, value ?? null) && ok;
+            // updateAttributes 为 TipTap 核心命令（setNodeAttribute 不存在）；
+            // 逐属性写回，保持与原有「单属性设置 + 累积结果」语义一致
+            ok = commands.updateAttributes('paragraph', { [key]: value ?? null }) && ok;
           }
           return ok;
         },

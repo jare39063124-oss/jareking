@@ -56,8 +56,9 @@ const TableWithBg = extendWithBg(Table);
 /** Writer 编辑器统一扩展集合（主编辑器与页眉页脚 Modal 共用） */
 export const writerExtensions: Extensions = [
   StarterKit.configure({
-    // 默认 history 提供撤销/重做；保留 strike
-    strike: true,
+    // 默认 history 提供撤销/重做；strike（删除线）为 StarterKit 默认开启，
+    // 传空对象仅为显式声明（v2 类型不接受字面量 true，且 Strike 默认即启用）
+    strike: {},
   }),
   Underline,
   TextStyle,

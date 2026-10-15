@@ -2,12 +2,13 @@
  * T3.1 pptx 解析器：fflate 流式解压 + fast-xml-parser → JkPresentation。
  *
  * 覆盖（基础保真）：幻灯片顺序 / 画布尺寸 / 文本框（段落+run 格式）/
- * 预设几何形状（含形状内文字与纯色填充）/ 图片（记录 relId）。
+ * 预设几何形状（含形状内文字与纯色填充）/ 图片（记录 relId）/ 表格（graphicFrame → a:tbl）。
  * 动画/切换/主题母版/SmartArt/图表 v1 降级忽略并记录。
  *
  * 注意：XMLParser 开启 removeNSPrefix，所有标签键不带 p:/a: 前缀
  * （与 docx 解析器同一约定）：sp / pic / spPr / xfrm / off / ext /
  * prstGeom / solidFill / srgbClr / txBody / p / r / t / rPr …
+ * 表格：graphicFrame / graphic / graphicData / tbl / tblGrid / gridCol / tr / tc / txBody …
  *
  * #46-C（2026-10-15）：原实现用 JSZip.loadAsync 一次性把整包解压进内存，
  * 大文件峰值高。现改为 fflate 流式逐条目解压——
@@ -24,6 +25,9 @@ import type {
   JkPresentation,
   JkShape,
   JkSlide,
+  JkTableCell,
+  JkTableRow,
+  JkTableShape,
   JkTextShape,
   TextParagraph,
   TextRun,
@@ -187,7 +191,122 @@ function parsePic(pic: any): JkShape | null {
   };
 }
 
-/** spTree → JkShape[]（sp/pic 按序；graphicFrame 表格/图表 v1 降级） */
+/* =========================================================================
+ * 表格解析（graphicFrame → a:tbl）
+ * ========================================================================= */
+
+/** 单元格文本范围：从 pPr@algn 取水平对齐（l/ctr/r） */
+function parseCellAlign(p: any): JkTableCell['align'] {
+  const algn = getAttr(p?.pPr, '@_algn');
+  if (algn === 'ctr') return 'center';
+  if (algn === 'r') return 'right';
+  if (algn === 'l') return 'left';
+  return undefined;
+}
+
+/**
+ * a:tc → JkTableCell。
+ *
+ * 文本：遍历 txBody 下所有 a:p，逐段拼接 run 的 a:t；段落间以 \n 连接。
+ * 格式：取首个带格式的 run（字号 sz/100→pt、颜色 solidFill srgbClr、加粗 b="1"），
+ * 对齐取首个非空段落 pPr@algn。
+ */
+function parseTableCell(tc: any): JkTableCell {
+  const txBody = tc?.txBody;
+  const paragraphs = childArray(txBody, 'p');
+  const lines: string[] = [];
+  let fontSize: number | undefined;
+  let color: string | undefined;
+  let bold: boolean | undefined;
+  let align: JkTableCell['align'];
+
+  for (const p of paragraphs) {
+    let line = '';
+    for (const r of childArray(p, 'r')) {
+      const t = r?.t;
+      line += typeof t === 'string' ? t : (t?.['#text'] ?? '');
+      const rPr = r?.rPr;
+      if (rPr) {
+        if (fontSize === undefined) {
+          const sz = num(getAttr(rPr, '@_sz'));
+          if (sz !== undefined) fontSize = sz / 100;
+        }
+        if (color === undefined) {
+          const fill = parseSolidFill(rPr?.solidFill);
+          if (fill) color = fill;
+        }
+        if (bold === undefined && getAttr(rPr, '@_b') === '1') bold = true;
+      }
+    }
+    if (align === undefined) {
+      const a = parseCellAlign(p);
+      if (a) align = a;
+    }
+    lines.push(line);
+  }
+
+  const cell: JkTableCell = { text: lines.join('\n') };
+  if (fontSize !== undefined) cell.fontSize = fontSize;
+  if (color !== undefined) cell.color = color;
+  if (bold !== undefined) cell.bold = bold;
+  if (align !== undefined) cell.align = align;
+  return cell;
+}
+
+/**
+ * graphicFrame（表格）→ JkTableShape。
+ *
+ * 结构（removeNSPrefix 后）：
+ *   graphicFrame / nvGraphicFramePr / cNvPr@name
+ *   graphicFrame / xfrm / off@x,y + ext@cx,cy
+ *   graphicFrame / graphic / graphicData@uri / tbl /
+ *     tblGrid / gridCol@w ... ; tr@h / tc / txBody / p / r / t ...
+ *
+ * 仅处理 uri 含 "table" 的表格；图表（uri 含 chart）等返回 null，由调用方继续降级。
+ */
+function parseGraphicFrame(gf: any): JkShape | null {
+  const data = gf?.graphic?.graphicData;
+  const uri = getAttr(data, '@_uri') ?? '';
+  if (!uri.includes('table')) return null; // 仅表格；图表等其余 graphicFrame 降级
+  const tbl = data?.tbl;
+  if (!tbl) return null;
+
+  const pos = gf?.xfrm ? parseXfrm(gf.xfrm) : { x: 0, y: 0, w: 0, h: 0, rotation: undefined };
+
+  // 列宽：tblGrid 下的 gridCol@w（tblGrid 通常为单节点，兜底兼容数组）
+  const tblGrid = Array.isArray(tbl.tblGrid) ? tbl.tblGrid[0] : tbl.tblGrid;
+  const colWidths: number[] = childArray(tblGrid, 'gridCol').map(
+    (gc) => num(getAttr(gc, '@_w')) ?? 0,
+  );
+
+  // 行：tr@h + tc → cell
+  const rows: JkTableRow[] = childArray(tbl, 'tr').map((tr) => {
+    const cells = childArray(tr, 'tc').map(parseTableCell);
+    const row: JkTableRow = { cells };
+    const h = num(getAttr(tr, '@_h'));
+    if (h !== undefined) row.height = h;
+    return row;
+  });
+
+  const colTotal = colWidths.reduce((a, b) => a + b, 0);
+  const cNvPr = gf?.nvGraphicFramePr?.cNvPr;
+  const table: JkTableShape = {
+    type: 'table',
+    id: getAttr(cNvPr, '@_id'),
+    name: getAttr(cNvPr, '@_name'),
+    x: pos.x,
+    y: pos.y,
+    w: colTotal || pos.w,
+    h: pos.h,
+    rotation: pos.rotation,
+    colWidths,
+    rows,
+    height: pos.h,
+  };
+  return table;
+}
+
+/** spTree → JkShape[]（sp/pic/graphicFrame(表格) 按序；图表等 graphicFrame v1 降级） */
 function parseShapeTree(spTree: any): JkShape[] {
   const shapes: JkShape[] = [];
   for (const sp of childArray(spTree, 'sp')) {
@@ -196,6 +315,10 @@ function parseShapeTree(spTree: any): JkShape[] {
   }
   for (const pic of childArray(spTree, 'pic')) {
     const s = parsePic(pic);
+    if (s) shapes.push(s);
+  }
+  for (const gf of childArray(spTree, 'graphicFrame')) {
+    const s = parseGraphicFrame(gf);
     if (s) shapes.push(s);
   }
   return shapes;

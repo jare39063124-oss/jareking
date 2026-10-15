@@ -61,6 +61,52 @@ function RenderShape({
     );
   }
 
+  // 表格：按 colWidths / 行高还原为 DOM 表格（放映态只读）
+  if (shape.type === 'table') {
+    const totalH = shape.height ?? shape.h;
+    const rowCount = shape.rows.length;
+    const perRow = totalH / Math.max(1, rowCount);
+    return (
+      <div
+        style={{
+          ...style,
+          display: 'table',
+          tableLayout: 'fixed',
+          borderCollapse: 'collapse',
+          background: '#FFFFFF',
+        }}
+      >
+        {shape.rows.map((row, r) => (
+          <div key={r} style={{ display: 'table-row', height: (row.height ?? perRow) * scale }}>
+            {shape.colWidths.map((cw, c) => {
+              const cell = row.cells[c] ?? { text: '' };
+              return (
+                <div
+                  key={c}
+                  style={{
+                    display: 'table-cell',
+                    width: cw * scale,
+                    border: '1px solid #9CA3AF',
+                    verticalAlign: 'middle',
+                    padding: 4,
+                    whiteSpace: 'pre-wrap',
+                    fontSize: (cell.fontSize ?? 18) * (4 / 3) * scale,
+                    color: cell.color ?? '#1F2937',
+                    fontWeight: cell.bold ? 700 : 400,
+                    textAlign: cell.align ?? 'left',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {cell.text}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const paragraphs = shape.paragraphs ?? [];
   const firstRun = paragraphs[0]?.runs?.[0];
   const align = paragraphs[0]?.align ?? 'left';

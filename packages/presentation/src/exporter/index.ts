@@ -4,6 +4,7 @@
  * 与解析器（parser/pptxParser.ts）互逆：
  * EMU 原值回写、字号 pt → sz 百分之一磅、旋转度 → rot ×60000、
  * 颜色 #RRGGBB → srgbClr、图片字节经图片签名嗅探扩展名写入 ppt/media/*。
+ * 表格经 p:graphicFrame → a:tbl 写回原生表格（WPS/PowerPoint 可直接打开编辑）。
  * 动画/母版/主题 v1 不生成（保真报告记录降级）。
  */
 import JSZip from 'jszip';
@@ -11,6 +12,8 @@ import type {
   JkAutoShape,
   JkPresentation,
   JkShape,
+  JkTableCell,
+  JkTableShape,
   JkTextShape,
   TextParagraph,
   TextRun,
@@ -110,6 +113,91 @@ function serializeAutoShape(s: JkAutoShape, id: number): string {
 }
 
 /* =========================================================================
+ * 表格序列化（p:graphicFrame → a:graphicData → a:tbl）
+ * ========================================================================= */
+
+/** 默认表样式 id（Office 内置「中浅色样式 2 - 强调 1」，WPS/PowerPoint 均识别） */
+const DEFAULT_TABLE_STYLE_ID = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}';
+/** 单元格默认边框色（浅灰蓝，贴合 WPS 默认表格观感） */
+const TABLE_BORDER_COLOR = 'D0D7E5';
+/** 边框线宽（EMU，12700 ≈ 1pt） */
+const TABLE_BORDER_W = 12700;
+/** 单行缺省高（EMU，≈0.4 英寸），用于未显式给出尺寸的兜底 */
+const DEFAULT_ROW_H = 370840;
+
+/** 单元格四边实线边框（lnL/lnR/lnT/lnB），保证 WPS/PowerPoint 渲染出网格线 */
+function serializeTableCellBorders(): string {
+  const side = (tag: 'lnL' | 'lnR' | 'lnT' | 'lnB') =>
+    `<a:${tag} w="${TABLE_BORDER_W}" cap="flat" cmpd="sng" algn="ctr">` +
+    `<a:solidFill><a:srgbClr val="${TABLE_BORDER_COLOR}"/></a:solidFill></a:${tag}>`;
+  return side('lnL') + side('lnR') + side('lnT') + side('lnB');
+}
+
+/** 单元格 → a:tc（txBody + tcPr）；文本内 \n 拆分为多个 a:p */
+function serializeTableCell(cell: JkTableCell): string {
+  const lines = (cell.text ?? '').split('\n');
+  const alignAttr =
+    cell.align === 'center' ? ' algn="ctr"' : cell.align === 'right' ? ' algn="r"' : '';
+  const rPrAttrs: string[] = ['lang="zh-CN"'];
+  if (cell.fontSize !== undefined) rPrAttrs.push(`sz="${Math.round(cell.fontSize * 100)}"`);
+  if (cell.bold) rPrAttrs.push('b="1"');
+  const fill = cell.color
+    ? `<a:solidFill><a:srgbClr val="${escapeXmlAttr(cell.color.replace(/^#/, ''))}"/></a:solidFill>`
+    : '';
+  const rPr = `<a:rPr ${rPrAttrs.join(' ')}>${fill}</a:rPr>`;
+  const ps = lines
+    .map(
+      (line) =>
+        `<a:p>${alignAttr ? `<a:pPr${alignAttr}/>` : ''}` +
+        `<a:r>${rPr}<a:t>${escapeXmlText(line)}</a:t></a:r></a:p>`,
+    )
+    .join('');
+  const txBody = `<a:txBody><a:bodyPr/><a:lstStyle/>${ps}</a:txBody>`;
+  return `<a:tc>${txBody}<a:tcPr>${serializeTableCellBorders()}</a:tcPr></a:tc>`;
+}
+
+/**
+ * 表格形状 → p:graphicFrame。
+ *
+ * 结构：nvGraphicFramePr(cNvPr/cNvGraphicFramePr/nvPr) + xfrm + graphic/graphicData[a:tbl]。
+ * 列宽由 colWidths 求和得外框宽；行高逐行取 row.height，缺省按 (height|h)/行数 均分，
+ * 再兜底 DEFAULT_ROW_H。表格高 = height ?? h ?? 行高之和。
+ */
+function serializeTableShape(s: JkTableShape, id: number): string {
+  const cols = s.colWidths.length ? s.colWidths : [s.w];
+  const rows = s.rows.length ? s.rows : [{ cells: [] }];
+  const cx = cols.reduce((a, b) => a + b, 0) || s.w;
+  const perRow = Math.round((s.height ?? s.h) / Math.max(1, rows.length));
+  const rowHeights = rows.map((r) => (r.height ?? (perRow || DEFAULT_ROW_H)));
+  const cy = s.height ?? s.h ?? rowHeights.reduce((a, b) => a + b, 0);
+
+  const gridCols = cols.map((w) => `<a:gridCol w="${Math.round(w)}"/>`).join('');
+  const trs = rows
+    .map(
+      (r, i) =>
+        `<a:tr h="${Math.round(rowHeights[i])}">${r.cells
+          .map(serializeTableCell)
+          .join('')}</a:tr>`,
+    )
+    .join('');
+  const tbl =
+    `<a:tbl><a:tblPr firstRow="1" bandRow="1">` +
+    `<a:tableStyleId>${DEFAULT_TABLE_STYLE_ID}</a:tableStyleId></a:tblPr>` +
+    `<a:tblGrid>${gridCols}</a:tblGrid>${trs}</a:tbl>`;
+
+  const rot = s.rotation !== undefined ? ` rot="${Math.round(s.rotation * 60000)}"` : '';
+  return (
+    `<p:graphicFrame><p:nvGraphicFramePr>` +
+    `<p:cNvPr id="${id}" name="${escapeXmlAttr(s.name ?? `表格 ${id}`)}"/>` +
+    `<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>` +
+    `<p:xfrm${rot}><a:off x="${Math.round(s.x)}" y="${Math.round(s.y)}"/>` +
+    `<a:ext cx="${Math.round(cx)}" cy="${Math.round(cy)}"/></p:xfrm>` +
+    `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">` +
+    `${tbl}</a:graphicData></a:graphic></p:graphicFrame>`
+  );
+}
+
+/* =========================================================================
  * 幻灯片与包
  * ========================================================================= */
 
@@ -133,6 +221,8 @@ function serializeSlide(
       parts.push(serializeTextShape(s, id++));
     } else if (s.type === 'shape') {
       parts.push(serializeAutoShape(s, id++));
+    } else if (s.type === 'table') {
+      parts.push(serializeTableShape(s, id++));
     } else if (s.type === 'image') {
       const img = images.find((im) => im.modelKey === `${slideIndex}:${s.relId}`);
       if (!img) continue; // 无字节：降级跳过（fidelity 记录由调用方汇总）

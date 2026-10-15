@@ -12,7 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { exportDocx, parseDocx, type Inline, type JkDocument, type Paragraph } from '@jareking/writer';
+import { exportDocx, parseDocx, type Inline, type JkDocument, type Run } from '@jareking/writer';
 import { jkToHtml } from './jkToHtml';
 import { htmlToJk } from './htmlToJk';
 
@@ -37,8 +37,8 @@ function hasHeading(doc: JkDocument): boolean {
 }
 
 /** 收集文档内所有 Run（含超链接内的 Run） */
-function collectRuns(doc: JkDocument): NonNullable<Paragraph['runs']> {
-  const runs: NonNullable<Paragraph['runs']> = [];
+function collectRuns(doc: JkDocument): Run[] {
+  const runs: Run[] = [];
   const walkInline = (inlines: Inline[] = []) => {
     for (const inl of inlines) {
       if (inl.type === 'run') runs.push(inl);

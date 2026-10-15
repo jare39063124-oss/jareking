@@ -110,7 +110,7 @@ export function WriterEditor() {
   const writerZoom = useUiStore((state) => state.writerZoom);
 
   // 图片 Blob URL 注册表（#46-B）：加载时登记字节 + 创建 Blob URL，卸载/换文档时 revoke
-  const mediaRegistryRef = useRef<MediaRegistry>();
+  const mediaRegistryRef = useRef<MediaRegistry | undefined>(undefined);
   if (!mediaRegistryRef.current) mediaRegistryRef.current = new MediaRegistry();
 
   // #46-A 分块编辑：完整文档留内存作真源；编辑器只渲染 body 的一个切片，DOM 节点数受限
@@ -425,7 +425,7 @@ export function WriterEditor() {
       // 注入批注（两路保存都注入）：正文锚点由 htmlToJk/jkToHtml 往返，批注正文来自 ref
       jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
       const buf = await exportDocx(jk);
-      const blob = new Blob([buf], {
+      const blob = new Blob([buf as BlobPart], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
       const url = URL.createObjectURL(blob);

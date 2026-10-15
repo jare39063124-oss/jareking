@@ -51,8 +51,9 @@ export const FontSize = Extension.create({
         ({ chain }) =>
           chain()
             .setMark('textStyle', { fontSize: null })
-            // removeEmptyTextStyle 由 TextStyle 扩展提供
-            .unsetMark('textStyle', { extendEmptyMark: true })
+            // removeEmptyTextStyle 由 TextStyle 扩展提供；extendEmptyMarkRange 令空的
+            // textStyle（仅剩字号被清除后）也一并移除，避免残留空 <span>
+            .unsetMark('textStyle', { extendEmptyMarkRange: true })
             .run(),
     };
   },

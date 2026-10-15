@@ -22,12 +22,21 @@ import {
   Plus,
   Sparkles,
   Square,
+  Table2,
   Trash2,
   Type,
   BarChart3,
 } from 'lucide-react';
 import { createAiAdapter, createPresentationPlanner, type PresentationOp } from '@jareking/ai';
-import { exportPptx, type JkPresentation, type JkShape, type JkSlide } from '@jareking/presentation';
+import {
+  exportPptx,
+  type JkPresentation,
+  type JkShape,
+  type JkSlide,
+  type JkTableCell,
+  type JkTableShape,
+  type TextParagraph,
+} from '@jareking/presentation';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
@@ -38,6 +47,7 @@ import { parseInWorker } from '../lib/parseClient';
 import { takePendingOpen } from '../stores/pendingOpenStore';
 import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
+import { registerEditorCommands } from '../stores/editorCommands';
 import { SlideshowOverlay } from './SlideshowOverlay';
 
 /** 舞台像素宽（画布 EMU 宽按比例缩放） */
@@ -103,6 +113,43 @@ function demoPresentation(): JkPresentation {
               { runs: [{ text: '大纲级别 2', fontSize: 16 }], level: 2, bullet: true },
             ],
           },
+          {
+            type: 'table',
+            id: nextId(),
+            name: '示例表格',
+            x: 914400,
+            y: 4434840,
+            w: 7315200,
+            h: 1143000,
+            colWidths: [2438400, 2438400, 2438400],
+            rows: [
+              {
+                cells: [
+                  { text: '项目', bold: true, fontSize: 16 },
+                  { text: 'Q1', bold: true, fontSize: 16 },
+                  { text: 'Q2', bold: true, fontSize: 16 },
+                ],
+                height: 381000,
+              },
+              {
+                cells: [
+                  { text: '营收', fontSize: 16 },
+                  { text: '120', fontSize: 16, align: 'right' },
+                  { text: '158', fontSize: 16, align: 'right' },
+                ],
+                height: 381000,
+              },
+              {
+                cells: [
+                  { text: '利润', fontSize: 16 },
+                  { text: '24', fontSize: 16, align: 'right' },
+                  { text: '31', fontSize: 16, align: 'right' },
+                ],
+                height: 381000,
+              },
+            ],
+            height: 1143000,
+          },
         ],
       },
       {
@@ -128,13 +175,13 @@ function demoPresentation(): JkPresentation {
 
 /** 文本形状 → 纯文本（编辑用） */
 function paragraphsToText(shape: JkShape): string {
-  if (shape.type === 'image') return '';
+  if (shape.type === 'image' || shape.type === 'table') return '';
   return (shape.paragraphs ?? []).map((p) => p.runs.map((r) => r.text).join('')).join('\n');
 }
 
 /** 纯文本 → 段落（沿用首个 run 的格式） */
-function textToParagraphs(text: string, shape: JkShape): JkShape['paragraphs'] {
-  if (shape.type === 'image') return undefined;
+function textToParagraphs(text: string, shape: JkShape): TextParagraph[] | undefined {
+  if (shape.type === 'image' || shape.type === 'table') return undefined;
   const first = shape.paragraphs?.[0];
   const style = first?.runs?.[0];
   const base = style ? { ...style } : { text: '' };
@@ -144,6 +191,38 @@ function textToParagraphs(text: string, shape: JkShape): JkShape['paragraphs'] {
     level: i === 0 ? first?.level : undefined,
     bullet: i === 0 ? first?.bullet : undefined,
   }));
+}
+
+/** 表格行/列数允许区间（对齐 WPS 插入表格 1~10） */
+const TABLE_MIN = 1;
+const TABLE_MAX = 10;
+
+/** 构造等分列宽/行高的表格形状（EMU）；行列数经钳制，位置居中 */
+function makeTableShape(rows: number, cols: number, slideW: number, slideH: number): JkTableShape {
+  const r = Math.min(TABLE_MAX, Math.max(TABLE_MIN, Math.round(rows) || 3));
+  const c = Math.min(TABLE_MAX, Math.max(TABLE_MIN, Math.round(cols) || 3));
+  const totalW = Math.min(Math.round(slideW * 0.7), 5486400); // ≈6 英寸，且不超画布 70%
+  const rowH = 370840; // ≈0.4 英寸
+  const colW = Math.round(totalW / c);
+  const w = colW * c;
+  const h = rowH * r;
+  const x = Math.round((slideW - w) / 2);
+  const y = Math.round((slideH - h) / 2);
+  return {
+    type: 'table',
+    id: nextId(),
+    name: '表格',
+    x,
+    y,
+    w,
+    h,
+    colWidths: Array.from({ length: c }, () => colW),
+    rows: Array.from({ length: r }, () => ({
+      cells: Array.from({ length: c }, (): JkTableCell => ({ text: '', fontSize: 18 })),
+      height: rowH,
+    })),
+    height: h,
+  };
 }
 
 /** media 字节 → dataURL */
@@ -226,6 +305,17 @@ export function SlideEditor() {
   const [chartLabels, setChartLabels] = useState('Q1,Q2,Q3,Q4');
   const [chartSeries, setChartSeries] = useState('营收|120,158,203,241');
 
+  // 表格：插入弹窗 + 单元格文本编辑 + 当前选中单元格（增删行列锚点）
+  const [tableOpen, setTableOpen] = useState(false);
+  const [tableRows, setTableRows] = useState(3);
+  const [tableCols, setTableCols] = useState(3);
+  const [cellEditOpen, setCellEditOpen] = useState(false);
+  const [cellEditId, setCellEditId] = useState<string | null>(null);
+  const [cellEditRow, setCellEditRow] = useState(0);
+  const [cellEditCol, setCellEditCol] = useState(0);
+  const [cellEditText, setCellEditText] = useState('');
+  const [selCell, setSelCell] = useState<{ row: number; col: number } | null>(null);
+
   // 演讲者备注面板折叠态 + 文字编辑弹窗状态（WPS 对齐批3续）
   const [notesOpen, setNotesOpen] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
@@ -250,6 +340,10 @@ export function SlideEditor() {
 
   const slide: JkSlide | undefined = pres.slides[slideIdx];
   const scale = STAGE_W / pres.slideWidth;
+
+  // 当前选中的表格（用于显示增删行列操作入口）
+  const selectedShape = slide?.shapes.find((s) => s.id === selectedId);
+  const selectedTable: JkTableShape | null = selectedShape?.type === 'table' ? selectedShape : null;
 
   // 图片 dataURL（当前页）
   const imageUrls = useMemo(() => {
@@ -282,7 +376,12 @@ export function SlideEditor() {
     });
   };
 
-  const onSelect = (id: string | null) => setSelectedId(id);
+  const onSelect = (id: string | null) => {
+    setSelectedId(id);
+    // 切换选中的非表格形状时清空表格单元格选择（避免残留增删锚点）
+    const shape = id ? slide?.shapes.find((s) => s.id === id) : undefined;
+    if (shape?.type !== 'table') setSelCell(null);
+  };
 
   const onDragEnd = (id: string, x: number, y: number) => {
     updateShapes((shapes) =>
@@ -429,6 +528,126 @@ export function SlideEditor() {
     setSelectedId(copy.id!);
   };
 
+  /* —— 表格：插入 / 单元格编辑 / 增删行列（WPS 对齐）—— */
+
+  /** 插入表格：按弹窗所选行列数生成等分表格，追加当前页并选中 */
+  const addTable = () => {
+    const shape = makeTableShape(tableRows, tableCols, pres.slideWidth, pres.slideHeight);
+    updateShapes((shapes) => [...shapes, shape]);
+    setSelectedId(shape.id!);
+    setSelCell({ row: 0, col: 0 });
+    setTableOpen(false);
+    toast.success(`已插入 ${shape.rows.length}×${shape.colWidths.length} 表格`);
+  };
+
+  /** 打开单元格文本编辑弹窗（双击单元格触发） */
+  const onEditCell = (id: string, row: number, col: number) => {
+    const shape = slide?.shapes.find((s) => s.id === id);
+    if (!shape || shape.type !== 'table') return;
+    const cell = shape.rows[row]?.cells[col];
+    setCellEditId(id);
+    setCellEditRow(row);
+    setCellEditCol(col);
+    setCellEditText(cell?.text ?? '');
+    setSelCell({ row, col });
+    setSelectedId(id);
+    setCellEditOpen(true);
+  };
+
+  /** 弹窗「应用」：将临时文本写回目标单元格 */
+  const applyEditCell = () => {
+    if (cellEditId === null) return;
+    const id = cellEditId;
+    const { row, col } = { row: cellEditRow, col: cellEditCol };
+    const text = cellEditText;
+    updateShapes((shapes) =>
+      shapes.map((s) => {
+        if (s.id !== id || s.type !== 'table') return s;
+        const rows = s.rows.map((r, ri) => {
+          if (ri !== row) return r;
+          const cells = r.cells.map((cell, ci) => (ci === col ? { ...cell, text } : cell));
+          return { ...r, cells };
+        });
+        return { ...s, rows };
+      }),
+    );
+    setCellEditOpen(false);
+    setCellEditId(null);
+  };
+
+  /** 以选中表格为对象做不可变变更 */
+  const mutateSelectedTable = (fn: (t: JkTableShape) => JkTableShape) => {
+    if (!selectedId) return;
+    updateShapes((shapes) =>
+      shapes.map((s) => (s.id === selectedId && s.type === 'table' ? fn(s) : s)),
+    );
+  };
+
+  /** 新增行（在选中行之后；无选中则追加到末尾），行高沿用首行或均分 */
+  const addTableRow = () => {
+    mutateSelectedTable((t) => {
+      const colCount = t.colWidths.length;
+      const rowH = t.rows[0]?.height ?? Math.round((t.height ?? t.h) / Math.max(1, t.rows.length));
+      const at = selCell ? Math.min(selCell.row + 1, t.rows.length) : t.rows.length;
+      const rows = [...t.rows];
+      rows.splice(at, 0, {
+        cells: Array.from({ length: colCount }, (): JkTableCell => ({ text: '', fontSize: 18 })),
+        height: rowH,
+      });
+      const height = rows.reduce((sum, r) => sum + (r.height ?? rowH), 0);
+      return { ...t, rows, height, h: height };
+    });
+  };
+
+  /** 新增列（在选中列之后；无选中则追加到末尾），列宽沿用首列或均分 */
+  const addTableCol = () => {
+    mutateSelectedTable((t) => {
+      const colW = t.colWidths[0] ?? Math.round(t.w / Math.max(1, t.colWidths.length));
+      const at = selCell ? Math.min(selCell.col + 1, t.colWidths.length) : t.colWidths.length;
+      const colWidths = [...t.colWidths];
+      colWidths.splice(at, 0, colW);
+      const rows = t.rows.map((r) => {
+        const cells = [...r.cells];
+        cells.splice(at, 0, { text: '', fontSize: 18 });
+        return { ...r, cells };
+      });
+      return { ...t, colWidths, rows, w: colWidths.reduce((a, b) => a + b, 0) };
+    });
+  };
+
+  /** 删除选中行（至少保留一行） */
+  const deleteTableRow = () => {
+    if (!selCell) {
+      toast.warning('请先点选一个单元格');
+      return;
+    }
+    const targetRow = selCell.row;
+    mutateSelectedTable((t) => {
+      if (t.rows.length <= 1) return t;
+      const rowH = t.rows[targetRow]?.height ?? 0;
+      const rows = t.rows.filter((_, i) => i !== targetRow);
+      const height = Math.max(0, (t.height ?? t.h) - rowH);
+      return { ...t, rows, height, h: height };
+    });
+    setSelCell((sc) => (sc ? { row: Math.max(0, sc.row - 1), col: sc.col } : sc));
+  };
+
+  /** 删除选中列（至少保留一列） */
+  const deleteTableCol = () => {
+    if (!selCell) {
+      toast.warning('请先点选一个单元格');
+      return;
+    }
+    const targetCol = selCell.col;
+    mutateSelectedTable((t) => {
+      if (t.colWidths.length <= 1) return t;
+      const colWidths = t.colWidths.filter((_, i) => i !== targetCol);
+      const rows = t.rows.map((r) => ({ ...r, cells: r.cells.filter((_, i) => i !== targetCol) }));
+      return { ...t, colWidths, rows, w: colWidths.reduce((a, b) => a + b, 0) };
+    });
+    setSelCell((sc) => (sc ? { row: sc.row, col: Math.max(0, sc.col - 1) } : sc));
+  };
+
   const addSlide = () => {
     setPres((prev) => {
       const slides = [...prev.slides];
@@ -495,6 +714,17 @@ export function SlideEditor() {
   aiRunRef.current = runPresentationAi;
   const addChartRunRef = useRef(addChart);
   addChartRunRef.current = addChart;
+
+  /**
+   * Ribbon「插入 → 表格」按钮经命令总线（editorCommands）驱动本编辑器：
+   * 挂载时注册 `table` 命令，点击即打开表格插入弹窗（行列数选择）。
+   */
+  const openTableRef = useRef(() => {});
+  openTableRef.current = () => setTableOpen(true);
+  useEffect(
+    () => registerEditorCommands({ table: { run: () => openTableRef.current() } }),
+    [],
+  );
 
   /** 最近文档直达（WPS 对齐 N5）：消费首页「最近使用」点击 */
   useEffect(() => {
@@ -604,7 +834,7 @@ export function SlideEditor() {
   const onSave = async () => {
     try {
       const buf = await exportPptx(pres);
-      const blob = new Blob([buf], {
+      const blob = new Blob([buf as BlobPart], {
         type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       });
       const url = URL.createObjectURL(blob);
@@ -621,8 +851,118 @@ export function SlideEditor() {
     }
   };
 
+  /**
+   * 渲染表格形状（Konva）：Group 定位到表格左上角，单元格用 Rect（底/边框）+ Text。
+   * 按 colWidths 累加列左边界、按行高累加行上边界；复用与其它形状一致的缩放体系。
+   * 单击单元格选中表格并记录单元格；双击单元格打开文本编辑弹窗。
+   */
+  const renderTable = (shape: JkTableShape) => {
+    const selected = shape.id === selectedId;
+    const rows = shape.rows;
+    const cols = shape.colWidths;
+    const totalH = shape.height ?? shape.h;
+    const rowHpx = (i: number) => {
+      const rh = rows[i]?.height ?? totalH / Math.max(1, rows.length);
+      return rh * scale;
+    };
+    let accY = 0;
+    const rowTops = rows.map((_, i) => {
+      const top = accY;
+      accY += rowHpx(i);
+      return top;
+    });
+    let accX = 0;
+    const colLefts = cols.map((w) => {
+      const left = accX;
+      accX += w * scale;
+      return left;
+    });
+    const totalWpx = cols.reduce((a, b) => a + b, 0) * scale;
+    const totalHpx = accY; // 各行高之和（px）
+
+    return (
+      <Group
+        key={shape.id}
+        x={shape.x * scale}
+        y={shape.y * scale}
+        rotation={shape.rotation}
+        draggable
+        onClick={() => onSelect(shape.id!)}
+        onTap={() => onSelect(shape.id!)}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) =>
+          onDragEnd(shape.id!, e.target.x(), e.target.y())
+        }
+      >
+        {/* 外框（底色），置于单元格之下 */}
+        <Rect
+          width={totalWpx}
+          height={totalHpx}
+          fill="#FFFFFF"
+          stroke={selected ? '#2563EB' : '#9CA3AF'}
+          strokeWidth={selected ? 2 : 1}
+        />
+        {rows.map((row, r) =>
+          colLefts.map((left, c) => {
+            const cell = row.cells[c] ?? { text: '' };
+            const cw = cols[c] * scale;
+            const ch = rowHpx(r);
+            const isCellSel = selCell !== null && selCell.row === r && selCell.col === c;
+            return (
+              <Group
+                key={`${r}-${c}`}
+                x={left}
+                y={rowTops[r]}
+                onClick={() => {
+                  setSelCell({ row: r, col: c });
+                  onSelect(shape.id!);
+                }}
+                onTap={() => {
+                  setSelCell({ row: r, col: c });
+                  onSelect(shape.id!);
+                }}
+                onDblClick={() => onEditCell(shape.id!, r, c)}
+              >
+                <Rect
+                  width={cw}
+                  height={ch}
+                  fill="#FFFFFF"
+                  stroke="#9CA3AF"
+                  strokeWidth={1}
+                  strokeScaleEnabled={false}
+                />
+                {isCellSel ? (
+                  <Rect
+                    width={cw}
+                    height={ch}
+                    stroke="#2563EB"
+                    strokeWidth={2}
+                    strokeScaleEnabled={false}
+                  />
+                ) : null}
+                <KText
+                  text={cell.text}
+                  width={cw}
+                  height={ch}
+                  padding={4}
+                  align={cell.align ?? 'left'}
+                  verticalAlign="middle"
+                  fontSize={(cell.fontSize ?? 18) * 1.333 * scale}
+                  fontStyle={cell.bold ? 'bold' : 'normal'}
+                  fill={cell.color ?? '#1F2937'}
+                  wrap="word"
+                  listening={false}
+                />
+              </Group>
+            );
+          }),
+        )}
+      </Group>
+    );
+  };
+
   /** 渲染单个形状（Konva 节点） */
   const renderShape = (shape: JkShape, idx: number) => {
+    if (shape.type === 'table') return renderTable(shape);
     const x = shape.x * scale;
     const y = shape.y * scale;
     const w = shape.w * scale;
@@ -792,6 +1132,9 @@ export function SlideEditor() {
           <Button variant="ghost" size="sm" icon={<BarChart3 size={13} />} onClick={() => setChartOpen(true)}>
             图表
           </Button>
+          <Button variant="ghost" size="sm" icon={<Table2 size={13} />} onClick={() => setTableOpen(true)}>
+            表格
+          </Button>
           <span className="mx-1 h-5 w-px bg-border" />
           <Button variant="ghost" size="sm" icon={<Copy size={13} />} disabled={!selectedId} onClick={duplicateSelected}>
             复制
@@ -799,6 +1142,25 @@ export function SlideEditor() {
           <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} disabled={!selectedId} onClick={deleteSelected}>
             删除
           </Button>
+          {/* 表格操作：选中表格后出现，锚点为当前选中单元格所在行/列 */}
+          {selectedTable && (
+            <>
+              <span className="mx-1 h-5 w-px bg-border" />
+              <span className="text-tiny text-muted">表格</span>
+              <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={addTableRow} title="在当前行后插入一行">
+                加行
+              </Button>
+              <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={addTableCol} title="在当前列后插入一列">
+                加列
+              </Button>
+              <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} onClick={deleteTableRow} title="删除当前行">
+                删行
+              </Button>
+              <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} onClick={deleteTableCol} title="删除当前列">
+                删列
+              </Button>
+            </>
+          )}
           <span className="mx-1 h-5 w-px bg-border" />
           <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
           <Input
@@ -977,6 +1339,69 @@ export function SlideEditor() {
           <p className="text-tiny leading-relaxed text-muted">
             图表以图片形式插入当前页，可拖动调整位置与大小，并随 .pptx 一并保存。
           </p>
+        </div>
+      </Modal>
+
+      {/* 插入表格弹窗（Modal 选择行列数，替代 window.prompt，避免阻断 Electron CDP 自动化） */}
+      <Modal
+        open={tableOpen}
+        onClose={() => setTableOpen(false)}
+        title="插入表格"
+        footer={<Button variant="primary" size="sm" onClick={addTable}>插入</Button>}
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex items-center gap-3">
+            <span className="w-14 text-tiny text-muted">行数</span>
+            <Input
+              className="w-20"
+              type="number"
+              min={TABLE_MIN}
+              max={TABLE_MAX}
+              value={String(tableRows)}
+              onChange={(e) => setTableRows(Number(e.target.value))}
+            />
+            <span className="w-14 text-tiny text-muted">列数</span>
+            <Input
+              className="w-20"
+              type="number"
+              min={TABLE_MIN}
+              max={TABLE_MAX}
+              value={String(tableCols)}
+              onChange={(e) => setTableCols(Number(e.target.value))}
+            />
+          </div>
+          <p className="text-tiny leading-relaxed text-muted">
+            行/列范围 {TABLE_MIN}–{TABLE_MAX}（默认 3×3）。插入后双击单元格编辑文本，
+            选中表格后可在工具栏增删行列，并随 .pptx 一并保存。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 单元格文本编辑弹窗（双击单元格触发） */}
+      <Modal
+        open={cellEditOpen}
+        onClose={() => setCellEditOpen(false)}
+        title={`编辑单元格（第 ${cellEditRow + 1} 行 · 第 ${cellEditCol + 1} 列）`}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setCellEditOpen(false)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={applyEditCell}>
+              应用
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 p-1">
+          <textarea
+            className="w-full rounded border border-border bg-surface p-2 text-body text-fg outline-none focus-visible:border-accent"
+            rows={4}
+            value={cellEditText}
+            onChange={(e) => setCellEditText(e.target.value)}
+            placeholder="单元格内容（换行分段）"
+          />
+          <p className="text-tiny leading-relaxed text-muted">多行文本以换行分段。</p>
         </div>
       </Modal>
 

@@ -49,7 +49,7 @@ export interface JkSlide {
  * 形状（可判别联合）
  * ========================================================================= */
 
-export type JkShape = JkTextShape | JkAutoShape | JkImageShape;
+export type JkShape = JkTextShape | JkAutoShape | JkImageShape | JkTableShape;
 
 /** 形状公共属性 */
 export interface ShapeBase {
@@ -91,6 +91,41 @@ export interface JkImageShape extends ShapeBase {
   /** 关系 id（r:embed，指向图片部件） */
   relId: string;
   /** 解析期提取的图片二进制（键 relId → 字节），仅保存期使用 */
+}
+
+/* =========================================================================
+ * 表格（对应 p:graphicFrame → a:graphicData → a:tbl）
+ * ========================================================================= */
+
+/** 单元格底/边/文本（v1 精简） */
+export interface JkTableCell {
+  /** 单元格文本（段落以 \n 分隔） */
+  text: string;
+  /** 文本字号（pt，可选；OOXML 的 sz 为百分之一磅，换算仅在读写边界发生） */
+  fontSize?: number;
+  /** 文本颜色 #RRGGBB（可选） */
+  color?: string;
+  /** 加粗（可选） */
+  bold?: boolean;
+  /** 水平对齐（可选，默认 left） */
+  align?: 'left' | 'center' | 'right';
+}
+
+/** 表格行 */
+export interface JkTableRow {
+  cells: JkTableCell[];
+  /** 行高 EMU（可选，缺省按 table 均分） */
+  height?: number;
+}
+
+/** 表格形状（对应 p:graphicFrame → a:graphicData → a:tbl） */
+export interface JkTableShape extends ShapeBase {
+  type: 'table';
+  /** 列宽（EMU 数组，长度=列数） */
+  colWidths: number[];
+  rows: JkTableRow[];
+  /** 表格整体高（EMU，可选；缺省回退 ShapeBase.h） */
+  height?: number;
 }
 
 /* =========================================================================
