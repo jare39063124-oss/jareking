@@ -18,7 +18,15 @@ export type RibbonTabId =
  * PDF 工具箱的工作模式（与 @jareking/pdf 已实现能力一一对应）。
  * 由 Ribbon「PDF 工具」标签页决定：点哪个按钮就以哪个模式打开工具箱。
  */
-export type PdfToolboxMode = 'extract' | 'merge' | 'rotate' | 'images' | 'insert' | 'replace';
+export type PdfToolboxMode =
+  | 'extract'
+  | 'merge'
+  | 'rotate'
+  | 'images'
+  | 'insert'
+  | 'replace'
+  | 'toText'
+  | 'toImages';
 
 /** 文档缩放允许区间（WPS 常见 50%~200%） */
 export const WRITER_ZOOM_MIN = 0.5;

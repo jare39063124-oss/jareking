@@ -336,8 +336,8 @@ const RIBBON_TABS: RibbonTabDef[] = [
           { kind: 'button', id: 'pdf-to-word', label: 'PDF转Word', icon: FileText },
           { kind: 'button', id: 'pdf-to-excel', label: 'PDF转Excel', icon: FileSpreadsheet },
           { kind: 'button', id: 'pdf-to-ppt', label: 'PDF转PPT', icon: Presentation },
-          { kind: 'button', id: 'pdf-to-image', label: 'PDF转图片', icon: FileImage },
-          { kind: 'button', id: 'pdf-to-txt', label: 'PDF转TXT', icon: FileType },
+          { kind: 'button', id: 'pdf-to-image', label: 'PDF转图片', icon: FileImage, pdfMode: 'toImages' },
+          { kind: 'button', id: 'pdf-to-txt', label: 'PDF转TXT', icon: FileType, pdfMode: 'toText' },
         ],
       },
       {

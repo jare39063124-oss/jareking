@@ -249,3 +249,39 @@ export async function getPdfInfo(pdfBytes: Uint8Array): Promise<{ pageCount: num
   const doc = await loadPdf(pdfBytes);
   return { pageCount: doc.getPageCount(), title: doc.getTitle() ?? undefined };
 }
+
+/* =========================================================================
+ * 文本提取（PDF 转 TXT）
+ * -------------------------------------------------------------------------
+ * 依赖 pdfjs-dist 的 legacy build（单线程，Node / 浏览器主进程均可用）。
+ * 动态加载，避免打包阶段强制绑定 pdf.js；文本提取不涉及 canvas，
+ * 故可在 Node 环境下完整单测。
+ * ========================================================================= */
+export async function pdfToText(bytes: Uint8Array): Promise<string> {
+  // legacy build：无 Worker 依赖，Node 与浏览器主线程均可直接跑。
+  // 用变量承载模块名，避免 TS 在类型检查期强制解析 .mjs 路径声明。
+  const mod = 'pdfjs-dist/legacy/build/pdf.mjs' as string;
+  const pdfjs: any = await import(mod);
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const doc = await pdfjs.getDocument({
+    data,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    useSystemFonts: true,
+  }).promise;
+  const lines: string[] = [];
+  try {
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content: any = await page.getTextContent();
+      let line = '';
+      for (const item of content.items as any[]) {
+        line += 'str' in item ? (item.str as string) : '';
+      }
+      lines.push(line);
+    }
+  } finally {
+    await doc.destroy();
+  }
+  return lines.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}

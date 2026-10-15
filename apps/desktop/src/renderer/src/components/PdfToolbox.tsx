@@ -2,8 +2,9 @@
  * PdfToolbox —— PDF 工具箱面板（T5，融合用户自研「PDF页面工具箱」）。
  *
  * 入口：Ribbon「PDF 工具」标签页（一级标签页，卖点显性化）+「文件」标签页的 PDF 工具组。
- * 能力：页面提取/删除、合并、旋转、插入页面、页面替换、图片转 PDF。
- * 全部经 @jareking/pdf 数据层（pdf-lib），本地离线处理。
+ * 能力：页面提取/删除、合并、旋转、插入页面、页面替换、图片转 PDF、
+ *       PDF 转 TXT（文本提取）、PDF 转图片（逐页光栅化）。
+ * 页面操作经 @jareking/pdf 数据层（pdf-lib，本地离线）；文本/图片经 pdf.js。
  *
  * 当前模式由 uiStore.pdfToolboxMode 决定：Ribbon 点哪个按钮就以哪个模式打开；
  * 关闭弹窗不重置，下次打开保留上次（或由 Ribbon 重新指定）。
@@ -17,8 +18,10 @@ import {
   mergePdfs,
   replacePages,
   rotatePages,
+  pdfToText,
   type ImageInput,
 } from '@jareking/pdf';
+import { pdfToImages } from '../lib/pdfRender';
 import { ArrowDown, ArrowUp, FileDown, Loader2, Plus, Scissors, Trash2, X } from 'lucide-react';
 import { Button } from './Button';
 import { Modal } from './Modal';
@@ -35,14 +38,16 @@ const MODE_LABELS: { value: Mode; label: string }[] = [
   { value: 'insert', label: '插入页面' },
   { value: 'replace', label: '替换页面' },
   { value: 'images', label: '图片转 PDF' },
+  { value: 'toText', label: 'PDF 转 TXT' },
+  { value: 'toImages', label: 'PDF 转图片' },
 ];
 
 async function readBytes(file: File): Promise<Uint8Array> {
   return new Uint8Array(await file.arrayBuffer());
 }
 
-function download(bytes: Uint8Array, name: string): void {
-  const blob = new Blob([bytes], { type: 'application/pdf' });
+function download(bytes: Uint8Array, name: string, mime = 'application/pdf'): void {
+  const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -50,10 +55,17 @@ function download(bytes: Uint8Array, name: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // 延迟回收，确保下载已触发
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 const stamp = () => new Date().toISOString().slice(0, 10);
+
+interface ImageResult {
+  page: number;
+  url: string;
+  name: string;
+}
 
 export function PdfToolbox() {
   const open = useUiStore((s) => s.pdfToolboxOpen);
@@ -64,6 +76,7 @@ export function PdfToolbox() {
 
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [imageResults, setImageResults] = useState<ImageResult[]>([]);
 
   // 单文件模式：目标文件
   const [target, setTarget] = useState<File | null>(null);
@@ -84,7 +97,13 @@ export function PdfToolbox() {
   const multiInput = useRef<HTMLInputElement>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
 
-  const needSingle = mode === 'extract' || mode === 'rotate' || mode === 'insert' || mode === 'replace';
+  const needSingle =
+    mode === 'extract' ||
+    mode === 'rotate' ||
+    mode === 'insert' ||
+    mode === 'replace' ||
+    mode === 'toText' ||
+    mode === 'toImages';
   const needMulti = mode === 'merge' || mode === 'images';
   const needSource = mode === 'insert' || mode === 'replace';
 
@@ -95,9 +114,12 @@ export function PdfToolbox() {
     setSource(null);
   };
 
+  const revokeImages = (list: ImageResult[]) => list.forEach((r) => URL.revokeObjectURL(r.url));
+
   const run = async () => {
     setBusy(true);
     setNote(null);
+    revokeImages(imageResults);
     try {
       let out: Uint8Array;
       let name = `jareking-pdf-${stamp()}.pdf`;
@@ -135,8 +157,7 @@ export function PdfToolbox() {
           sourceSpec.trim() || undefined,
         );
         name = `${target.name.replace(/\.pdf$/i, '')}-已替换.pdf`;
-      } else {
-        // images
+      } else if (mode === 'images') {
         if (!items.length) throw new Error('请选择至少 1 张图片');
         const imgs: ImageInput[] = [];
         for (const f of items) {
@@ -145,8 +166,32 @@ export function PdfToolbox() {
         }
         out = await imagesToPdf(imgs);
         name = `图片合并-${stamp()}.pdf`;
+      } else if (mode === 'toText') {
+        if (!target) throw new Error('请选择 PDF 文件');
+        const text = await pdfToText(await readBytes(target));
+        const enc = new TextEncoder().encode(text);
+        const txtName = `${target.name.replace(/\.pdf$/i, '')}-文本.txt`;
+        download(enc, txtName, 'text/plain;charset=utf-8');
+        setImageResults([]);
+        setNote(`✅ 已提取文本（${text.length} 字），已导出「${txtName}」`);
+        toast.success('PDF 转 TXT 完成');
+        return;
+      } else {
+        // toImages：逐页渲染为 PNG，结果区预览 + 下载
+        if (!target) throw new Error('请选择 PDF 文件');
+        const pages = await pdfToImages(await readBytes(target));
+        const results: ImageResult[] = pages.map((p) => {
+          const blob = new Blob([p.png], { type: 'image/png' });
+          const url = URL.createObjectURL(blob);
+          return { page: p.page, url, name: `${target.name.replace(/\.pdf$/i, '')}-第${p.page}页.png` };
+        });
+        setImageResults(results);
+        setNote(`✅ 已渲染 ${results.length} 页为 PNG`);
+        toast.success(`PDF 转图片完成：${results.length} 页`);
+        return;
       }
       download(out, name);
+      setImageResults([]);
       setNote(`✅ 已导出「${name}」`);
       toast.success(`PDF 处理完成：${name}`);
     } catch (err) {
@@ -156,6 +201,19 @@ export function PdfToolbox() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const downloadAllImages = () => {
+    imageResults.forEach((r, idx) => {
+      setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = r.url;
+        a.download = r.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, idx * 250);
+    });
   };
 
   const canRun =
@@ -381,13 +439,59 @@ export function PdfToolbox() {
           </div>
         )}
 
+        {/* PDF 转图片：渲染结果预览 */}
+        {mode === 'toImages' && imageResults.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-tiny text-muted">已渲染 {imageResults.length} 页</span>
+              <Button variant="secondary" size="sm" onClick={downloadAllImages}>
+                下载全部
+              </Button>
+            </div>
+            <div className="grid max-h-64 grid-cols-3 gap-2 overflow-auto rounded border border-border p-2">
+              {imageResults.map((r) => (
+                <div key={r.page} className="flex flex-col items-center gap-1">
+                  <img
+                    src={r.url}
+                    alt={`第 ${r.page} 页`}
+                    className="h-28 w-full rounded border border-border bg-white object-contain"
+                  />
+                  <div className="flex w-full items-center justify-between">
+                    <span className="text-tiny text-muted">第 {r.page} 页</span>
+                    <button
+                      type="button"
+                      className="text-tiny text-accent hover:underline"
+                      onClick={() => {
+                        const a = document.createElement('a');
+                        a.href = r.url;
+                        a.download = r.name;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                      }}
+                    >
+                      下载
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* 结果与执行 */}
         {note && <div className="rounded bg-muted-bg px-3 py-2 text-tiny text-fg">{note}</div>}
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-tiny text-muted">
             <Scissors size={12} /> 处理在本地完成
           </span>
-          <Button variant="primary" size="sm" icon={busy ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />} disabled={!canRun} onClick={() => void run()}>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={busy ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
+            disabled={!canRun}
+            onClick={() => void run()}
+          >
             {busy ? '处理中…' : '开始处理'}
           </Button>
         </div>
