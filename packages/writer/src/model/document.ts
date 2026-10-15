@@ -556,6 +556,15 @@ export interface Section extends ModelExtra {
   headerRefs?: SectionRef[];
   /** 页脚关联（每项指向 relationships 的 rId） */
   footerRefs?: SectionRef[];
+  /**
+   * 页眉内容块（默认页眉；首页/奇偶页留待后续）。
+   * 仅作为模型内便捷承载——真正落盘依靠 headerRefs + 生成的 word/headerN.xml 部件。
+   */
+  header?: Block[];
+  /**
+   * 页脚内容块（默认页脚）。落盘方式同 header。
+   */
+  footer?: Block[];
 }
 
 /** 页边距（对应 w:pgMar，单位 EMU） */

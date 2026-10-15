@@ -890,7 +890,39 @@ function parseSectionRefs(node: any, tag: 'headerReference' | 'footerReference')
   }));
 }
 
-function parseSectionProps(sectPr: any): Section {
+/**
+ * 解析页眉/页脚部件（word/headerN.xml 或 word/footerN.xml）。
+ * 根节点 <w:hdr>/<w:ftr> 下直接是 <w:p>/<w:tbl>，与 document.xml 的 body 子节点同构，
+ * 因此复用 `parseContainerBlocks` 当作「mini body」处理。返回 Block[]。
+ * @param xml 部件完整 XML 字符串
+ */
+function parseHeaderFooter(xml: string): Block[] {
+  const obj = parseXml(xml);
+  // 去掉命名空间前缀后根节点本地名为 hdr / ftr（极少数情况可能是 document 容器，一并兜底）
+  const root: any = obj.hdr ?? obj.ftr ?? obj.document?.body ?? null;
+  if (!root) return [];
+  return parseContainerBlocks(root);
+}
+
+/**
+ * 规整 relId → 页眉/页脚部件路径（相对 zip 根）。
+ * target 形如 "header1.xml"（相对 word/）或 "/word/header1.xml"（绝对）。
+ * @returns 形如 "word/header1.xml" 的部件路径，未找到映射返回 undefined
+ */
+function hfPartPathForRel(
+  relId: string,
+  relMap: Map<string, string>,
+): string | undefined {
+  const target = relMap.get(relId);
+  if (!target) return undefined;
+  return target.startsWith('/') ? target.slice(1) : `word/${target}`;
+}
+
+function parseSectionProps(
+  sectPr: any,
+  hfParts: Map<string, string> = new Map(),
+  hfRelMap: Map<string, string> = new Map(),
+): Section {
   const section: Section = { type: 'section' };
   if (sectPr.pgSz) {
     const w = tw2emu(getAttr(sectPr.pgSz, '@_w'));
@@ -919,6 +951,29 @@ function parseSectionProps(sectPr: any): Section {
   }
   section.headerRefs = parseSectionRefs(sectPr, 'headerReference');
   section.footerRefs = parseSectionRefs(sectPr, 'footerReference');
+
+  // 回填页眉/页脚内容（MVP 只取 type==='default' 的内容，其余保留引用不读取）
+  if (section.headerRefs && section.headerRefs.length) {
+    const blocks: Block[] = [];
+    for (const hr of section.headerRefs) {
+      if (hr.refType !== 'default') continue;
+      const partPath = hfPartPathForRel(hr.relId, hfRelMap);
+      const xml = partPath ? hfParts.get(partPath.toLowerCase()) : undefined;
+      if (xml) blocks.push(...parseHeaderFooter(xml));
+    }
+    if (blocks.length) section.header = blocks;
+  }
+  if (section.footerRefs && section.footerRefs.length) {
+    const blocks: Block[] = [];
+    for (const fr of section.footerRefs) {
+      if (fr.refType !== 'default') continue;
+      const partPath = hfPartPathForRel(fr.relId, hfRelMap);
+      const xml = partPath ? hfParts.get(partPath.toLowerCase()) : undefined;
+      if (xml) blocks.push(...parseHeaderFooter(xml));
+    }
+    if (blocks.length) section.footer = blocks;
+  }
+
   return section;
 }
 
@@ -930,11 +985,16 @@ function makeSectionBreak(sectPr: any): SectionBreak {
   };
 }
 
-function parseSections(bodyNode: any, unsupported: UnsupportedFeature[]): Section[] {
+function parseSections(
+  bodyNode: any,
+  unsupported: UnsupportedFeature[],
+  hfParts: Map<string, string> = new Map(),
+  hfRelMap: Map<string, string> = new Map(),
+): Section[] {
   const sections: Section[] = [];
   if (bodyNode?.sectPr) {
     for (const sp of ensureArray(bodyNode.sectPr)) {
-      sections.push(parseSectionProps(sp));
+      sections.push(parseSectionProps(sp, hfParts, hfRelMap));
     }
   }
   void unsupported;
@@ -960,6 +1020,23 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   const bodyNode = documentNode.body ?? {};
 
   const rels = await parseRelationships(zip, 'word/_rels/document.xml.rels');
+
+  // 收集页眉/页脚部件：遍历 zip 内 word/headerN.xml 与 word/footerN.xml
+  const hfParts = new Map<string, string>();
+  for (const path of Object.keys(zip.files)) {
+    if (/^word\/header\d+\.xml$/i.test(path) || /^word\/footer\d+\.xml$/i.test(path)) {
+      try {
+        const xml = await zip.files[path].async('string');
+        if (xml) hfParts.set(path.toLowerCase(), xml);
+      } catch {
+        // 部件读取失败：跳过该部件（不阻断整体解析）
+      }
+    }
+  }
+  // relId → target 映射（target 相对 word/，如 header1.xml），用于把引用解析到具体部件
+  const hfRelMap = new Map<string, string>();
+  for (const rel of rels) hfRelMap.set(rel.id, rel.target);
+
   const [styleDefs, numberingDefs, settings, media] = await Promise.all([
     parseStyles(zip),
     parseNumbering(zip),
@@ -971,7 +1048,7 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   const unparsedBlocks: any[] = [];
 
   const body = parseContainerBlocks(bodyNode, unsupported, unparsedBlocks);
-  const sections = parseSections(bodyNode, unsupported);
+  const sections = parseSections(bodyNode, unsupported, hfParts, hfRelMap);
 
   const fidelity: FidelityReport = {
     level: 'L2',

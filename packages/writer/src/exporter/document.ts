@@ -482,3 +482,35 @@ export function serializeDocumentXml(doc: JkDocument): string {
   <w:body>${body}</w:body>
 </w:document>`;
 }
+
+/* =========================================================================
+ * 5. 页眉 / 页脚部件（word/headerN.xml / word/footerN.xml）
+ * ========================================================================= */
+
+/** 页眉页脚部件共用的命名空间声明（与 document.xml 保持一致，确保 Word/WPS 可打开） */
+const HF_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const HF_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const HF_WP = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing';
+const HF_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const HF_PIC = 'http://schemas.openxmlformats.org/drawingml/2006/picture';
+const HF_M = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
+
+/** 把 Block[] 渲染为 <w:p>/<w:tbl> 序列（复用 serializeBlock，与 body 同构） */
+function serializeHfInner(blocks: Block[]): string {
+  const ctx: Ctx = { imageId: 0 };
+  return (blocks ?? []).map((b) => serializeBlock(b, ctx)).join('');
+}
+
+/** 生成 word/headerN.xml（根 <w:hdr>） */
+export function serializeHeaderPart(blocks: Block[]): string {
+  const inner = serializeHfInner(blocks);
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="${HF_W}" xmlns:r="${HF_R}" xmlns:wp="${HF_WP}" xmlns:a="${HF_A}" xmlns:pic="${HF_PIC}" xmlns:m="${HF_M}">${inner}</w:hdr>`;
+}
+
+/** 生成 word/footerN.xml（根 <w:ftr>） */
+export function serializeFooterPart(blocks: Block[]): string {
+  const inner = serializeHfInner(blocks);
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="${HF_W}" xmlns:r="${HF_R}" xmlns:wp="${HF_WP}" xmlns:a="${HF_A}" xmlns:pic="${HF_PIC}" xmlns:m="${HF_M}">${inner}</w:ftr>`;
+}

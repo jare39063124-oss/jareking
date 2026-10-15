@@ -199,8 +199,31 @@ export function serializeSettings(doc: JkDocument): string {
  * [Content_Types].xml + _rels/.rels
  * ========================================================================= */
 
+/** 从文档模型收集「需要生成 Override 的页眉/页脚部件路径」（形如 /word/header1.xml） */
+function collectHfOverrides(doc: JkDocument): string[] {
+  const out: string[] = [];
+  const relMap = new Map<string, string>();
+  for (const rel of doc.relationships ?? []) relMap.set(rel.id, rel.target);
+  const seen = new Set<string>();
+  for (const section of doc.sections ?? []) {
+    const refs = [...(section.headerRefs ?? []), ...(section.footerRefs ?? [])];
+    for (const ref of refs) {
+      // MVP 只处理默认页眉页脚（首页/奇偶页留待后续）
+      if (ref.refType !== 'default') continue;
+      const target = relMap.get(ref.relId);
+      if (!target) continue;
+      const partPath = target.startsWith('/') ? target.slice(1) : `word/${target}`;
+      const overridePath = `/${partPath}`;
+      if (seen.has(overridePath)) continue;
+      seen.add(overridePath);
+      out.push(overridePath);
+    }
+  }
+  return out;
+}
+
 /** 生成 [Content_Types].xml（含常用图片扩展名兜底，避免 Word 报损坏） */
-export function serializeContentTypes(_doc: JkDocument): string {
+export function serializeContentTypes(doc: JkDocument): string {
   const imageExts = ['png', 'jpeg', 'jpg', 'gif', 'bmp', 'emf', 'wmf', 'tiff', 'svg'];
   const defaults = [
     `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`,
@@ -216,6 +239,17 @@ export function serializeContentTypes(_doc: JkDocument): string {
     `<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>`,
     `<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>`,
   ];
+  // 页眉/页脚部件 Override（基于 sections 的引用动态追加）
+  for (const partPath of collectHfOverrides(doc)) {
+    const kind = /word\/header/i.test(partPath) ? 'header' : 'footer';
+    const ct =
+      kind === 'header'
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml';
+    overrides.push(
+      `<Override PartName="${partPath}" ContentType="${ct}"/>`,
+    );
+  }
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="${REL}">${defaults.join('')}${overrides.join('')}</Types>`;
 }

@@ -27,11 +27,6 @@ import TextStyle from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Link from '@tiptap/extension-link';
-import { ParagraphTextAlign } from './paragraphLayout';
-import Table from '@tiptap/extension-table';
-import TableRow from '@tiptap/extension-table-row';
-import TableHeader from '@tiptap/extension-table-header';
-import TableCell from '@tiptap/extension-table-cell';
 import { exportDocx, parseDocx } from '@jareking/writer';
 import type { Block, JkDocument } from '@jareking/writer';
 import {
@@ -44,16 +39,14 @@ import {
   WRITER_CHUNK_BLOCK_THRESHOLD,
 } from './chunking';
 import type { ChunkRange } from './chunking';
-import { Link as LinkIcon, Sigma } from 'lucide-react';
+import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { toast } from '../stores/toastStore';
 import { htmlToJk } from './htmlToJk';
 import { jkToHtml, extToMime } from './jkToHtml';
-import { FontSize } from './fontSize';
-import { JkField } from './jkField';
-import { JkImage } from './jkImage';
+import { writerExtensions } from './writerExtensions';
 import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
 import { useUiStore } from '../stores/uiStore';
@@ -112,57 +105,21 @@ export function WriterEditor() {
   const chunkModeRef = useRef(false);
   const chunkIndexRef = useRef(0);
 
-  // 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
-  // 必须显式加 backgroundColor 属性，才能在编辑器内渲染并在 getHTML 时回写 style，
-  // 进而被 htmlToJk 读回模型（否则底纹在打开→编辑→保存后丢失）。
-  const backgroundColorAttr = {
-    backgroundColor: {
-      default: null as string | null,
-      parseHTML: (element: HTMLElement) =>
-        (element.style.backgroundColor as string) || null,
-      renderHTML: (attributes: Record<string, unknown>) =>
-        attributes.backgroundColor
-          ? { style: `background-color: ${attributes.backgroundColor}` }
-          : {},
-    },
-  };
-  const extendWithBg = (node: any) =>
-    node.extend({
-      addAttributes() {
-        return { ...(this.parent?.() ?? {}), ...backgroundColorAttr };
-      },
-    });
-  const TableCellWithBg = extendWithBg(TableCell);
-  const TableHeaderWithBg = extendWithBg(TableHeader);
-  const TableRowWithBg = extendWithBg(TableRow);
-  const TableWithBg = extendWithBg(Table);
+  // 页眉/页脚（WPS 对齐）：当前文档的页眉/页脚内容（Block[]）。
+  // 用 ref 持有最新值，保存时直接读取；同时用 state 触发 Modal 初始渲染。
+  const [hfOpen, setHfOpen] = useState(false);
+  const hfRef = useRef<{ header: Block[]; footer: Block[] }>({ header: [], footer: [] });
+  // 页眉页脚对话框内的两个独立 TipTap 实例（顶/底各一个），始终挂载以便内容留存
+  const hfHeaderEditor = useEditor({ extensions: writerExtensions, content: '', immediatelyRender: false });
+  const hfFooterEditor = useEditor({ extensions: writerExtensions, content: '', immediatelyRender: false });
+  const [hfTab, setHfTab] = useState<'header' | 'footer'>('header');
+
+  // 表格底纹（单元格/表头/行/表格四级）保真逻辑与统一扩展集合见 ./writerExtensions。
+  // 主编辑器与「页眉页脚」Modal 共用 writerExtensions，避免重复声明。
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: [
-      StarterKit.configure({
-        // 默认 history 提供撤销/重做；保留 strike
-        strike: true,
-      }),
-      Underline,
-      TextStyle,
-      Color,
-      FontFamily,
-      FontSize,
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
-      }),
-      ParagraphTextAlign.configure({ types: ['heading', 'paragraph'] }),
-      TableWithBg.configure({ resizable: true }),
-      TableRowWithBg,
-      TableHeaderWithBg,
-      TableCellWithBg,
-      JkImage,
-      JkField,
-      JkFormula,
-    ],
+    extensions: writerExtensions,
     content: '',
     editorProps: {
       attributes: { class: 'jk-prose focus:outline-none' },
@@ -260,6 +217,11 @@ export function WriterEditor() {
     const reg = mediaRegistryRef.current!;
     reg.clear();
     fullDocRef.current = jk;
+    // 回填当前文档的页眉/页脚内容（缺省为空数组）
+    hfRef.current = {
+      header: jk.sections?.[0]?.header ?? [],
+      footer: jk.sections?.[0]?.footer ?? [],
+    };
     const ranges = computeChunkRanges(jk.body.length);
     chunkRangesRef.current = ranges;
     const isChunked = jk.body.length > WRITER_CHUNK_BLOCK_THRESHOLD && ranges.length > 1;
@@ -420,6 +382,13 @@ export function WriterEditor() {
         for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
         jk = htmlToJk(html, mediaBytes);
       }
+      // 注入页眉/页脚（两路保存都注入）：确保非分块模式也能保留页眉页脚，
+      // 并顺带修复非分块模式丢失 sections 的潜在问题（仅动 header/footer，不改 sections 其它字段）。
+      if (!jk.sections || jk.sections.length === 0) {
+        jk.sections = [{ type: 'section' }];
+      }
+      jk.sections[0].header = hfRef.current.header;
+      jk.sections[0].footer = hfRef.current.footer;
       const buf = await exportDocx(jk);
       const blob = new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -615,6 +584,9 @@ export function WriterEditor() {
       image: {
         run: () => imageInputRef.current?.click(),
       },
+      'header-footer': {
+        run: () => setHfOpen(true),
+      },
       // —— 编辑 / 文件 ——
       undo: {
         run: () => editor.chain().focus().undo().run(),
@@ -653,6 +625,39 @@ export function WriterEditor() {
     observer.observe(el);
     return () => observer.disconnect();
   }, [editor]);
+
+  // 打开页眉页脚对话框时，把当前 hfRef 内容经 jkToHtml 转为 HTML 渲染到对应编辑器
+  useEffect(() => {
+    if (!hfOpen) return;
+    const headerHtml = jkToHtml({ body: hfRef.current.header } as unknown as JkDocument);
+    const footerHtml = jkToHtml({ body: hfRef.current.footer } as unknown as JkDocument);
+    hfHeaderEditor?.commands.setContent(headerHtml, false);
+    hfFooterEditor?.commands.setContent(footerHtml, false);
+    setHfTab('header');
+  }, [hfOpen, hfHeaderEditor, hfFooterEditor]);
+
+  /** 取得当前页签对应的编辑器实例 */
+  const activeHfEditor = () => (hfTab === 'header' ? hfHeaderEditor : hfFooterEditor);
+
+  /** 在活动编辑器插入页码域（type='page' 的 JkField） */
+  const insertHfPageNumber = () => {
+    activeHfEditor()?.chain().focus()
+      .insertContent({ type: 'jkField', attrs: { instr: 'PAGE', result: '1' } })
+      .run();
+  };
+  const toggleHfBold = () => activeHfEditor()?.chain().focus().toggleBold().run();
+  const toggleHfItalic = () => activeHfEditor()?.chain().focus().toggleItalic().run();
+  const toggleHfUnderline = () => activeHfEditor()?.chain().focus().toggleUnderline().run();
+
+  /** 确定：把两个编辑器 HTML 经 htmlToJk 写回 hfRef（取 .body 作为 Block[]） */
+  const applyHeaderFooter = () => {
+    const headerHtml = hfHeaderEditor?.getHTML() ?? '';
+    const footerHtml = hfFooterEditor?.getHTML() ?? '';
+    const headerJk = htmlToJk(headerHtml);
+    const footerJk = htmlToJk(footerHtml);
+    hfRef.current = { header: headerJk.body, footer: footerJk.body };
+    setHfOpen(false);
+  };
 
   return (
     <div className="relative flex h-full w-full min-h-0 flex-col">
@@ -840,6 +845,71 @@ export function WriterEditor() {
           />
           <p className="text-tiny text-muted">
             链接将应用到当前选区（选区为空时作用于光标处后续输入）；留空点「应用」可移除已有链接。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 页眉页脚对话框（WPS 对齐）：双页签（页眉/页脚）各自独立 TipTap 实例；严禁 window.prompt/alert */}
+      <Modal
+        open={hfOpen}
+        onClose={() => setHfOpen(false)}
+        title="页眉页脚"
+        width={540}
+        footer={
+          <Button variant="primary" size="sm" onClick={applyHeaderFooter}>
+            确定
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-2 p-1">
+          {/* 页签：页眉 / 页脚 */}
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => setHfTab('header')}
+              className={`flex items-center gap-1 rounded px-3 py-1.5 text-tiny transition-colors ${
+                hfTab === 'header' ? 'bg-accent/15 text-accent' : 'hover:bg-black/5'
+              }`}
+            >
+              <PanelTop size={14} /> 页眉
+            </button>
+            <button
+              type="button"
+              onClick={() => setHfTab('footer')}
+              className={`flex items-center gap-1 rounded px-3 py-1.5 text-tiny transition-colors ${
+                hfTab === 'footer' ? 'bg-accent/15 text-accent' : 'hover:bg-black/5'
+              }`}
+            >
+              <PanelBottom size={14} /> 页脚
+            </button>
+          </div>
+          {/* 工具条：插入页码 + 基础格式（可选，至少给「插入页码」） */}
+          <div className="flex items-center gap-1 border-y border-border py-1.5">
+            <Button variant="ghost" size="sm" icon={<Hash size={13} />} onClick={insertHfPageNumber}>
+              插入页码
+            </Button>
+            <span className="mx-1 h-4 w-px bg-border" />
+            <Button variant="ghost" size="sm" onClick={toggleHfBold} aria-label="加粗">
+              <Bold size={13} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={toggleHfItalic} aria-label="斜体">
+              <Italic size={13} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={toggleHfUnderline} aria-label="下划线">
+              <UnderlineIcon size={13} />
+            </Button>
+          </div>
+          {/* 编辑区：仅显示当前页签对应编辑器，另一实例隐藏以保留内容 */}
+          <div className="min-h-[160px] rounded border border-border p-2">
+            <div style={{ display: hfTab === 'header' ? 'block' : 'none' }}>
+              <EditorContent editor={hfHeaderEditor} />
+            </div>
+            <div style={{ display: hfTab === 'footer' ? 'block' : 'none' }}>
+              <EditorContent editor={hfFooterEditor} />
+            </div>
+          </div>
+          <p className="text-tiny text-muted">
+            提示：页眉/页脚支持文本、基础格式与页码域；保存后写入 word/headerN.xml 与 word/footerN.xml。
           </p>
         </div>
       </Modal>

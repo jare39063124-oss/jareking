@@ -49,6 +49,7 @@ import {
   ListOrdered,
   ListTree,
   Lock,
+  PanelTop,
   Maximize,
   MessageSquare,
   Minimize2,
@@ -220,6 +221,7 @@ const RIBBON_TABS: RibbonTabDef[] = [
         tools: [
           { kind: 'button', id: 'page-break', label: '分页符', icon: SeparatorHorizontal },
           { kind: 'button', id: 'page-number', label: '插入页码', icon: Hash },
+          { kind: 'button', id: 'header-footer', label: '页眉页脚', icon: PanelTop },
         ],
       },
       {
