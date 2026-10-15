@@ -22,6 +22,8 @@ export const IPC = {
   SYSTEM_OPEN_DATA_DIR: 'system:openDataDir',
   SYSTEM_OPEN_EXTERNAL: 'system:openExternal',
   PDF_OFFICE_TO_PDF: 'pdf:office-to-pdf',
+  // 导出 PDF（打印管线）：渲染层传打印 HTML，主进程隐藏窗口 printToPDF 返回字节
+  PDF_EXPORT_HTML: 'pdf:export-html',
   // 宏（用户 JavaScript 宏）：CRUD 由主进程文件系统实现；执行在渲染进程 Worker 沙箱
   MACRO_LIST: 'macro:list',
   MACRO_READ: 'macro:read',

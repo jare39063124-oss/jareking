@@ -8,8 +8,15 @@
 ## WPS 对齐专项（2026-10-14 增设，矩阵与批次见 docs/wps-parity.md）
 
 - [x] **W-批1（2026-10-14）**：Writer 查找替换（Ctrl+F/H 自研，全部替换单事务可撤销，10 测）+ 字数统计状态栏（WPS 口径）+ 字体库合规三分组（docs/fonts.md：OFL 内置白名单/厂商免费商用/系统字体红线）
-- [ ] **W-批2**：[x] Writer 页眉页脚（2026-10-15 已落地：模型 header/footer 内容字段 + 解析读 headerN/footerN + 导出自动生成部件/rels/content-types + 编辑 Modal 双 Tab TipTap + 插入页码，round-trip 实测 4 测）+ [x] 页码插入 UI（域已建模，2026-10-14 批2首批已落地）+ [x] 目录自动生成（2026-10-14 批2首批已落地）+ 全模块导出 PDF 统一入口（融合 T5.3，依赖 Phase 5 PDF 引擎）+ [x] Sheet 单元格格式对话框（2026-10-15 已落地）
+- [x] **W-批2（2026-10-16 全部落地）**：[x] Writer 页眉页脚（2026-10-15 已落地：模型 header/footer 内容字段 + 解析读 headerN/footerN + 导出自动生成部件/rels/content-types + 编辑 Modal 双 Tab TipTap + 插入页码，round-trip 实测 4 测）+ [x] 页码插入 UI（域已建模，2026-10-14 批2首批已落地）+ [x] 目录自动生成（2026-10-14 批2首批已落地）+ [x] 全模块导出 PDF 统一入口（2026-10-16 已落地，见下方补记）+ [x] Sheet 单元格格式对话框（2026-10-15 已落地）
   - 2026-10-15 补：PDF 工具已升为功能区一级标签页（`PDF 工具`），其中 6 个页面操作 + 图片转 PDF 可用；转换/加密/水印/压缩/OCR 待排期（见 T5.1~T5.3）。
+  - **2026-10-16 补（全模块导出 PDF 统一入口 = Electron 原生打印管线，零新依赖）**：
+    - 链路：编辑器取模型 → 纯函数生成打印 HTML → IPC `pdf:export-html` → 主进程写临时 .html + 隐藏 BrowserWindow.loadFile + `webContents.printToPDF` → 返回字节 → 渲染层 `downloadBlob`（与 docx/xlsx/pptx 下载行为一致，不弹原生对话框）。
+    - 文件：`shared/pdfPrint.ts`（纸张规格 mm **单一事实源** + `buildPrintToPdfOptions`）、`renderer/lib/printHtml.ts`（`buildPrintDocument`：`@page` 尺寸/页边距 + 打印友好 CSS）、`sheet/sheetToHtml.ts`（JkWorkbook→HTML：合并/样式/列宽/多表分页/尾部空行裁剪）、`slide/presentationToHtml.ts`（JkPresentation→逐页 HTML：文本/形状/图片/表格/旋转/超链接）、`main/services/pdfExport.ts`（隐藏窗口 + 30s 超时 + 临时文件必清理 + `javascript:false` 纵深防御）、`renderer/lib/pdfExport.ts`。
+    - 入口：Writer/Sheet/Presentation 三编辑器注册命令总线 `export-pdf` → 功能区「文件 → 导出 PDF」三模块真实可用（原为空壳 toast）。
+    - **两个实测坑（已留痕在代码注释，勿再踩）**：① `printToPDF.pageSize` 对象单位是**英寸**（`electron.d.ts` PrintToPDFOptions），传微米会直接抛 `Failed to generate PDF`（100% 失败）；② Electron 44 的 `landscape` 选项对本路径基本无效 → 改用 `preferCSSPageSize: true`，由各模块 `@page size`（横向已按 `PAGE_SIZE_MM` 互换宽高）决定纸张与朝向。
+    - 验收：`scripts/pdf-export-smoke.mjs` 真实 Electron 三探针全过（Writer 66346B / Sheet 24682B / Slide 45081B，均 `%PDF-`），A4 纵向 MediaBox `594.96×841.92`、横向 `841.92×594.96`，consoleErrors 0；新增单测 pdfPrint 8 / printHtml 7 / sheetToHtml 8 / presentationToHtml 8；typecheck / build / test 全绿。
+    - 已知限制：字体依赖本机系统字体（Chromium 打印管线自动嵌入所用字体）；Sheet 日期类数字格式不做换算（原样输出防误改数据）；分页为 CSS 流式分页（非 WPS 精确分页引擎）。
 - [x] **W-批3**：[x] 动画切换 + 放映模式（T3.3）+ [x] PPT 演讲者备注 + [x] Sheet 查找替换 + [x] PPT 表格 + [x] Sheet 图表（T2.5，2026-10-15：选区→PNG 生成/预览/下载，chartData 12 测）
 - [x] **W-批4（2026-10-15 全部落地）**：[x] 批注（Writer，comments 全链路 round-trip）+ [x] 修订（track changes，w:ins/w:del 解析导出 + 编辑器标记 + 接受/拒绝）+ [x] 数据透视表（Sheet，buildPivot 纯函数 + 11 测 + Modal）+ [x] 母版/版式（演示，解析保留 round-trip + 编辑器版式展示）+ [x] JS 宏实现（Worker 沙箱 + 宏管理，25 测；弱隔离·非硬沙箱）
 - [x] **W-长尾（2026-10-15）**：[x] Writer 脚注/尾注（footnotes/endnotes.xml 读写 + 引用节点 + 编辑 Modal）+ [x] Writer 分栏（w:cols）+ [x] PDF 水印（addWatermark：居中/平铺/透明度/角度，4 测）
@@ -185,7 +192,8 @@
 
 - [ ] **T5.1** 阅读器：PDF.js 渲染、缩放翻页、文本选择复制、目录书签、全文搜索、连续/单页模式
 - [ ] **T5.2** 编辑器（门控）：pdf-lib 页面增删/合并/拆分/旋转/提取、注释、基础文本编辑
-- [ ] **T5.3** 创建：Writer/Sheet/Presentation 导出 PDF（打印管线，字体嵌入）
+- [x] **T5.3** 创建：Writer/Sheet/Presentation 导出 PDF（打印管线，字体嵌入）
+  - **2026-10-16 落地（W-批2 剩余项一并完成）**：三模块「文件 → 导出 PDF」走 Electron 原生打印管线——纯函数打印 HTML（`buildPrintDocument` + `sheetToHtml` / `presentationToHtml` / Writer 复用 `jkToHtml`）→ 隐藏 BrowserWindow `webContents.printToPDF` → 下载 PDF。字体由 Chromium 打印管线自动嵌入（依赖本机系统字体）。验收：`scripts/pdf-export-smoke.mjs`（真实 Electron，三探针 `%PDF-` + A4 纵/横 MediaBox 实测）。**未含**：WPS 级精确分页、打印设置对话框（纸张/区域/重复标题行）——列后续专项。
 - [ ] **T5.4** **Phase 验收**：100MB 以内 PDF 打开 < 3s；编辑功能在门控下正确拦截/放行
 
 ## Phase 6 — 商业化（个人开发者路径）

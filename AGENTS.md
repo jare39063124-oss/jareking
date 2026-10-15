@@ -85,16 +85,17 @@ done
 | `docs/fonts.md` | 字体版权与零风险白名单 | 字体相关 |
 | `docs/macros.md` | 宏方案（JS 宏 Worker 沙箱） | 宏相关 |
 
-## 4. 当前基线（每次变化请更新；截至 2026-10-15）
-- **测试**：writer 40 / desktop 68 / presentation 9 / core 38 / sheet 29 / pdf 4。
+## 4. 当前基线（每次变化请更新；截至 2026-10-16）
+- **测试**：writer 58 / desktop 131 / presentation 18 / core 38 / sheet 55 / pdf 8。
 - **已实现**：
-  - Writer：docx 读写（L2）+ 域/页码/目录 + **批注** + 查找替换 + 页眉页脚 + 公式（OMML）；
-  - Sheet：xlsx + 公式 + 样式双向映射 + 查找替换 + **单元格格式对话框（Ctrl+1）** + **插入图表（选区→PNG 预览/下载）**；
-  - Presentation：开/编/存 + **表格** + 备注 + 图表 + 动画切换 + 放映；
-  - PDF：页面工具（合并/拆分/提取/删除/旋转/插入/替换）+ **转 TXT / 转图片** + **Office 转 PDF（本机 COM）**；
+  - Writer：docx 读写（L2）+ 域/页码/目录 + **批注** + **修订** + 查找替换 + 页眉页脚 + 脚注/尾注 + 分栏 + 公式（OMML）+ **样式管理器**；
+  - Sheet：xlsx + 公式 + 样式双向映射 + 查找替换 + **单元格格式对话框（Ctrl+1）** + **插入图表（选区→PNG 预览/下载）** + **数据透视表** + **分列/删除重复项**；
+  - Presentation：开/编/存 + **表格** + 备注 + 图表 + 动画切换 + 放映 + **母版/版式** + **对象超链接**；
+  - PDF：页面工具（合并/拆分/提取/删除/旋转/插入/替换）+ **转 TXT / 转图片** + **Office 转 PDF（本机 COM）** + 水印；
+  - **全模块导出 PDF**：Writer/Sheet/Presentation → Electron 原生打印管线（`shared/pdfPrint.ts` 纸张单一事实源 + `lib/printHtml.ts` + `sheet/sheetToHtml.ts` + `slide/presentationToHtml.ts` + `main/services/pdfExport.ts`，IPC `pdf:export-html`）；验收脚本 `scripts/pdf-export-smoke.mjs`；
   - AI：适配器（OpenAI 兼容/Claude/Gemini/Ollama）+ Planner + 本地 ops 执行。
 - **公共能力下沉**：图表渲染 `lib/chartRenderer.ts`、字体清单 `lib/fonts.ts`、下载助手 `lib/download.ts`（原散落各处，已收敛）。
-- **待做**：Writer 修订（track changes）、数据透视表、演示母版、Sheet 图表散点类型、JS 宏实现。
+- **待做**：Writer 拼写检查、Sheet 图表散点类型、打印设置对话框、WPS 级精确分页。
 
 ## 5. 不要做
 - 不要 `rm -rf` / 删除用户文件；不要强推（`--force`）/ 重置 git 历史。

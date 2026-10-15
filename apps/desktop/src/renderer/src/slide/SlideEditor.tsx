@@ -800,7 +800,7 @@ export function SlideEditor() {
         extraCss: SLIDE_PRINT_CSS,
         landscape,
       });
-      await exportHtmlToPdf({ html, fileName: '导出.pdf' });
+      await exportHtmlToPdf({ html, fileName: '导出.pdf', pageSize: 'A4', landscape });
       toast.success('已导出「导出.pdf」');
     } catch (err) {
       toast.warning('导出 PDF 失败：' + (err instanceof Error ? err.message : String(err)));
@@ -877,7 +877,7 @@ export function SlideEditor() {
           });
           const bytes = await window.jareking.invoke<Uint8Array>(
             window.jareking.IPC.PDF_EXPORT_HTML,
-            { html, fileName: '导出.pdf' },
+            { html, fileName: '导出.pdf', pageSize: 'A4', landscape: pres.slideWidth > pres.slideHeight },
           );
           return { size: bytes.length, head: String.fromCharCode(...bytes.slice(0, 5)) };
         },

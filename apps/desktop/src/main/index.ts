@@ -4,7 +4,9 @@ import { initAutoUpdater, checkForUpdates } from './updater.js';
 import { initServices, type AppServices } from './services/bootstrap.js';
 import type { AiConfigSaveInput } from './services/aiConfigService.js';
 import { convertOfficeToPdf } from './services/officeConvert.js';
+import { htmlToPdfBuffer } from './services/pdfExport.js';
 import type { OfficeKind } from '../shared/officePdfScript.js';
+import type { HtmlPdfRequest } from '../shared/pdfPrint.js';
 import { IPC } from '../ipc/channels.js';
 
 // 注意：__dirname 由 electron-vite 在打包时注入（ESM 环境下可用），无需手动声明
@@ -171,6 +173,13 @@ function registerIpcHandlers(): void {
       return convertOfficeToPdf(payload.kind, payload.inputPath, payload.outputPath);
     },
   );
+
+  // 导出 PDF（打印管线）：渲染层传打印 HTML → 隐藏窗口 printToPDF → 返回 PDF 字节。
+  // 返回 Uint8Array（structured clone 可跨进程），渲染层再走 downloadBlob 落盘。
+  ipcMain.handle(IPC.PDF_EXPORT_HTML, async (_event, payload?: HtmlPdfRequest) => {
+    if (!payload) throw new Error('缺少打印参数');
+    return htmlToPdfBuffer(payload);
+  });
 
   // AI 配置：列表 / 保存（含密钥加密）/ 删除 / 明文 Key 解析（单次调用注入）
   ipcMain.handle(IPC.AI_CONFIG_LIST, () => ai.list());
