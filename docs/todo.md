@@ -109,8 +109,9 @@
 - [x] **T2.4** 数据功能：排序、筛选、条件格式、数据验证
   - 完成（2026-10-13）：注册 Univer 官方 preset 四件套——`preset-sheets-sort` / `preset-sheets-filter` / `preset-sheets-conditional-formatting` / `preset-sheets-data-validation`（均 1.0.4，中文 locale 与 core 合并注入）；功能入口进 Univer 自带工具栏/右键菜单
   - 真实机器验收待做（headless 无法点 UI）
-- [ ] **T2.5** 图表：柱状/折线/饼图/散点；图表数据联动
-  - **暂缓**：Univer 1.0.4 无 chart preset（图表属独立插件，官方仍在演进）；v1 先以「无图表」交付 Phase 2，图表排入 v1 后期或 v2 评估（复评 Univer 版本或自研基于 canvas 的轻量图表插入）
+- [x] **T2.5** 图表：柱状/折线/饼图/散点；图表数据联动
+  - 落地（2026-10-15）：SheetEditor 顶栏「插入图表」→ Modal（数据范围/类型/标题）→ 读选区（`FRange.getValues`）经 `sheet/chartData.buildChartData` 解析 → 复用 `lib/chartRenderer.renderChartToPng` 生成 PNG → 预览 + 下载 PNG。
+  - 方案说明：Univer v1.0.4 公开 facade（`FWorksheet`/`FWorkbook`/`FUniver`）**无插入浮动图片 API**，且核心 preset 未含 sheets-drawing/image 插件 → 采用「生成图表图片」形式（可下载/复用），原生嵌入待 Univer 能力具备；散点类型待做。
 - [x] **T2.6** 导出：CSV / PDF
   - 完成（2026-10-13）：CSV 导出落地——`packages/sheet` 新增 `sheetToCsv`（RFC 4180 引号规则、公式取缓存值、BOM 头适配 Excel/WPS 中文），SheetEditor 加「导出 CSV」按钮；运行时冒烟通过
   - PDF 导出**随 Phase 5**（T5.3 打印管线，字体嵌入），不在本阶段

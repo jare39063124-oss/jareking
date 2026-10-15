@@ -28,9 +28,10 @@ jareking/
 │   │   ├── App.tsx              # 顶层布局：TabBar + Ribbon + EditorArea + AIPanel + StatusBar
 │   │   ├── components/          # 通用组件 + 业务组件（Ribbon/AIPanel/SettingsPanel/Modal…）
 │   │   ├── stores/              # zustand：uiStore / aiStore / tabStore / toastStore
+│   │   ├── lib/                 # 渲染层公共能力：largeFile / parseClient / pdfRender / chartRenderer / fonts / download
 │   │   ├── writer/              # WriterEditor + jkToHtml / htmlToJk 转换 + opsExecutor
-│   │   ├── sheet/               # SheetEditor + univerAdapter（Univer ↔ JkWorkbook）
-│   │   └── slide/               # SlideEditor（Konva）+ chartRenderer + addChart
+│   │   ├── sheet/               # SheetEditor + univerAdapter（Univer ↔ JkWorkbook）+ chartData
+│   │   └── slide/               # SlideEditor（Konva）+ addChart（图表绘制见 lib/chartRenderer）
 │   └── out/                     # electron-vite build 产物（不是 dist）
 ├── packages/
 │   ├── core/                    # 本地账户/积分/文档库/SQLite + 接口契约
@@ -64,9 +65,13 @@ jareking/
 | `writer/jkToHtml.ts` / `htmlToJk.ts` | 文档模型 ↔ HTML（编辑器 ↔ 模型 ↔ 文件 的枢纽，**任何格式漂移先查这里**） |
 | `writer/opsExecutor.ts` | AI ops 的本地确定性执行；新增 Writer AI 能力在此接 |
 | `sheet/univerAdapter.ts` | Univer ↔ JkWorkbook 双向映射（`JK→Univer` 打开、`Univer→JK` 保存）；**样式回写目前是空实现，见第 7 节** |
-| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、持有 `__jkDebug` |
-| `slide/SlideEditor.tsx` | Konva 舞台；所有幻灯片/形状一次性渲染（无懒加载）；`addChart` 复用 `chartRenderer`；持有 `__jkSlideDebug` |
-| `slide/chartRenderer.ts` | 零依赖 canvas→PNG 图表（bar/line/pie），供 PPT 插图 |
+| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、查找替换、**插入图表（T2.5）**、持有 `__jkDebug` |
+| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、单元格格式（Ctrl+1）、**插入图表（T2.5，选区→PNG 生成/预览/下载）**、持有 `__jkDebug` |
+| `sheet/chartData.ts` | 单元格矩阵 → 图表数据（`buildChartData`，纯函数；Sheet 图表复用 `lib/chartRenderer`） |
+| `slide/SlideEditor.tsx` | Konva 舞台；所有幻灯片/形状一次性渲染（无懒加载）；`addChart` 复用 `lib/chartRenderer`；持有 `__jkSlideDebug` |
+| `lib/chartRenderer.ts` | 零依赖 canvas→PNG 图表（bar/line/pie），**PPT 与 Sheet 共用**（原 `slide/chartRenderer.ts` 下沉，公共能力） |
+| `lib/fonts.ts` | 字体清单（系统/OFL/厂商三分组）+ 字号 + 字数统计；Ribbon/设置/编辑器共用（原 `writer/fonts.ts` 下沉） |
+| `lib/download.ts` | 统一下载助手 `downloadBlob`/`downloadDataUrl`（收敛各处重复的 createObjectURL + `<a download>`） |
 | `components/Ribbon.tsx` | 功能区（已支持折叠：`ribbonCollapsed` + Ctrl+F1） |
 | `components/AIPanel.tsx` | 右侧 AI 面板（可折叠 + 拖拽调宽 `aiPanelWidth`） |
 | `components/SettingsPanel.tsx` | 设置弹窗（分区可折叠 Accordion） |
@@ -213,7 +218,7 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 ## 8. 当前进度（速记，详见 `todo.md` 与 `wps-parity.md`；更新于 2026-10-15）
 
-- ✅ 完成：Phase 0 基础设施；**Phase 1 Writer**（L2：docx 读写 + 域/页码/目录/批注/查找替换/页眉页脚/公式 OMML）；**Phase 2 Sheet**（xlsx + 公式 + 样式双向映射 + 查找替换 + 单元格格式对话框）；**Phase 3 Presentation**（开/编/存 + 表格 + 备注 + 图表 + 动画切换/放映）；**Phase 4 AI** 全链路（适配器 + Planner + 本地 ops 执行）；**Phase 5 PDF 部分**（页面工具 + PDF 转 TXT/图片 + Office 转 PDF 本机 COM）。
-- ⏸ 未做/暂缓：**Phase 6 商业化**、**Phase 7 账户**、**Phase 8 体验发布**；Sheet 图表（T2.5）、Writer 修订（track changes）、数据透视表、演示母版、JS 宏实现（`docs/macros.md` 方案已定）；大文件「真正流式 xlsx 读取器」（M3，按实测决定）。
-- 🔧 近期（2026-10-15）落地：PDF 功能区一级标签 + PDF 转 TXT/图片 + Office 转 PDF；Writer 批注；PPT 表格；工程质量——修复 `SheetEditor` 缺 `Modal` 导入致 Sheet 崩溃（P0）、desktop typecheck 空转根治（renderer 45 类型错误清零）、模块命名统一（`slide`）；另含 #46 大文件缓解、#47 Sheet 样式双向映射、#48 Writer 域建模。
+- ✅ 完成：Phase 0 基础设施；**Phase 1 Writer**（L2：docx 读写 + 域/页码/目录/批注/查找替换/页眉页脚/公式 OMML）；**Phase 2 Sheet**（xlsx + 公式 + 样式双向映射 + 查找替换 + 单元格格式对话框 + **插入图表 T2.5（选区→PNG）**）；**Phase 3 Presentation**（开/编/存 + 表格 + 备注 + 图表 + 动画切换/放映）；**Phase 4 AI** 全链路（适配器 + Planner + 本地 ops 执行）；**Phase 5 PDF 部分**（页面工具 + PDF 转 TXT/图片 + Office 转 PDF 本机 COM）。
+- ⏸ 未做/暂缓：**Phase 6 商业化**、**Phase 7 账户**、**Phase 8 体验发布**；Writer 修订（track changes）、数据透视表、演示母版、JS 宏实现（`docs/macros.md` 方案已定）、Sheet 图表散点类型；大文件「真正流式 xlsx 读取器」（M3，按实测决定）。
+- 🔧 近期（2026-10-15）落地：PDF 功能区一级标签 + PDF 转 TXT/图片 + Office 转 PDF；Writer 批注；PPT 表格；**公共能力下沉（`slide/chartRenderer`→`lib/chartRenderer`、`writer/fonts`→`lib/fonts`、新增 `lib/download`）**；**Sheet 插入图表（T2.5）**；工程质量——修复 `SheetEditor` 缺 `Modal` 导入致 Sheet 崩溃（P0）、desktop typecheck 空转根治（renderer 45 类型错误清零）、模块命名统一（`slide`）；另含 #46 大文件缓解、#47 Sheet 样式双向映射、#48 Writer 域建模。
 - ⏸ 大文件深层架构债（不丢项）：仅剩「真正流式 xlsx 读取器」——见 `lib/largeFile.ts` 注释 + `todo.md`。

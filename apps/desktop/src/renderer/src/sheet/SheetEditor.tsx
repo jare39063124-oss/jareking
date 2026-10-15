@@ -25,7 +25,7 @@ import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import type { FUniver } from '@univerjs/presets';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
-import { Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles } from 'lucide-react';
+import { BarChart3, Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -35,6 +35,9 @@ import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
 import { parseInWorker } from '../lib/parseClient';
+import { downloadBlob, downloadDataUrl } from '../lib/download';
+import { renderChartToPng, type ChartType } from '../lib/chartRenderer';
+import { buildChartData } from './chartData';
 import { takePendingOpen } from '../stores/pendingOpenStore';
 import {
   exportXlsx,
@@ -158,6 +161,14 @@ export function SheetEditor() {
   const [fmtTab, setFmtTab] = useState<'number' | 'align' | 'font' | 'fill' | 'border'>('number');
   /** 边框下拉选择（无/全部框线/外边框/单边），映射到 cellStyle.borders */
   const [borderChoice, setBorderChoice] = useState<string>('none');
+
+  // 插入图表（T2.5）：选区 → 图表 PNG（勘察结论见 generateChart 注释）
+  const [chartOpen, setChartOpen] = useState(false);
+  const [chartRange, setChartRange] = useState('A1:B5');
+  const [chartType, setChartType] = useState<ChartType>('bar');
+  const [chartTitle, setChartTitle] = useState('');
+  const [chartPng, setChartPng] = useState<string | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
 
   const configs = useAiStore((s) => s.configs);
   const aiLoaded = useAiStore((s) => s.loaded);
@@ -406,28 +417,15 @@ export function SheetEditor() {
     return univerSnapshotToJk(snapshot as Record<string, never>);
   };
 
-  /** 触发浏览器下载 */
-  const downloadBlob = (buf: BlobPart, mime: string, filename: string): void => {
-    const blob = new Blob([buf], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
   const onSave = async () => {
     try {
       const jk = currentJkWorkbook();
       if (!jk) throw new Error('no active workbook');
       const buf = await exportXlsx(jk);
       downloadBlob(
-        buf as BlobPart,
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        buf,
         '导出.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
       toast.success('已导出「导出.xlsx」');
     } catch {
@@ -442,8 +440,12 @@ export function SheetEditor() {
       if (!jk || !jk.sheets.length) throw new Error('no sheet');
       const sheet = jk.sheets[jk.activeSheetIndex ?? 0];
       const csv = sheetToCsv(sheet);
-      // 加 BOM，保证 Excel/WPS 识别 UTF-8
-      downloadBlob(`\uFEFF${csv}`, 'text/csv;charset=utf-8', `${sheet.name || '导出'}.csv`);
+      // 加 BOM，保证 Excel/WPS 识别 UTF-8；字符串编码为 UTF-8 字节后交给统一下载助手
+      downloadBlob(
+        new TextEncoder().encode(`\uFEFF${csv}`),
+        `${sheet.name || '导出'}.csv`,
+        'text/csv;charset=utf-8',
+      );
       toast.success(`已导出「${sheet.name || '导出'}.csv」`);
     } catch {
       toast.warning('CSV 导出失败');
@@ -673,6 +675,72 @@ export function SheetEditor() {
     setFormatOpen(true);
   };
 
+  /** 打开「插入图表」：预填当前选区 A1 记法（若有），重置预览态 */
+  const openChartDialog = () => {
+    setChartPng(null);
+    setChartError(null);
+    const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+    const a1 = sheet?.getActiveRange?.()?.getA1Notation?.();
+    if (a1) setChartRange(a1);
+    setChartOpen(true);
+  };
+
+  /**
+   * 读取指定范围的单元格 → 解析为图表数据 → 渲染 PNG（复用 lib/chartRenderer）。
+   *
+   * 勘察结论（T2.5 方案选型）：Univer v1.0.4 的公开 facade（FWorksheet / FWorkbook /
+   * FUniver）**未暴露插入浮动图片的 API**（无 `insertImage` 等方法），且当前 preset
+   * （UniverSheetsCorePreset）依赖中不含 `sheets-drawing` / `sheets-image` 插件——
+   * 即便底层有 `@univerjs/drawing`，也未接线到本工程，无法稳定地把图片写入工作簿并随
+   * xlsx 落盘。故采用**方案二**：以「生成图表 PNG + 预览 + 下载」形式提供，原生嵌入待
+   * Univer 具备对应能力后再补。此处不重写绘图，直接复用 `renderChartToPng`。
+   */
+  const generateChart = () => {
+    setChartPng(null);
+    setChartError(null);
+    const api = apiRef.current;
+    if (!api) {
+      setChartError('表格尚未就绪');
+      return;
+    }
+    const sheet = api.getActiveWorkbook()?.getActiveSheet();
+    if (!sheet) {
+      setChartError('无活动工作表');
+      return;
+    }
+    const range = chartRange.trim();
+    if (!range) {
+      setChartError('请输入数据范围（如 A1:B5）');
+      return;
+    }
+    let matrix: (string | number | boolean | null)[][];
+    try {
+      // FRange.getValues() 返回选区二维值矩阵（行→列）
+      matrix = sheet.getRange(range).getValues() as (string | number | boolean | null)[][];
+    } catch {
+      setChartError('无法读取该范围，请检查地址（如 A1:B5）');
+      return;
+    }
+    const { labels, series } = buildChartData(matrix);
+    if (!labels.length || !series.length) {
+      setChartError('所选范围没有可用的数据');
+      return;
+    }
+    const dataUrl = renderChartToPng(chartType, labels, series, chartTitle.trim());
+    if (!dataUrl) {
+      setChartError('图表渲染失败');
+      return;
+    }
+    setChartPng(dataUrl);
+  };
+
+  /** 下载当前图表 PNG（复用 lib/download 统一助手） */
+  const downloadChart = () => {
+    if (!chartPng) return;
+    downloadDataUrl(chartPng, `图表-${chartTitle.trim() || '未命名'}.png`);
+    toast.success('已导出图表 PNG');
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 顶栏：文件操作（编辑能力由 Univer 自带工具栏提供） */}
@@ -694,6 +762,16 @@ export function SheetEditor() {
         </Button>
         <Button variant="ghost" size="sm" icon={<Paintbrush size={13} />} onClick={openFormatDialog}>
           设置单元格格式
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<BarChart3 size={13} />}
+          onClick={openChartDialog}
+          title="插入图表"
+          aria-label="插入图表"
+        >
+          插入图表
         </Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
@@ -1095,6 +1173,94 @@ export function SheetEditor() {
                   onChange={(e) => setBorderColor(e.target.value)}
                 />
               </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* 插入图表（T2.5）：读取选区 → 生成图表 PNG → 预览 + 下载。
+          严禁 window.prompt/alert；Univer v1.0.4 无浮动图片 API（详见 generateChart 注释），
+          故以「生成图表图片」形式提供，原生嵌入待 Univer 能力具备。 */}
+      <Modal
+        open={chartOpen}
+        onClose={() => setChartOpen(false)}
+        title="插入图表"
+        width={480}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setChartOpen(false)}>
+              关闭
+            </Button>
+            <Button variant="secondary" size="sm" onClick={generateChart}>
+              生成图表
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Download size={13} />}
+              onClick={downloadChart}
+              disabled={!chartPng}
+            >
+              下载 PNG
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">数据范围</span>
+            <Input
+              aria-label="数据范围"
+              className="w-full"
+              value={chartRange}
+              onChange={(e) => setChartRange(e.target.value)}
+              placeholder="如 A1:B5（首列=标签，其余列=系列）"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">图表类型</span>
+            <div className="flex gap-2">
+              {(
+                [
+                  { key: 'bar', label: '柱状图' },
+                  { key: 'line', label: '折线图' },
+                  { key: 'pie', label: '饼图' },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setChartType(t.key)}
+                  className={`rounded border px-2 py-1 text-tiny ${
+                    chartType === t.key
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-border text-muted hover:bg-hover'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">标题</span>
+            <Input
+              aria-label="图表标题"
+              className="w-full"
+              value={chartTitle}
+              onChange={(e) => setChartTitle(e.target.value)}
+              placeholder="图表标题（可选）"
+            />
+          </div>
+          {chartError && <p className="text-tiny text-warning">{chartError}</p>}
+          {chartPng && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-tiny text-muted">预览</span>
+              <img
+                src={chartPng}
+                alt="图表预览"
+                className="w-full rounded border border-border bg-white object-contain"
+              />
             </div>
           )}
         </div>
