@@ -805,7 +805,7 @@ export function SheetEditor() {
     return { names, hasHeader };
   };
 
-  /** 应用字段清单并重置默认选择（第 0 列作行字段、末列作值字段） */
+  /** 应用字段清单并重置默认选择（第 0 列作行字段；值字段优先选区中首个「含可解析数字」的列，避免默认落到公式/文本列） */
   const applyPivotFieldList = (
     matrix: (string | number | boolean | null | undefined)[][] | null,
   ): void => {
@@ -814,7 +814,20 @@ export function SheetEditor() {
     setPivotHasHeader(hasHeader);
     setPivotRowFields(names.length ? [0] : []);
     setPivotColField(null);
-    setPivotValueField(names.length > 1 ? names.length - 1 : 0);
+    // 值字段默认：从第 1 列起找首个「数据行含可解析数字」的列（跳过纯公式/文本列），找不到则回退末列
+    let valueCol = names.length > 1 ? names.length - 1 : 0;
+    if (matrix && names.length > 1) {
+      const startRow = hasHeader ? 1 : 0;
+      outer: for (let c = 1; c < names.length; c++) {
+        for (let r = startRow; r < matrix.length; r++) {
+          if (pivotToNumber(matrix[r]?.[c]) !== null) {
+            valueCol = c;
+            break outer;
+          }
+        }
+      }
+    }
+    setPivotValueField(valueCol);
   };
 
   /** 打开「数据透视表」：预填当前选区 A1、按选区首行推导字段清单 */
