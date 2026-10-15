@@ -640,7 +640,7 @@ async function main() {
   );
   results.sheetAiCell = await cdp.eval(
     `(async () => {
-      const snap = await window.__jkDebug.snapshot();
+      const snap = await window.__jkDebug?.snapshot?.();
       const found = [];
       for (const [sid, sheet] of Object.entries(snap?.sheets ?? {})) {
         for (const [r, row] of Object.entries(sheet?.cellData ?? {})) {

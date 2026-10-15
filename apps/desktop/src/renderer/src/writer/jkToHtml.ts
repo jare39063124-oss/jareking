@@ -17,6 +17,7 @@
 import type {
   Alignment,
   Block,
+  CommentRange,
   Hyperlink,
   Inline,
   JkDocument,
@@ -201,13 +202,59 @@ function renderRuns(
   return (runs ?? []).map((r) => renderInline(r, relMap, mediaMap)).join('');
 }
 
+/**
+ * 渲染段落行内序列，并把 `commentRanges` 对应的 run 区间包裹为
+ * `<span data-jk-comment="ID">…</span>`（批注锚点，TipTap jkComment mark 依赖此结构）。
+ *
+ * 区间为 runs 索引左闭右开；多个批注按 (start 升序, end 降序) 排序，
+ * 保证包含关系的外层先开后闭，产出嵌套良构的 span 序列。
+ */
+function renderRunsWithComments(
+  runs: Inline[] | undefined,
+  commentRanges: CommentRange[] | undefined,
+  relMap: Map<string, string>,
+  mediaMap: Map<string, string>,
+): string {
+  const list = runs ?? [];
+  const ranges = (commentRanges ?? [])
+    .map((r) => ({
+      id: r.id,
+      start: Math.max(0, Math.min(r.start, list.length)),
+      end: Math.max(0, Math.min(r.end, list.length)),
+    }))
+    .filter((r) => r.end > r.start)
+    .sort((a, b) => a.start - b.start || b.end - a.end);
+
+  if (!ranges.length) return renderRuns(list, relMap, mediaMap);
+
+  const openAt = new Map<number, string[]>();
+  const closeAt = new Map<number, string[]>();
+  for (const r of ranges) {
+    const open = openAt.get(r.start);
+    if (open) open.push(r.id);
+    else openAt.set(r.start, [r.id]);
+    const close = closeAt.get(r.end);
+    if (close) close.push(r.id);
+    else closeAt.set(r.end, [r.id]);
+  }
+
+  let out = '';
+  for (let i = 0; i <= list.length; i++) {
+    // 先闭合（内层先闭），再开启，保证 span 嵌套良构
+    for (const id of [...(closeAt.get(i) ?? [])].reverse()) out += '</span>';
+    for (const id of openAt.get(i) ?? []) out += `<span data-jk-comment="${escapeHtml(id)}">`;
+    if (i < list.length) out += renderInline(list[i], relMap, mediaMap);
+  }
+  return out;
+}
+
 /** 渲染一个普通段落（非列表环境：标题或段落） */
 function renderParagraph(
   p: Paragraph,
   relMap: Map<string, string>,
   mediaMap: Map<string, string>,
 ): string {
-  const inner = renderRuns(p.runs, relMap, mediaMap);
+  const inner = renderRunsWithComments(p.runs, p.commentRanges, relMap, mediaMap);
   const align = alignToCss(p.pPr?.jc);
   const style = align ? ` style="text-align:${align}"` : '';
   const lvl = headingLevel(p.pPr);
@@ -309,7 +356,7 @@ export function jkToHtml(doc: JkDocument, mediaMap?: Map<string, string>): strin
         (blocks[i] as Paragraph).pPr?.numPr?.numId === numId
       ) {
         const p = blocks[i] as Paragraph;
-        items.push(`<li>${renderRuns(p.runs, relMap, mediaMap)}</li>`);
+        items.push(`<li>${renderRunsWithComments(p.runs, p.commentRanges, relMap, mediaMap)}</li>`);
         i += 1;
       }
       html.push(`<${tag}>${items.join('')}</${tag}>`);

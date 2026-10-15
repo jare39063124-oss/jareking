@@ -27,6 +27,7 @@ import { XMLParser } from 'fast-xml-parser';
 import type {
   Block,
   Break,
+  CommentRange,
   ConcreteNumbering,
   DocDefaults,
   DocumentSettings,
@@ -36,6 +37,7 @@ import type {
   Image,
   Inline,
   Indentation,
+  JkComment,
   JkDocument,
   Numbering,
   NumberingFormat,
@@ -80,9 +82,33 @@ const xmlParser = new XMLParser({
   parseAttributeValue: false,
 });
 
+/**
+ * 保序解析器（preserveOrder）。
+ *
+ * 默认解析器按「标签首次出现」分组子元素（`r` 分到一个数组、`commentRangeStart`
+ * 分到另一个），会丢失同一段落内 run 与批注边界标记的相对顺序，导致无法
+ * 定位批注锚点所属的 run 区间。此处额外构建一个保序解析器，**仅**用于从
+ * document.xml 提取每段的 `commentRanges`（不影响既有分组解析路径，零回归）。
+ * 保序树结构：`[ { tag: [子节点…], ':@': {属性} }, … ]`，文本为 `{ '#text': … }`。
+ */
+const xmlOrderedParser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  removeNSPrefix: true,
+  textNodeName: '#text',
+  trimValues: true,
+  parseAttributeValue: false,
+  preserveOrder: true,
+});
+
 /** 解析 XML 字符串为去命名空间的普通对象树 */
 function parseXml(xml: string): any {
   return xmlParser.parse(xml);
+}
+
+/** 解析 XML 字符串为保序树（元素顺序保留，用于批注范围提取） */
+function parseXmlOrdered(xml: string): any {
+  return xmlOrderedParser.parse(xml);
 }
 
 /** 单元素/数组/undefined 统一成数组（fast-xml-parser 对单元素默认不是数组） */
@@ -621,12 +647,26 @@ const INLINE_IGNORE = new Set([
   'bookmarkStart',
   'bookmarkEnd',
   'proofErr',
-  'commentRangeStart',
-  'commentRangeEnd',
-  'commentReference',
   'permStart',
   'permEnd',
+  // 注意：commentRangeStart / commentRangeEnd / commentReference 已不再忽略——
+  // 它们由「保序解析」用于定位批注锚点（见 extractOrderedParagraphs），
+  // 在分组解析中于下方显式跳过，避免被误判为「不支持的行内元素」。
 ]);
+
+/** 批注锚点/引用标记元素（分组解析中跳过，交由保序解析处理） */
+const COMMENT_MARKERS = new Set(['commentRangeStart', 'commentRangeEnd', 'commentReference']);
+
+/** 是否为「批注引用 run」（仅含 w:commentReference、无文本的 w:r）——不计入模型 runs */
+function isCommentReferenceRun(r: any): boolean {
+  if (!r || typeof r !== 'object') return false;
+  if (r.commentReference === undefined) return false;
+  // 含文本（t）或图形（drawing）/公式（oMath）的 run 视为普通 run
+  if (r.t !== undefined) return false;
+  const drawing = r.drawing ?? r.pict;
+  if (drawing !== undefined) return false;
+  return true;
+}
 
 function parseImage(r: any): Image {
   const embed = findAttrDeep(r, '@_embed') ?? '';
@@ -695,6 +735,7 @@ function parseContainerInlines(
   for (const tag of Object.keys(container)) {
     if (tag.startsWith('@') || tag.startsWith('#') || tag.startsWith('?')) continue;
     if (INLINE_IGNORE.has(tag)) continue;
+    if (COMMENT_MARKERS.has(tag)) continue; // 批注标记由保序解析处理，分组解析跳过
     const items = ensureArray(container[tag]);
     for (const item of items) {
       if (tag === 'oMath') {
@@ -733,6 +774,9 @@ function parseContainerInlines(
         continue;
       }
       if (tag === 'r') {
+        // 批注引用 run（仅含 w:commentReference）：不计入模型 runs，避免 round-trip 累积空 run。
+        // 其批注锚点位置由保序解析写入 Paragraph.commentRanges。
+        if (isCommentReferenceRun(item)) continue;
         // 真实 OOXML 中 fldChar / instrText 都包裹在 w:r 内（而非段落直子级）。
         // 优先识别「域 run」驱动复杂域状态机；否则按普通 run 处理。
         const fldCharType = getAttr(item?.fldChar, '@_fldCharType');
@@ -787,6 +831,188 @@ function parseContainerInlines(
     }
   }
   return inlines;
+}
+
+/* =========================================================================
+ * 8.5 批注（comments.xml + 段落内 commentRangeStart/End）
+ * =========================================================================
+ * 说明：批注锚点（commentRangeStart/End）与 run 需按**文档顺序**配对，
+ * 而分组解析会打乱二者相对顺序，因此本部分改用「保序解析器」对
+ * document.xml 做一次独立解析，提取每段的批注 run 区间，再按文本签名
+ * 对齐回分组解析产出的 Paragraph 对象（四端一致的索引区间模型）。
+ * 复杂/跨段落批注、或含域/图形的复杂段落可安全降级（仅跳过，不错配）。
+ */
+
+/** 取保序节点的本地标签名（跳过 ':@' 属性容器与 '#text' 文本节点） */
+function orderedTag(node: any): string | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  for (const k of Object.keys(node)) {
+    if (k === ':@' || k === '#text') continue;
+    return k;
+  }
+  return undefined;
+}
+
+/** 取保序节点的属性容器（形如 { '@_id': '0' }） */
+function orderedAttrs(node: any): Record<string, string> {
+  const attrs = node?.[':@'];
+  return attrs && typeof attrs === 'object' ? attrs : {};
+}
+
+/** 拼接保序 run 子节点内所有 w:t 文本（按文档顺序） */
+function orderedRunText(children: any[]): string {
+  let text = '';
+  for (const child of children) {
+    const tag = orderedTag(child);
+    if (tag === 't') text += deepText(child);
+    else if (tag === 'br' || tag === 'cr') text += '\n';
+  }
+  return text;
+}
+
+/** 保序视图中判断是否为「批注引用 run」（含 commentReference 且无文本/图形） */
+function isReferenceRunOrdered(children: any[]): boolean {
+  let hasRef = false;
+  for (const child of children) {
+    const tag = orderedTag(child);
+    if (tag === 'commentReference') hasRef = true;
+    else if (tag === 't' || tag === 'drawing' || tag === 'pict' || tag === 'object') return false;
+  }
+  return hasRef;
+}
+
+/** 单个段落的保序分析结果：非引用 run 的文本序列 + 批注区间 */
+interface OrderedParagraph {
+  /** 文本签名（非引用 run 的文本按 \0 连接），用于对齐分组解析结果 */
+  signature: string;
+  /** 该段内的批注区间（按非引用 run 索引，左闭右开） */
+  ranges: CommentRange[];
+}
+
+/** 分析一个保序 <w:p> 的子节点：统计 run 索引并配对批注区间 */
+function analyzeParagraphOrdered(children: any[]): OrderedParagraph {
+  const texts: string[] = [];
+  const open = new Map<string, number>();
+  const ranges: CommentRange[] = [];
+  for (const child of children) {
+    const tag = orderedTag(child);
+    if (!tag) continue;
+    if (tag === 'r') {
+      const kids = ensureArray(child[tag]);
+      if (isReferenceRunOrdered(kids)) continue; // 引用 run 不计入
+      texts.push(orderedRunText(kids));
+      continue;
+    }
+    if (tag === 'commentRangeStart') {
+      const id = orderedAttrs(child)['@_id'];
+      if (id !== undefined) open.set(String(id), texts.length);
+      continue;
+    }
+    if (tag === 'commentRangeEnd') {
+      const id = orderedAttrs(child)['@_id'];
+      if (id !== undefined && open.has(String(id))) {
+        ranges.push({ id: String(id), start: open.get(String(id))!, end: texts.length });
+        open.delete(String(id));
+      }
+      continue;
+    }
+    // 其它行内元素（hyperlink 等）：不参与 run 索引计数（与分组解析的顶层 run 口径一致）
+  }
+  return { signature: texts.join('\u0000'), ranges };
+}
+
+/** 递归遍历保序树，按文档顺序收集所有段落（含表格单元格内段落） */
+function extractOrderedParagraphs(root: any, out: OrderedParagraph[]): void {
+  const walk = (children: any[]): void => {
+    for (const child of children) {
+      const tag = orderedTag(child);
+      if (!tag) continue;
+      const kids = child[tag];
+      if (!Array.isArray(kids)) continue;
+      if (tag === 'p') out.push(analyzeParagraphOrdered(kids));
+      else walk(kids);
+    }
+  };
+  if (Array.isArray(root)) walk(root);
+}
+
+/** 递归按解析顺序收集 body 中的 Paragraph（含嵌套表格），用于批注区间对齐 */
+function collectGroupedParagraphs(blocks: Block[], out: Paragraph[]): void {
+  for (const b of blocks) {
+    if (b.type === 'paragraph') {
+      out.push(b);
+    } else if (b.type === 'table') {
+      for (const row of b.rows) {
+        for (const cell of row.cells) collectGroupedParagraphs(cell.blocks, out);
+      }
+    }
+  }
+}
+
+/** 段落文本签名（与保序视图口径一致：仅顶层 run 的文本，\0 连接） */
+function groupedParagraphSignature(p: Paragraph): string {
+  return p.runs
+    .filter((r): r is Run => r.type === 'run')
+    .map((r) => r.text ?? '')
+    .join('\u0000');
+}
+
+/**
+ * 把保序解析得到的批注区间对齐回分组解析产出的 Paragraph。
+ * 采用「单调文本签名匹配」：按文档顺序扫描保序段落，在分组段落列表中
+ * 从前到后寻找首个签名一致的段落并写入 commentRanges；匹配成功即前进游标。
+ * 避免因 p/tbl 交错导致的整体错位（匹配失败则安全跳过，不错配）。
+ *
+ * @returns 未能匹配（降级）的段落数量（>0 时由调用方登记保真说明）
+ */
+function applyCommentRanges(body: Block[], ordered: OrderedParagraph[]): number {
+  const grouped: Paragraph[] = [];
+  collectGroupedParagraphs(body, grouped);
+  const withRanges = ordered.filter((o) => o.ranges.length > 0);
+  if (!withRanges.length) return 0;
+
+  let cursor = 0;
+  let unmatched = 0;
+  for (const o of withRanges) {
+    let idx = -1;
+    for (let j = cursor; j < grouped.length; j++) {
+      if (groupedParagraphSignature(grouped[j]) === o.signature) {
+        idx = j;
+        break;
+      }
+    }
+    if (idx >= 0) {
+      grouped[idx].commentRanges = o.ranges;
+      cursor = idx + 1;
+    } else {
+      unmatched += 1;
+    }
+  }
+  return unmatched;
+}
+
+/** 解析 word/comments.xml → JkComment[]（缺失或无内容时返回空数组） */
+async function parseComments(zip: Zip): Promise<JkComment[]> {
+  const xml = await readPart(zip, 'word/comments.xml');
+  if (!xml) return [];
+  const obj = parseXml(xml);
+  const root = obj.comments;
+  if (!root) return [];
+  return ensureArray(root.comment).map((c: any): JkComment => {
+    const text = ensureArray(c.p)
+      .map((p: any) => deepText(p).trim())
+      .join('\n');
+    const comment: JkComment = { id: getAttr(c, '@_id') ?? '', text };
+    const author = getAttr(c, '@_author');
+    if (author !== undefined) comment.author = author;
+    const initials = getAttr(c, '@_initials');
+    if (initials !== undefined) comment.initials = initials;
+    const date = getAttr(c, '@_date');
+    if (date !== undefined) comment.date = date;
+    const done = getAttr(c, '@_done');
+    if (done === '1' || done === 'true') comment.resolved = true;
+    return comment;
+  });
 }
 
 /* =========================================================================
@@ -1037,17 +1263,34 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   const hfRelMap = new Map<string, string>();
   for (const rel of rels) hfRelMap.set(rel.id, rel.target);
 
-  const [styleDefs, numberingDefs, settings, media] = await Promise.all([
+  const [styleDefs, numberingDefs, settings, media, comments] = await Promise.all([
     parseStyles(zip),
     parseNumbering(zip),
     parseSettings(zip),
     parseMedia(zip, rels),
+    parseComments(zip),
   ]);
 
   const unsupported: UnsupportedFeature[] = [];
   const unparsedBlocks: any[] = [];
 
   const body = parseContainerBlocks(bodyNode, unsupported, unparsedBlocks);
+
+  // 批注锚点：用保序解析提取每段 commentRanges，并回写到对应 Paragraph
+  const orderedParagraphs: OrderedParagraph[] = [];
+  extractOrderedParagraphs(parseXmlOrdered(docXml), orderedParagraphs);
+  const unmatchedComments = applyCommentRanges(body, orderedParagraphs);
+  if (unmatchedComments > 0) {
+    unsupported.push(
+      unsupportedFeature(
+        'other',
+        `有 ${unmatchedComments} 处批注锚点因段落结构复杂（跨段/含域等）未精确还原，已降级`,
+        'comments',
+        'docx',
+      ),
+    );
+  }
+
   const sections = parseSections(bodyNode, unsupported, hfParts, hfRelMap);
 
   const fidelity: FidelityReport = {
@@ -1065,6 +1308,8 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
     media,
     fidelity,
   };
+
+  if (comments.length) doc.comments = comments;
 
   if (unparsedBlocks.length) {
     doc.data = { ...doc.data, __unparsedBlocks: unparsedBlocks };

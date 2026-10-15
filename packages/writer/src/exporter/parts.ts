@@ -250,6 +250,12 @@ export function serializeContentTypes(doc: JkDocument): string {
       `<Override PartName="${partPath}" ContentType="${ct}"/>`,
     );
   }
+  // 批注部件 Override（有批注时追加，避免 Word 报「内容类型缺失」而损坏）
+  if ((doc.comments ?? []).length) {
+    overrides.push(
+      `<Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>`,
+    );
+  }
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="${REL}">${defaults.join('')}${overrides.join('')}</Types>`;
 }
@@ -281,6 +287,8 @@ function relTypeUri(type: Relationship['type']): string {
       return `${R}/footnotes`;
     case 'endnotes':
       return `${R}/endnotes`;
+    case 'comments':
+      return `${R}/comments`;
     case 'styles':
       return `${R}/styles`;
     case 'numbering':

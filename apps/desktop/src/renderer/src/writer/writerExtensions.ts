@@ -22,6 +22,7 @@ import { FontSize } from './fontSize';
 import { JkField } from './jkField';
 import { JkImage } from './jkImage';
 import { JkFormula } from './jkFormula';
+import { JkCommentMark } from './jkComment';
 
 /**
  * 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
@@ -76,6 +77,7 @@ export const writerExtensions: Extensions = [
   JkImage,
   JkField,
   JkFormula,
+  JkCommentMark,
 ];
 
 export { TableCellWithBg, TableHeaderWithBg, TableRowWithBg, TableWithBg };

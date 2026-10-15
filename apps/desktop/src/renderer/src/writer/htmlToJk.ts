@@ -16,6 +16,7 @@
 import type {
   AbstractNumbering,
   Block,
+  CommentRange,
   ConcreteNumbering,
   Hyperlink,
   Inline,
@@ -182,8 +183,20 @@ function deriveRPr(tag: string, el: Element, parent: RunProperties): RunProperti
   return rPr;
 }
 
-/** 递归收集元素内的行内节点（文本 → Run；a/span/strong... → 对应模型） */
-function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: ParseCtx): void {
+/**
+ * 递归收集元素内的行内节点（文本 → Run；a/span/strong... → 对应模型）。
+ *
+ * @param commentRanges 可选。传入时，遇到 `span[data-jk-comment]` 会记录其覆盖的
+ *   run 索引区间（左闭右开）并以批注 id 归档，供保存时还原为 Paragraph.commentRanges。
+ *   仅在段落顶层传递（超链接内不传，避免索引口径错位）。
+ */
+function collectInlines(
+  node: Node,
+  rPr: RunProperties,
+  out: Inline[],
+  ctx: ParseCtx,
+  commentRanges?: CommentRange[],
+): void {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
     if (text) out.push({ type: 'run', text, rPr: cleanRPr(rPr) });
@@ -207,6 +220,16 @@ function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: Pars
   if (tag === 'span' && el.getAttribute('data-jk-formula')) {
     const text = el.getAttribute('data-jk-formula') ?? el.textContent ?? '';
     if (text.trim()) out.push({ type: 'formula', text: text.trim() });
+    return;
+  }
+
+  // 批注 span（data-jk-comment）：记录其覆盖的 run 区间后递归子节点（剥离外层 span）
+  if (tag === 'span' && el.getAttribute('data-jk-comment')) {
+    const id = el.getAttribute('data-jk-comment') ?? '';
+    const start = out.length;
+    el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges));
+    const end = out.length;
+    if (commentRanges && id && end > start) commentRanges.push({ id, start, end });
     return;
   }
 
@@ -265,7 +288,7 @@ function collectInlines(node: Node, rPr: RunProperties, out: Inline[], ctx: Pars
   }
 
   // 其余标签（含 strong/em/u/s/span 及未知容器）递归子节点
-  el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx));
+  el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges));
 }
 
 const ALIGN_MAP: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
@@ -326,7 +349,8 @@ function readLineHeight(el: Element): Paragraph['pPr']['spacing'] | undefined {
 function parseParagraph(el: Element, ctx: ParseCtx, numId?: string): Paragraph {
   const tag = el.tagName.toLowerCase();
   const runs: Inline[] = [];
-  el.childNodes.forEach((c) => collectInlines(c, {}, runs, ctx));
+  const commentRanges: CommentRange[] = [];
+  el.childNodes.forEach((c) => collectInlines(c, {}, runs, ctx, commentRanges));
 
   const pPr: Paragraph['pPr'] = {};
   const hm = /^h([1-6])$/.exec(tag);
@@ -339,11 +363,13 @@ function parseParagraph(el: Element, ctx: ParseCtx, numId?: string): Paragraph {
   if (lineSpacing) pPr.spacing = { ...(pPr.spacing ?? {}), ...lineSpacing };
   if (numId) pPr.numPr = { numId, ilvl: 0 };
 
-  return {
+  const para: Paragraph = {
     type: 'paragraph',
     runs,
     pPr: Object.keys(pPr).length ? pPr : undefined,
   };
+  if (commentRanges.length) para.commentRanges = commentRanges;
+  return para;
 }
 
 /** 解析一个单元格内的块（段落 / 嵌套表格） */

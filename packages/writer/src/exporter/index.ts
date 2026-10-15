@@ -15,7 +15,7 @@ import JSZip from 'jszip';
 
 import type { Block, JkDocument } from '../model/document.js';
 import { serializeDocumentXml } from './document.js';
-import { serializeHeaderPart, serializeFooterPart } from './document.js';
+import { serializeHeaderPart, serializeFooterPart, serializeCommentsPart } from './document.js';
 import {
   serializeContentTypes,
   serializeDocumentRels,
@@ -128,13 +128,47 @@ function allocateHeaderFooter(work: JkDocument): HfPart[] {
 }
 
 /**
+ * 依据文档批注协调 comments 部件关系（relId 形如 rIdCmtN），返回需写出的
+ * comments.xml 内容（无批注返回 null）。直接修改传入的 `work`（已深拷贝的文档）。
+ *
+ * - 已有 comments 关系（解析透传）→ 复用，避免 round-trip 关系重复累积；
+ * - 无批注但存在透传的 comments 关系 → 清理，避免悬空关系导致 Word 报损坏；
+ * - 新建关系时扫描现有 relationships 的最大占用，避免与图片 rId / 页眉页脚 rIdHfN 冲突。
+ */
+function allocateComments(work: JkDocument): string | null {
+  const comments = work.comments ?? [];
+  if (!comments.length) {
+    if (work.relationships?.some((r) => r.type === 'comments')) {
+      work.relationships = work.relationships.filter((r) => r.type !== 'comments');
+    }
+    return null;
+  }
+  const hasCommentsRel = (work.relationships ?? []).some((r) => r.type === 'comments');
+  if (!hasCommentsRel) {
+    const taken = existingRelIds(work);
+    let seq = 0;
+    let relId = '';
+    do {
+      seq += 1;
+      relId = `rIdCmt${seq}`;
+    } while (taken.has(relId));
+    work.relationships = [
+      ...(work.relationships ?? []),
+      { id: relId, type: 'comments', target: 'comments.xml' },
+    ];
+  }
+  return serializeCommentsPart(comments);
+}
+
+/**
  * 把文档模型导出为 .docx 字节流（Uint8Array）。
  * @param doc JkDocument 文档模型
  */
 export async function exportDocx(doc: JkDocument): Promise<Uint8Array> {
-  // 深拷贝后分配页眉/页脚 relId（不污染入参）
+  // 深拷贝后分配页眉/页脚、批注 relId（不污染入参）
   const work: JkDocument = cloneDoc(doc);
   const hfParts = allocateHeaderFooter(work);
+  const commentsXml = allocateComments(work);
 
   const zip = new JSZip();
   zip.file('[Content_Types].xml', serializeContentTypes(work));
@@ -143,6 +177,9 @@ export async function exportDocx(doc: JkDocument): Promise<Uint8Array> {
   zip.file('word/styles.xml', serializeStyles(work));
   zip.file('word/numbering.xml', serializeNumbering(work));
   zip.file('word/settings.xml', serializeSettings(work));
+
+  // 写出批注部件（word/comments.xml）
+  if (commentsXml) zip.file('word/comments.xml', commentsXml);
 
   const rels = serializeDocumentRels(work);
   if (rels) zip.file('word/_rels/document.xml.rels', rels);

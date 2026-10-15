@@ -18,6 +18,7 @@ import { FindReplaceBar, EditorStatusBar } from "./FindReplaceBar";
 import { buildTocEntries, buildTocContent } from "./tocBuilder";
 import { takePendingOpen, peekPendingOpen } from "../stores/pendingOpenStore";
 import { JkFormula } from "./jkFormula";
+import { JK_COMMENT_MARK } from "./jkComment";
 import { linearToOmml, validateLinearFormula } from "@jareking/writer";
 import { Modal } from "../components/Modal";
 import { Input } from "../components/Input";
@@ -28,7 +29,7 @@ import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Link from '@tiptap/extension-link';
 import { exportDocx, parseDocx } from '@jareking/writer';
-import type { Block, JkDocument } from '@jareking/writer';
+import type { Block, JkComment, JkDocument } from '@jareking/writer';
 import {
   applyChunkEdits,
   collectImageRelIds,
@@ -39,7 +40,7 @@ import {
   WRITER_CHUNK_BLOCK_THRESHOLD,
 } from './chunking';
 import type { ChunkRange } from './chunking';
-import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon } from 'lucide-react';
+import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon, MessageSquarePlus } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { LoadingOverlay } from '../components/LoadingOverlay';
@@ -82,6 +83,23 @@ const sampleDocxUrl = `${import.meta.env.BASE_URL}sample.docx`;
 /** A4 纸张宽度（px，96dpi）——缩放包裹层按 794 * zoom 计算，保证滚动区与光标定位正确 */
 const PAGE_WIDTH_PX = 794;
 
+/** 现有批注中的最大数字 id（新批注 id = max + 1，避免与既有/已解析批注冲突） */
+function maxCommentId(list: JkComment[]): number {
+  return list.reduce((max, c) => {
+    const n = Number(c.id);
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+}
+
+/** 批注时间展示（ISO → MM-DD HH:mm；无效/缺失返回空串） */
+function formatCommentTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function WriterEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +131,18 @@ export function WriterEditor() {
   const hfHeaderEditor = useEditor({ extensions: writerExtensions, content: '', immediatelyRender: false });
   const hfFooterEditor = useEditor({ extensions: writerExtensions, content: '', immediatelyRender: false });
   const [hfTab, setHfTab] = useState<'header' | 'footer'>('header');
+
+  // 批注（WPS 对齐：协作功能）：文档级批注列表（内存态，用 ref 持有，参照 hfRef 模式）。
+  // 行内锚点存在于编辑器 mark（jkComment）与模型 Paragraph.commentRanges 中；
+  // 保存时把本 ref 注入 jk.comments，并随正文锚点一并落盘为 word/comments.xml。
+  const commentsRef = useRef<JkComment[]>([]);
+  const [commentOpen, setCommentOpen] = useState(false);
+  const [commentInput, setCommentInput] = useState('');
+  const [commentPanelOpen, setCommentPanelOpen] = useState(false);
+  // 面板重渲染信号（ref 变更不触发渲染，用 tick 强制刷新）
+  const [commentTick, setCommentTick] = useState(0);
+  // 打开批注 Modal 时暂存的选区（Modal 获得焦点后编辑器选区可能变化，需固定范围）
+  const pendingCommentRangeRef = useRef<{ from: number; to: number } | null>(null);
 
   // 表格底纹（单元格/表头/行/表格四级）保真逻辑与统一扩展集合见 ./writerExtensions。
   // 主编辑器与「页眉页脚」Modal 共用 writerExtensions，避免重复声明。
@@ -222,6 +252,9 @@ export function WriterEditor() {
       header: jk.sections?.[0]?.header ?? [],
       footer: jk.sections?.[0]?.footer ?? [],
     };
+    // 回填当前文档的批注列表（深拷贝，避免污染解析结果）
+    commentsRef.current = (jk.comments ?? []).map((c) => ({ ...c }));
+    setCommentTick((t) => t + 1);
     const ranges = computeChunkRanges(jk.body.length);
     chunkRangesRef.current = ranges;
     const isChunked = jk.body.length > WRITER_CHUNK_BLOCK_THRESHOLD && ranges.length > 1;
@@ -389,6 +422,8 @@ export function WriterEditor() {
       }
       jk.sections[0].header = hfRef.current.header;
       jk.sections[0].footer = hfRef.current.footer;
+      // 注入批注（两路保存都注入）：正文锚点由 htmlToJk/jkToHtml 往返，批注正文来自 ref
+      jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
       const buf = await exportDocx(jk);
       const blob = new Blob([buf], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -442,6 +477,111 @@ export function WriterEditor() {
       editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
     }
     setLinkOpen(false);
+  };
+
+  /* -------------------- 批注（WPS 对齐：协作功能） -------------------- */
+
+  /** 确定新建批注：给暂存选区的文本加 jkComment mark，并把批注正文追加到 commentsRef */
+  const applyComment = () => {
+    const ed = editor;
+    const range = pendingCommentRangeRef.current;
+    if (!ed || !range) {
+      setCommentOpen(false);
+      return;
+    }
+    const text = commentInput.trim();
+    if (!text) return;
+    const id = String(maxCommentId(commentsRef.current) + 1);
+    ed.chain()
+      .focus()
+      .setTextSelection({ from: range.from, to: range.to })
+      .setMark(JK_COMMENT_MARK, { commentId: id })
+      .run();
+    commentsRef.current = [
+      ...commentsRef.current,
+      { id, author: '我', date: new Date().toISOString(), text },
+    ];
+    setCommentInput('');
+    setCommentOpen(false);
+    setCommentPanelOpen(true);
+    setCommentTick((t) => t + 1);
+    toast.success('已添加批注');
+  };
+
+  /** 删除批注：移除 commentsRef 条目 + 清除文档内对应 mark */
+  const removeComment = (id: string) => {
+    const ed = editor;
+    const markType = ed?.schema.marks[JK_COMMENT_MARK];
+    if (ed && markType) {
+      const tr = ed.state.tr;
+      let changed = false;
+      ed.state.doc.descendants((node, pos) => {
+        if (!node.isText) return;
+        node.marks.forEach((m) => {
+          if (m.type === markType && m.attrs.commentId === id) {
+            tr.removeMark(pos, pos + node.nodeSize, m);
+            changed = true;
+          }
+        });
+      });
+      if (changed) ed.view.dispatch(tr);
+    }
+    commentsRef.current = commentsRef.current.filter((c) => c.id !== id);
+    setCommentTick((t) => t + 1);
+  };
+
+  /** 切换「已解决」：更新 ref 并同步文档内所有该 id 的 mark 样式 */
+  const toggleResolvedComment = (id: string) => {
+    commentsRef.current = commentsRef.current.map((c) =>
+      c.id === id ? { ...c, resolved: !c.resolved } : c,
+    );
+    const nowResolved = commentsRef.current.find((c) => c.id === id)?.resolved ?? false;
+    const ed = editor;
+    const markType = ed?.schema.marks[JK_COMMENT_MARK];
+    if (ed && markType) {
+      const tr = ed.state.tr;
+      let changed = false;
+      ed.state.doc.descendants((node, pos) => {
+        if (!node.isText) return;
+        node.marks.forEach((m) => {
+          if (m.type === markType && m.attrs.commentId === id) {
+            tr.removeMark(pos, pos + node.nodeSize, m);
+            tr.addMark(
+              pos,
+              pos + node.nodeSize,
+              markType.create({ ...m.attrs, resolved: nowResolved }),
+            );
+            changed = true;
+          }
+        });
+      });
+      if (changed) ed.view.dispatch(tr);
+    }
+    setCommentTick((t) => t + 1);
+  };
+
+  /** 定位批注：查找文档内该 id 的 mark 范围并选中滚动到可见处 */
+  const locateComment = (id: string) => {
+    const ed = editor;
+    if (!ed) return;
+    const markType = ed.schema.marks[JK_COMMENT_MARK];
+    let found: { from: number; to: number } | null = null;
+    if (markType) {
+      ed.state.doc.descendants((node, pos) => {
+        if (found) return false;
+        if (node.isText) {
+          const has = node.marks.some((m) => m.type === markType && m.attrs.commentId === id);
+          if (has) found = { from: pos, to: pos + node.nodeSize };
+        }
+        return true;
+      });
+    }
+    const target = found as { from: number; to: number } | null;
+    if (target) {
+      ed.chain().focus().setTextSelection({ from: target.from, to: target.to }).scrollIntoView().run();
+    } else {
+      toast.warning('未找到该批注对应的文本（可能已被删除）');
+    }
   };
 
   /**
@@ -587,6 +727,21 @@ export function WriterEditor() {
       'header-footer': {
         run: () => setHfOpen(true),
       },
+      // —— 审阅：新建批注（WPS 对齐协作功能）——
+      comment: {
+        run: () => {
+          if (!editor) return;
+          const sel = editor.state.selection;
+          if (sel.empty) {
+            toast.warning('请先选中要批注的文本');
+            return;
+          }
+          // 固定当前选区：Modal 获焦后 ProseMirror 选区可能变化
+          pendingCommentRangeRef.current = { from: sel.from, to: sel.to };
+          setCommentInput('');
+          setCommentOpen(true);
+        },
+      },
       // —— 编辑 / 文件 ——
       undo: {
         run: () => editor.chain().focus().undo().run(),
@@ -718,28 +873,124 @@ export function WriterEditor() {
         </div>
       )}
 
-      {/* 纸张区（文档区最大化：无重复工具栏，内边距收紧） */}
-      <div className="relative min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-5">
-        {/* Ctrl+F/H 查找替换条 */}
-        {editor && showFind && (
-          <FindReplaceBar editor={editor} initialMode={findMode} onClose={() => setShowFind(false)} />
-        )}
-        {/* 缩放包裹层：宽度按 794*z，高度按纸张实测高*z */}
-        <div
-          className="mx-auto"
-          style={{
-            width: PAGE_WIDTH_PX * writerZoom,
-            height: paperHeight > 0 ? paperHeight * writerZoom : undefined,
-          }}
-        >
+      {/* 纸张区 + 批注面板（横向两栏，面板可折叠） */}
+      <div className="relative flex min-h-0 flex-1">
+        {/* 纸张区（文档区最大化：无重复工具栏，内边距收紧） */}
+        <div className="relative min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-5">
+          {/* Ctrl+F/H 查找替换条 */}
+          {editor && showFind && (
+            <FindReplaceBar editor={editor} initialMode={findMode} onClose={() => setShowFind(false)} />
+          )}
+          {/* 缩放包裹层：宽度按 794*z，高度按纸张实测高*z */}
           <div
-            ref={paperRef}
-            className="w-[794px] min-h-[1123px] rounded-sm bg-surface px-12 py-10 shadow-card"
-            style={{ transform: `scale(${writerZoom})`, transformOrigin: 'top left' }}
+            className="mx-auto"
+            style={{
+              width: PAGE_WIDTH_PX * writerZoom,
+              height: paperHeight > 0 ? paperHeight * writerZoom : undefined,
+            }}
           >
-            <EditorContent editor={editor} />
+            <div
+              ref={paperRef}
+              className="w-[794px] min-h-[1123px] rounded-sm bg-surface px-12 py-10 shadow-card"
+              style={{ transform: `scale(${writerZoom})`, transformOrigin: 'top left' }}
+            >
+              <EditorContent editor={editor} />
+            </div>
           </div>
         </div>
+
+        {/* 折叠态：右侧「批注」浮标（含数量），点击展开面板 */}
+        {!commentPanelOpen && (
+          <button
+            type="button"
+            className="absolute right-0 top-2 z-10 flex items-center gap-1 rounded-l border border-r-0 border-border bg-surface px-1.5 py-1 text-tiny text-fg transition-colors hover:bg-hover"
+            onClick={() => setCommentPanelOpen(true)}
+            title="显示批注面板"
+            aria-label="显示批注面板"
+          >
+            <MessageSquarePlus size={14} aria-hidden="true" />
+            {commentsRef.current.length > 0 ? (
+              <span className="tabular-nums">{commentsRef.current.length}</span>
+            ) : null}
+          </button>
+        )}
+
+        {/* 右侧批注面板：作者 + 时间 + 正文 + 定位/已解决/删除（可折叠，不常驻占宽） */}
+        {commentPanelOpen && (
+          <aside className="flex w-72 shrink-0 flex-col border-l border-border bg-surface">
+            <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-3">
+              <span className="text-tiny font-medium text-fg">
+                批注（{commentsRef.current.length}）
+              </span>
+              <button
+                type="button"
+                className="rounded px-1 leading-none text-muted transition-colors hover:bg-hover hover:text-fg"
+                onClick={() => setCommentPanelOpen(false)}
+                title="收起批注面板"
+                aria-label="收起批注面板"
+              >
+                ×
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-2" data-comment-tick={commentTick}>
+              {commentsRef.current.length === 0 ? (
+                <p className="p-2 text-tiny text-muted">
+                  暂无批注。选中文本后点「审阅 → 新建批注」添加。
+                </p>
+              ) : (
+                commentsRef.current.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`mb-2 rounded border border-border p-2 text-tiny ${
+                      c.resolved ? 'opacity-60' : ''
+                    }`}
+                  >
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="truncate font-medium text-fg">{c.author ?? '我'}</span>
+                      <span className="shrink-0 text-muted">{formatCommentTime(c.date)}</span>
+                    </div>
+                    <div
+                      className={`mb-2 whitespace-pre-wrap ${
+                        c.resolved ? 'text-muted line-through' : 'text-fg'
+                      }`}
+                    >
+                      {c.text}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-muted transition-colors hover:bg-hover hover:text-fg"
+                        onClick={() => locateComment(c.id)}
+                        title="定位批注"
+                        aria-label="定位批注"
+                      >
+                        定位
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-muted transition-colors hover:bg-hover hover:text-fg"
+                        onClick={() => toggleResolvedComment(c.id)}
+                        title={c.resolved ? '取消已解决' : '标记已解决'}
+                        aria-label="切换已解决"
+                      >
+                        {c.resolved ? '取消解决' : '已解决'}
+                      </button>
+                      <button
+                        type="button"
+                        className="ml-auto rounded px-1.5 py-0.5 text-warning transition-colors hover:bg-hover"
+                        onClick={() => removeComment(c.id)}
+                        title="删除批注"
+                        aria-label="删除批注"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* 状态栏：字数统计（WPS 口径） */}
@@ -910,6 +1161,43 @@ export function WriterEditor() {
           </div>
           <p className="text-tiny text-muted">
             提示：页眉/页脚支持文本、基础格式与页码域；保存后写入 word/headerN.xml 与 word/footerN.xml。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 新建批注对话框（WPS 对齐协作功能）：Modal + Textarea，严禁 window.prompt/alert */}
+      <Modal
+        open={commentOpen}
+        onClose={() => setCommentOpen(false)}
+        title="新建批注"
+        width={420}
+        footer={
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<MessageSquarePlus size={13} />}
+            onClick={applyComment}
+          >
+            确定
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-2 p-1">
+          <textarea
+            autoFocus
+            className="min-h-[96px] w-full resize-y rounded-sm border border-border bg-surface px-2 py-1.5 text-ui text-fg outline-none transition-colors placeholder:text-muted hover:border-accent focus-visible:border-accent"
+            placeholder="输入批注内容…"
+            value={commentInput}
+            onChange={(e) => setCommentInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                applyComment();
+              }
+            }}
+          />
+          <p className="text-tiny text-muted">
+            批注将锚定到当前选区文本；保存后写入 Word 原生批注（word/comments.xml）。Ctrl+Enter 快速确定。
           </p>
         </div>
       </Modal>

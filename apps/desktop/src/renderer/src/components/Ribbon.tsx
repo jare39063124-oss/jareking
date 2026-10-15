@@ -52,6 +52,7 @@ import {
   PanelTop,
   Maximize,
   MessageSquare,
+  MessageSquarePlus,
   Minimize2,
   PaintBucket,
   PanelsTopLeft,
@@ -324,7 +325,7 @@ const RIBBON_TABS: RibbonTabDef[] = [
         name: '校对',
         tools: [
           { kind: 'button', id: 'spell', label: '拼写检查', icon: SquarePen },
-          { kind: 'button', id: 'comment', label: '批注', icon: MessageSquare },
+          { kind: 'button', id: 'comment', label: '新建批注', icon: MessageSquarePlus },
         ],
       },
       {

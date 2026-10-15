@@ -59,6 +59,35 @@ export interface JkDocument extends ModelExtra {
   media?: Record<string, Uint8Array>;
   /** 本模型保真等级与降级记录（解析阶段填充） */
   fidelity: FidelityReport;
+  /**
+   * 批注列表（对应 word/comments.xml 的 w:comment 集合）。
+   * 行内锚点位置由各 `Paragraph.commentRanges` 记录（按 runs 索引切片），
+   * 二者通过批注 id 关联（与 commentRangeStart/End 的 w:id 一致）。
+   */
+  comments?: JkComment[];
+}
+
+/**
+ * 批注（对应 comments.xml 的 w:comment）。
+ *
+ * 设计说明（四端一致）：`id` 是批注的唯一标识，与文档正文中
+ * `w:commentRangeStart`/`w:commentRangeEnd`/`w:commentReference` 的 `w:id` 对应；
+ * `text` 承载批注正文（多段落用 \n 连接）；`resolved` 为 jareking 内部状态
+ * （导出时对应 w:done="1"，Word/WPS 打开后可继续显示在审阅窗格）。
+ */
+export interface JkComment {
+  /** 批注 id（对应 w:comment@w:id，字符串数字，与文档内 commentRangeStart/End 的 w:id 一致） */
+  id: string;
+  /** 作者（对应 w:author） */
+  author?: string;
+  /** 作者缩写（对应 w:initials） */
+  initials?: string;
+  /** 创建时间（对应 w:date，ISO 字符串） */
+  date?: string;
+  /** 批注正文纯文本（段落用 \n 分隔） */
+  text: string;
+  /** 是否已解决（jareking 内部状态，w:done="1" 时导出注释保留；v1 可选） */
+  resolved?: boolean;
 }
 
 /* =========================================================================
@@ -80,6 +109,29 @@ export interface Paragraph extends BlockBase {
   runs: Inline[];
   /** 段落属性（Word: w:pPr）—— 对齐/缩进/行距/样式引用/编号引用/大纲级别 */
   pPr?: ParagraphProperties;
+  /**
+   * 段落内的批注范围（按 runs 索引切片；对应 commentRangeStart/End 包围的行内区间）。
+   * 索引区间 [start, end) 为左闭右开，指向 `runs` 数组；导出时在 start 处插入
+   * `<w:commentRangeStart>`，在 end 处插入 `<w:commentRangeEnd>` 与引用 run。
+   */
+  commentRanges?: CommentRange[];
+}
+
+/**
+ * 段落内批注范围（行内锚点）。
+ *
+ * 建模说明：Word 的批注锚点由同一 `w:id` 的 `w:commentRangeStart` / `w:commentRangeEnd`
+ * 界定一段连续的行内内容。jareking 以「runs 索引区间」表达该锚点，
+ * 与 `JkComment.id` 对应；四端（model/parser/exporter/editor）保持一致。
+ * 端点 run 索引左闭右开：start 含、end 不含。
+ */
+export interface CommentRange {
+  /** 批注 id（与 JkComment.id / w:id 一致） */
+  id: string;
+  /** 起始 run 索引（含） */
+  start: number;
+  /** 结束 run 索引（不含） */
+  end: number;
 }
 
 /** 表格（对应 w:tbl）：行数组 + 表格属性 + 列网格；单元格内可嵌套任意 Block（含表格） */
@@ -607,6 +659,7 @@ export type RelationshipType =
   | 'footer'
   | 'footnotes'
   | 'endnotes'
+  | 'comments'
   | 'styles'
   | 'numbering'
   | 'settings'

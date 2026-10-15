@@ -10,9 +10,11 @@
 
 import type {
   Block,
+  CommentRange,
   Hyperlink,
   Image,
   Inline,
+  JkComment,
   JkDocument,
   Paragraph,
   ParagraphProperties,
@@ -223,8 +225,60 @@ function serializeInline(inline: Inline, ctx: Ctx = { imageId: 0 }): string {
 
 function serializeParagraph(p: Paragraph, ctx: Ctx): string {
   const pPr = wrapPPr(p.pPr);
-  const runs = p.runs.map((r) => serializeInline(r, ctx)).join('');
-  return `<w:p>${pPr}${runs}</w:p>`;
+  const runs = p.runs;
+  const ranges = normalizeCommentRanges(p.commentRanges, runs.length);
+
+  // 把批注边界映射到 runs 索引位置：openAt[i] 在 run i 之前写 commentRangeStart；
+  // closeAt[i] 在 run i 之前写 commentRangeEnd + 引用 run（即范围结束于 run i-1 之后）。
+  const openAt = new Map<number, string[]>();
+  const closeAt = new Map<number, string[]>();
+  for (const r of ranges) {
+    pushToMap(openAt, r.start, r.id);
+    pushToMap(closeAt, r.end, r.id);
+  }
+
+  let body = '';
+  for (let i = 0; i <= runs.length; i++) {
+    // 先收尾（commentRangeEnd + reference run），再开启（commentRangeStart），保持嵌套良构
+    for (const id of reverseList(closeAt.get(i))) {
+      body += `<w:commentRangeEnd w:id="${escapeXmlAttr(id)}"/>`;
+      // Word 要求每个批注范围存在 commentReference 引用 run
+      body += `<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="${escapeXmlAttr(id)}"/></w:r>`;
+    }
+    for (const id of openAt.get(i) ?? []) {
+      body += `<w:commentRangeStart w:id="${escapeXmlAttr(id)}"/>`;
+    }
+    if (i < runs.length) body += serializeInline(runs[i], ctx);
+  }
+  return `<w:p>${pPr}${body}</w:p>`;
+}
+
+/** 向 Map<索引, 数组> 追加值（键不存在时创建） */
+function pushToMap(map: Map<number, string[]>, key: number, value: string): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+/** 取得列表的反序副本（内层批注先闭合，保证 span/标签嵌套良构）；undefined 安全返回空数组 */
+function reverseList(list?: string[]): string[] {
+  return list ? [...list].reverse() : [];
+}
+
+/**
+ * 规整批注范围：裁剪越界、丢弃空范围，并按 (start 升序, end 降序) 排序，
+ * 使包含关系的外层批注先开启、后闭合（保证导出 XML 与 HTML 嵌套良构）。
+ */
+function normalizeCommentRanges(ranges: CommentRange[] | undefined, runCount: number): CommentRange[] {
+  const out: CommentRange[] = [];
+  for (const r of ranges ?? []) {
+    const start = Math.max(0, Math.min(r.start, runCount));
+    const end = Math.max(start, Math.min(r.end, runCount));
+    if (end <= start) continue;
+    out.push({ id: r.id, start, end });
+  }
+  out.sort((a, b) => a.start - b.start || b.end - a.end);
+  return out;
 }
 
 function serializeTableBorders(b: TableBorders, tag: string): string {
@@ -513,4 +567,37 @@ export function serializeFooterPart(blocks: Block[]): string {
   const inner = serializeHfInner(blocks);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:ftr xmlns:w="${HF_W}" xmlns:r="${HF_R}" xmlns:wp="${HF_WP}" xmlns:a="${HF_A}" xmlns:pic="${HF_PIC}" xmlns:m="${HF_M}">${inner}</w:ftr>`;
+}
+
+/* =========================================================================
+ * 6. 批注部件（word/comments.xml）
+ * ========================================================================= */
+
+/**
+ * 生成 word/comments.xml（根 <w:comments>）。
+ *
+ * 每条批注对应一个 <w:comment>，正文按换行符拆分为多个 <w:p>/<w:r>/<w:t>
+ * （保留多段落结构）；文本转义复用 `escapeXmlText`。`resolved` 为 true 时写
+ * w:done="1"（Word/WPS 仍保留该批注，可在审阅窗格查看）。
+ */
+export function serializeCommentsPart(comments: JkComment[]): string {
+  const items = (comments ?? [])
+    .map((c) => {
+      const attrs: string[] = [`w:id="${escapeXmlAttr(c.id)}"`];
+      attrs.push(`w:author="${escapeXmlAttr(c.author ?? '')}"`);
+      attrs.push(`w:initials="${escapeXmlAttr(c.initials ?? '')}"`);
+      if (c.date) attrs.push(`w:date="${escapeXmlAttr(c.date)}"`);
+      if (c.resolved) attrs.push('w:done="1"');
+      const lines = (c.text ?? '').split('\n');
+      const paras = (lines.length ? lines : [''])
+        .map(
+          (line) =>
+            `<w:p><w:r><w:t xml:space="preserve">${escapeXmlText(line)}</w:t></w:r></w:p>`,
+        )
+        .join('');
+      return `<w:comment ${attrs.join(' ')}>${paras}</w:comment>`;
+    })
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="${HF_W}">${items}</w:comments>`;
 }
