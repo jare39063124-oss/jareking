@@ -25,12 +25,13 @@ import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import type { FUniver } from '@univerjs/presets';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
-import { BarChart3, Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles, Table2 } from 'lucide-react';
+import { BarChart3, CopyMinus, Download, FileDown, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles, SplitSquareHorizontal, Table2 } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { Modal } from '../components/Modal';
 import { toast } from '../stores/toastStore';
+import { registerEditorCommands } from '../stores/editorCommands';
 import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
@@ -38,6 +39,9 @@ import { parseInWorker } from '../lib/parseClient';
 import { downloadBlob, downloadDataUrl } from '../lib/download';
 import { renderChartToPng, type ChartType } from '../lib/chartRenderer';
 import { buildChartData } from './chartData';
+import { workbookToPrintBody } from './sheetToHtml';
+import { buildPrintDocument } from '../lib/printHtml';
+import { exportHtmlToPdf } from '../lib/pdfExport';
 import { takePendingOpen } from '../stores/pendingOpenStore';
 import {
   exportXlsx,
@@ -49,15 +53,19 @@ import {
   normalizeColor,
   normalizeCellStyle,
   colToLetters,
+  lettersToCol,
   parseA1Range,
   buildPivot,
   pivotToNumber,
+  splitColumn,
+  removeDuplicates,
   type JkWorkbook,
   type JkCellStyle,
   type FindResult,
   type FindOpts,
   type PivotConfig,
   type PivotAgg,
+  type DataCellValue,
 } from '@jareking/sheet';
 
 /**
@@ -75,6 +83,88 @@ function safeSet(range: unknown, method: string, ...args: unknown[]): void {
   } catch (e) {
     console.warn(`[设置单元格格式] FRange.${method} 调用失败:`, e);
   }
+}
+
+/** 活动工作簿 facade 的推导类型（避免深路径 import FWorkbook） */
+type FWorkbookLike = NonNullable<ReturnType<FUniver['getActiveWorkbook']>>;
+/** 活动工作表 facade 的推导类型（避免深路径 import FWorksheet） */
+type FSheetLike = NonNullable<ReturnType<FWorkbookLike['getActiveSheet']>>;
+
+/** 「分列」常用分隔符预设（下拉选项；'custom' 走自定义输入） */
+const SPLIT_DELIMITER_PRESETS: { key: string; label: string; value: string }[] = [
+  { key: 'comma', label: '逗号 ( , )', value: ',' },
+  { key: 'tab', label: '制表符 ( Tab )', value: '\t' },
+  { key: 'space', label: '空格', value: ' ' },
+  { key: 'semicolon', label: '分号 ( ; )', value: ';' },
+];
+
+/** 下拉选择 → 实际分隔符（未命中预设即视为自定义输入） */
+function resolveSplitDelimiter(key: string, custom: string): string {
+  const preset = SPLIT_DELIMITER_PRESETS.find((p) => p.key === key);
+  return preset ? preset.value : custom;
+}
+
+/**
+ * 把二维矩阵写回到 (startRow, startCol) 起的区域。
+ *
+ * 实测结论（Univer v1.0.4，@univerjs/sheets facade/f-range.d.ts）：
+ *  - `FRange.setValues(value: CellValue[][] | IObjectMatrixPrimitiveType<…>): FRange`
+ *    → 支持「二维数组」一次写入整块（首选路径，高效；本工程已加载的 core preset 可用）。
+ *  - `FRange.setValue(value: CellValue | ICellData): FRange` → 逐格写入。
+ * 实现：优先 setValues；若当前版本未实现（typeof !== 'function'）或抛错，退化为逐格 setValue。
+ *
+ * @returns 是否整体写入成功
+ */
+function writeMatrixToSheet(
+  sheet: FSheetLike,
+  startRow: number,
+  startCol: number,
+  values: (string | number)[][],
+): boolean {
+  if (!values.length) return true;
+  const rows = values.length;
+  const cols = Math.max(...values.map((r) => r.length), 1);
+  try {
+    const range = sheet.getRange(startRow, startCol, rows, cols);
+    if (typeof range.setValues === 'function') {
+      range.setValues(values);
+      return true;
+    }
+  } catch (e) {
+    console.warn('[数据工具] setValues 失败，退化为逐格 setValue:', e);
+  }
+  // 退化路径：逐格写入
+  try {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        sheet.getRange(startRow + r, startCol + c, 1, 1).setValue(values[r]?.[c] ?? '');
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn('[数据工具] 逐格 setValue 失败:', e);
+    return false;
+  }
+}
+
+/**
+ * 解析「逗号分隔的绝对列字母」（如 "A,C"）为相对选区左端的列索引数组。
+ * 越界 / 非法 / 重复项被过滤，结果升序（确定性）。
+ */
+function parseColumnLetters(text: string, startCol: number, colCount: number): number[] {
+  const out: number[] = [];
+  for (const raw of text.split(/[,，\s]+/)) {
+    const t = raw.trim().toUpperCase();
+    if (!/^[A-Z]+$/.test(t)) continue;
+    const rel = lettersToCol(t) - startCol;
+    if (rel >= 0 && rel < colCount && !out.includes(rel)) out.push(rel);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/** 相对选区左端的列索引数组 → 逗号分隔的绝对列字母（如 [0,2] → "A,C"） */
+function columnLettersText(cols: number[], startCol: number): string {
+  return cols.map((c) => colToLetters(startCol + c)).join(',');
 }
 
 /** 首载演示工作簿（体现 值/公式/合并/列宽 四类能力） */
@@ -193,6 +283,38 @@ export function SheetEditor() {
   /** 聚合方式 */
   const [pivotAgg, setPivotAgg] = useState<PivotAgg>('sum');
   const [pivotError, setPivotError] = useState<string | null>(null);
+
+  // 分列（WPS 对齐专项）：选区 → splitColumn → 写回选区左上角起
+  const [splitOpen, setSplitOpen] = useState(false);
+  /** 打开对话框时捕获的选区 A1 记法（确定时按其重读，避免选区漂移） */
+  const [splitA1, setSplitA1] = useState('A1');
+  /** 选区起始列（用于「列X」回退命名与列字母换算） */
+  const [splitStartCol, setSplitStartCol] = useState(0);
+  /** 选区列数（目标列下拉的可选范围） */
+  const [splitColCount, setSplitColCount] = useState(1);
+  /** 由选区首行推导的表头文案（供目标列下拉展示） */
+  const [splitHeaderLabels, setSplitHeaderLabels] = useState<string[]>([]);
+  /** 目标列（相对选区左端，0 基） */
+  const [splitColIndex, setSplitColIndex] = useState(0);
+  /** 分隔符下拉 key（comma|tab|space|semicolon|custom） */
+  const [splitDelimKey, setSplitDelimKey] = useState('comma');
+  /** 自定义分隔符文本（key === 'custom' 时生效） */
+  const [splitCustomDelim, setSplitCustomDelim] = useState('');
+  const [splitHasHeader, setSplitHasHeader] = useState(true);
+  const [splitError, setSplitError] = useState<string | null>(null);
+
+  // 删除重复项（WPS 对齐专项）：选区 → removeDuplicates → 写回去重结果
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupA1, setDupA1] = useState('A1');
+  const [dupStartCol, setDupStartCol] = useState(0);
+  const [dupColCount, setDupColCount] = useState(1);
+  const [dupHeaderLabels, setDupHeaderLabels] = useState<string[]>([]);
+  /** 关键列索引（相对选区左端，可多选） */
+  const [dupKeyCols, setDupKeyCols] = useState<number[]>([]);
+  /** 关键列字母文本（与 dupKeyCols 双向同步） */
+  const [dupKeyText, setDupKeyText] = useState('');
+  const [dupHasHeader, setDupHasHeader] = useState(true);
+  const [dupError, setDupError] = useState<string | null>(null);
 
   const configs = useAiStore((s) => s.configs);
   const aiLoaded = useAiStore((s) => s.loaded);
@@ -408,6 +530,21 @@ export function SheetEditor() {
         // 暴露原始对象供探针深度内省（仅 jk-debug 模式）
         fws: () => apiRef.current?.getActiveWorkbook()?.getActiveSheet(),
         funiver: () => apiRef.current,
+        // 导出 PDF 探针（QA 冒烟）：与 onExportPdf 同路径构建 HTML，不下载，直接返回 { size, head }
+        pdfProbe: async () => {
+          const jk = currentJkWorkbook();
+          if (!jk || !jk.sheets.length) return { size: 0, head: 'no-workbook' };
+          const active = jk.sheets[jk.activeSheetIndex ?? 0];
+          const html = buildPrintDocument({
+            title: active?.name || '导出',
+            bodyHtml: workbookToPrintBody(jk),
+          });
+          const bytes = await window.jareking.invoke<Uint8Array>(
+            window.jareking.IPC.PDF_EXPORT_HTML,
+            { html, fileName: `${active?.name || '导出'}.pdf` },
+          );
+          return { size: bytes.length, head: String.fromCharCode(...bytes.slice(0, 5)) };
+        },
       };
     }
   }, [ready]);
@@ -475,6 +612,33 @@ export function SheetEditor() {
       toast.warning('CSV 导出失败');
     }
   };
+
+  /**
+   * 导出 PDF（WPS 对齐批2）：当前工作簿 → 打印 HTML → Electron 打印管线 → downloadBlob。
+   * 文件名用活动表名兜底 '导出.pdf'。
+   */
+  const onExportPdf = async () => {
+    try {
+      const jk = currentJkWorkbook();
+      if (!jk || !jk.sheets.length) throw new Error('no workbook');
+      const active = jk.sheets[jk.activeSheetIndex ?? 0];
+      const body = workbookToPrintBody(jk);
+      const html = buildPrintDocument({ title: active?.name || '导出', bodyHtml: body });
+      const fileName = `${active?.name || '导出'}.pdf`;
+      await exportHtmlToPdf({ html, fileName });
+      toast.success(`已导出「${fileName}」`);
+    } catch (err) {
+      toast.warning('导出 PDF 失败：' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+  const exportPdfRef = useRef<() => void>(() => {});
+  exportPdfRef.current = () => void onExportPdf();
+
+  // 注册「导出 PDF」到命令总线（Ribbon「文件 → 导出 PDF」点击后自动生效）
+  useEffect(
+    () => registerEditorCommands({ 'export-pdf': { run: () => exportPdfRef.current() } }),
+    [],
+  );
 
   const onReset = () => {
     void createWb(apiRef.current!, demoWorkbook());
@@ -942,6 +1106,204 @@ export function SheetEditor() {
     }
   };
 
+  /* =========================================================================
+   * 分列 + 删除重复项（WPS 对齐专项「数据」菜单）
+   * 范式：选区 getValues() → dataTools 纯函数 → 结果写回选区左上角（setValues/逐格）
+   * ========================================================================= */
+
+  /** 读取当前选区（A1 记法 + 矩阵 + 起始行/列）；无选区 / 无活动表 → null */
+  const readActiveSelection = ():
+    | { a1: string; matrix: DataCellValue[][]; startRow: number; startCol: number }
+    | null => {
+    const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+    if (!sheet) return null;
+    const a1 = sheet.getActiveRange?.()?.getA1Notation?.();
+    if (!a1) return null;
+    const parsed = parseA1Range(a1);
+    if (!parsed) return null;
+    let matrix: DataCellValue[][];
+    try {
+      // FRange.getValues() 返回选区二维值矩阵（行→列）
+      matrix = sheet.getRange(a1).getValues() as DataCellValue[][];
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(matrix)) return null;
+    return { a1, matrix, startRow: parsed.startRow, startCol: parsed.startCol };
+  };
+
+  /** 列显示名：有表头文案则用之，否则回退「列X」记法（X 为绝对列字母） */
+  const columnLabel = (labels: string[], startCol: number, idx: number): string => {
+    const l = labels[idx];
+    return l && l.trim() ? l : `列${colToLetters(startCol + idx)}`;
+  };
+
+  /** 由选区首行推断「是否含表头」并生成列表头文案（首行非空单元格全为非数字 → 视为表头） */
+  const deriveHeaderInfo = (matrix: DataCellValue[][]): { hasHeader: boolean; labels: string[] } => {
+    const first = matrix[0] ?? [];
+    const colCount = Math.max(...matrix.map((r) => r.length), 1);
+    const nonEmpty = first.filter((c) => c !== null && c !== undefined && String(c).trim() !== '');
+    const hasHeader = nonEmpty.length > 0 && nonEmpty.every((c) => pivotToNumber(c) === null);
+    const labels = Array.from({ length: colCount }, (_, i) => {
+      const v = first[i];
+      return hasHeader && v !== null && v !== undefined && String(v).trim() !== '' ? String(v) : '';
+    });
+    return { hasHeader, labels };
+  };
+
+  /** 打开「分列」：预填选区/目标列（默认当前列）/分隔符/表头 */
+  const openSplitDialog = () => {
+    const sel = readActiveSelection();
+    if (!sel) {
+      toast.warning('请先在表格中选择要分列的数据区域');
+      return;
+    }
+    const colCount = Math.max(...sel.matrix.map((r) => r.length), 1);
+    const { hasHeader, labels } = deriveHeaderInfo(sel.matrix);
+    // 目标列默认：当前活动单元格所在列（相对选区左端），越界回退首列
+    let colIndex = 0;
+    const activeCol = apiRef.current
+      ?.getActiveWorkbook()
+      ?.getActiveSheet()
+      ?.getActiveCell?.()
+      ?.getColumn?.();
+    if (typeof activeCol === 'number') {
+      colIndex = Math.min(Math.max(activeCol - sel.startCol, 0), colCount - 1);
+    }
+    setSplitA1(sel.a1);
+    setSplitStartCol(sel.startCol);
+    setSplitColCount(colCount);
+    setSplitHeaderLabels(labels);
+    setSplitColIndex(colIndex);
+    setSplitDelimKey('comma');
+    setSplitCustomDelim('');
+    setSplitHasHeader(hasHeader);
+    setSplitError(null);
+    setSplitOpen(true);
+  };
+
+  /** 应用「分列」：读选区 → splitColumn → 写回选区左上角起 */
+  const applySplit = () => {
+    setSplitError(null);
+    const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+    if (!sheet) {
+      setSplitError('表格尚未就绪');
+      return;
+    }
+    const delim = resolveSplitDelimiter(splitDelimKey, splitCustomDelim);
+    if (delim === '') {
+      setSplitError('请输入分隔符');
+      return;
+    }
+    const parsed = parseA1Range(splitA1);
+    if (!parsed) {
+      setSplitError('选区地址无效');
+      return;
+    }
+    let matrix: DataCellValue[][];
+    try {
+      matrix = sheet.getRange(splitA1).getValues() as DataCellValue[][];
+    } catch {
+      setSplitError('无法读取选区');
+      return;
+    }
+    const result = splitColumn(matrix, splitColIndex, delim, { hasHeader: splitHasHeader });
+    if (!result.length) {
+      setSplitError('选区无数据');
+      return;
+    }
+    if (!writeMatrixToSheet(sheet, parsed.startRow, parsed.startCol, result)) {
+      setSplitError('写回失败，请重试');
+      return;
+    }
+    toast.success('分列完成');
+    setSplitOpen(false);
+  };
+
+  /** 切换「删除重复项」的关键列勾选，并同步列字母文本 */
+  const toggleDupCol = (idx: number) => {
+    const next = dupKeyCols.includes(idx)
+      ? dupKeyCols.filter((x) => x !== idx)
+      : [...dupKeyCols, idx].sort((a, b) => a - b);
+    setDupKeyCols(next);
+    setDupKeyText(columnLettersText(next, dupStartCol));
+  };
+
+  /** 列字母文本变更 → 解析并同步关键列勾选 */
+  const onDupKeyTextChange = (text: string) => {
+    setDupKeyText(text);
+    setDupKeyCols(parseColumnLetters(text, dupStartCol, dupColCount));
+  };
+
+  /** 打开「删除重复项」：预填选区/关键列（默认首列）/表头 */
+  const openRemoveDuplicatesDialog = () => {
+    const sel = readActiveSelection();
+    if (!sel) {
+      toast.warning('请先在表格中选择要删除重复项的数据区域');
+      return;
+    }
+    const colCount = Math.max(...sel.matrix.map((r) => r.length), 1);
+    const { hasHeader, labels } = deriveHeaderInfo(sel.matrix);
+    setDupA1(sel.a1);
+    setDupStartCol(sel.startCol);
+    setDupColCount(colCount);
+    setDupHeaderLabels(labels);
+    setDupHasHeader(hasHeader);
+    setDupKeyCols([0]);
+    setDupKeyText(columnLettersText([0], sel.startCol));
+    setDupError(null);
+    setDupOpen(true);
+  };
+
+  /** 应用「删除重复项」：读选区 → removeDuplicates → 写回去重结果 + 清尾部残留 */
+  const applyRemoveDuplicates = () => {
+    setDupError(null);
+    const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+    if (!sheet) {
+      setDupError('表格尚未就绪');
+      return;
+    }
+    if (!dupKeyCols.length) {
+      setDupError('请至少选择一个关键列');
+      return;
+    }
+    const parsed = parseA1Range(dupA1);
+    if (!parsed) {
+      setDupError('选区地址无效');
+      return;
+    }
+    let matrix: DataCellValue[][];
+    try {
+      matrix = sheet.getRange(dupA1).getValues() as DataCellValue[][];
+    } catch {
+      setDupError('无法读取选区');
+      return;
+    }
+    const origCols = Math.max(...matrix.map((r) => r.length), 1);
+    const { rows, removed } = removeDuplicates(matrix, dupKeyCols, { hasHeader: dupHasHeader });
+    if (!rows.length) {
+      setDupError('选区无数据');
+      return;
+    }
+    if (!writeMatrixToSheet(sheet, parsed.startRow, parsed.startCol, rows)) {
+      setDupError('写回失败，请重试');
+      return;
+    }
+    // 清空去重后残留的尾部旧行，避免脏数据（MVP：清区而非删除整行）
+    if (rows.length < matrix.length) {
+      const blank: (string | number)[][] = Array.from({ length: matrix.length - rows.length }, () =>
+        Array.from({ length: origCols }, () => ''),
+      );
+      writeMatrixToSheet(sheet, parsed.startRow + rows.length, parsed.startCol, blank);
+    }
+    if (removed === 0) {
+      toast.info('未发现重复项');
+    } else {
+      toast.success(`已删除 ${removed} 行重复项`);
+    }
+    setDupOpen(false);
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 顶栏：文件操作（编辑能力由 Univer 自带工具栏提供） */}
@@ -954,6 +1316,9 @@ export function SheetEditor() {
         </Button>
         <Button variant="secondary" size="sm" icon={<FileSpreadsheet size={13} />} onClick={onSaveCsv} disabled={!ready}>
           导出 CSV
+        </Button>
+        <Button variant="secondary" size="sm" icon={<FileDown size={13} />} onClick={onExportPdf} disabled={!ready} aria-label="导出 PDF">
+          导出 PDF
         </Button>
         <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={onReset}>
           重置示例
@@ -983,6 +1348,26 @@ export function SheetEditor() {
           aria-label="数据透视表"
         >
           数据透视表
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<SplitSquareHorizontal size={13} />}
+          onClick={openSplitDialog}
+          title="分列"
+          aria-label="分列"
+        >
+          分列
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<CopyMinus size={13} />}
+          onClick={openRemoveDuplicatesDialog}
+          title="删除重复项"
+          aria-label="删除重复项"
+        >
+          删除重复项
         </Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
@@ -1598,6 +1983,149 @@ export function SheetEditor() {
           {pivotError && <p className="text-tiny text-warning">{pivotError}</p>}
           <p className="text-tiny text-muted">
             生成结果写入新建工作表「数据透视表」；若引擎不支持建表，则退化为写入源区域右侧空区。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 分列（WPS 对齐专项「数据」菜单）：选目标列 + 分隔符 → splitColumn → 写回选区左上角起。
+          严禁 window.prompt/alert，一律用 Modal。 */}
+      <Modal
+        open={splitOpen}
+        onClose={() => setSplitOpen(false)}
+        title="分列"
+        width={460}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setSplitOpen(false)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={applySplit}>
+              确定
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-tiny text-muted">目标列</span>
+            <select
+              aria-label="目标列"
+              className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+              value={splitColIndex}
+              onChange={(e) => setSplitColIndex(Number(e.target.value))}
+            >
+              {Array.from({ length: splitColCount }, (_, i) => (
+                <option key={`sc-${i}`} value={i}>
+                  {columnLabel(splitHeaderLabels, splitStartCol, i)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-tiny text-muted">分隔符</span>
+            <select
+              aria-label="分隔符"
+              className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+              value={splitDelimKey}
+              onChange={(e) => setSplitDelimKey(e.target.value)}
+            >
+              {SPLIT_DELIMITER_PRESETS.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label}
+                </option>
+              ))}
+              <option value="custom">自定义</option>
+            </select>
+          </div>
+
+          {splitDelimKey === 'custom' && (
+            <div className="flex items-center gap-2">
+              <span className="w-20 shrink-0 text-tiny text-muted">自定义</span>
+              <Input
+                aria-label="自定义分隔符"
+                className="flex-1"
+                value={splitCustomDelim}
+                onChange={(e) => setSplitCustomDelim(e.target.value)}
+                placeholder="如 , 或 --"
+              />
+            </div>
+          )}
+
+          <label className="flex items-center gap-1.5 text-tiny text-fg">
+            <input
+              type="checkbox"
+              checked={splitHasHeader}
+              onChange={(e) => setSplitHasHeader(e.target.checked)}
+            />
+            首行为表头（不参与拆分）
+          </label>
+
+          {splitError && <p className="text-tiny text-warning">{splitError}</p>}
+          <p className="text-tiny text-muted">
+            将「目标列」按分隔符拆分，结果从选区左上角写回（选区：{splitA1}）；拆出的列数超出时向右扩展。
+          </p>
+        </div>
+      </Modal>
+
+      {/* 删除重复项（WPS 对齐专项「数据」菜单）：选关键列（表头勾选 / 列字母输入）→ removeDuplicates → 写回。
+          严禁 window.prompt/alert，一律用 Modal。 */}
+      <Modal
+        open={dupOpen}
+        onClose={() => setDupOpen(false)}
+        title="删除重复项"
+        width={460}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setDupOpen(false)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={applyRemoveDuplicates}>
+              确定
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <span className="text-tiny text-muted">
+            关键列（勾选参与判重的列；任一列不同即视为不同行）
+          </span>
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+            {Array.from({ length: dupColCount }, (_, i) => (
+              <label key={`dc-${i}`} className="flex items-center gap-1 text-tiny text-fg">
+                <input
+                  type="checkbox"
+                  checked={dupKeyCols.includes(i)}
+                  onChange={() => toggleDupCol(i)}
+                />
+                {columnLabel(dupHeaderLabels, dupStartCol, i)}
+              </label>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-tiny text-muted">列字母</span>
+            <Input
+              aria-label="关键列字母"
+              className="flex-1"
+              value={dupKeyText}
+              onChange={(e) => onDupKeyTextChange(e.target.value)}
+              placeholder="如 A,C（绝对列字母）"
+            />
+          </div>
+
+          <label className="flex items-center gap-1.5 text-tiny text-fg">
+            <input
+              type="checkbox"
+              checked={dupHasHeader}
+              onChange={(e) => setDupHasHeader(e.target.checked)}
+            />
+            首行为表头（不参与判重）
+          </label>
+
+          {dupError && <p className="text-tiny text-warning">{dupError}</p>}
+          <p className="text-tiny text-muted">
+            保留首次出现的行，删除其余重复行；结果从选区左上角写回（选区：{dupA1}），并清空尾部残留行。
           </p>
         </div>
       </Modal>

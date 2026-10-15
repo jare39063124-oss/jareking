@@ -12,3 +12,4 @@ export * from './exporter/csv.js';
 export * from './findReplace.js';
 export * from './cellStyle.js';
 export * from './pivot.js';
+export * from './dataTools.js';
