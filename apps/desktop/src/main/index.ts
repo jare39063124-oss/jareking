@@ -44,7 +44,7 @@ export function getPendingOpenFiles(): string[] {
  */
 function registerIpcHandlers(): void {
   if (!services) return;
-  const { account, library, db, ai, macro } = services;
+  const { account, library, db, ai, macro, metering } = services;
 
   // 账户：获取并引导本地账户 + 注册礼（幂等）
   ipcMain.handle(IPC.ACCOUNT_GET, () => account.bootstrapAccount());
@@ -197,6 +197,17 @@ function registerIpcHandlers(): void {
     if (!payload?.id) return '';
     return ai.resolveKey(payload.id);
   });
+
+  // AI 算力计量（token → 积分）：读取汇总与最近用量流水（只读，从本地库读）
+  ipcMain.handle(IPC.AI_METER_SUMMARY, () => metering.summary());
+  ipcMain.handle(
+    IPC.AI_METER_RECORDS,
+    (_event, payload?: { limit?: number; offset?: number }) => {
+      const limit = payload?.limit ?? 50;
+      const offset = payload?.offset ?? 0;
+      return metering.listRecords(limit, offset);
+    },
+  );
 
   // 宏：列表 / 读取 / 保存 / 删除（主进程仅存取文件，绝不执行宏代码；执行在渲染进程 Worker 沙箱）
   ipcMain.handle(IPC.MACRO_LIST, () => macro.list());

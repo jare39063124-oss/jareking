@@ -7,4 +7,5 @@
  */
 export * from './types.js';
 export * from './adapter.js';
+export * from './metering.js';
 export * from './planner/index.js';

@@ -18,6 +18,9 @@ export const IPC = {
   AI_CONFIG_SAVE: 'ai:config:save',
   AI_CONFIG_DELETE: 'ai:config:delete',
   AI_KEY_RESOLVE: 'ai:key:resolve',
+  // AI 算力计量（token → 积分）：读取汇总 / 用量流水（主进程从本地库读，纯只读）
+  AI_METER_SUMMARY: 'ai:meter:summary',
+  AI_METER_RECORDS: 'ai:meter:records',
   SYSTEM_STORAGE_INFO: 'system:storageInfo',
   SYSTEM_OPEN_DATA_DIR: 'system:openDataDir',
   SYSTEM_OPEN_EXTERNAL: 'system:openExternal',

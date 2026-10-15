@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Database } from '../src/db/database.js';
 import { createTestDb, type TestDb } from './helpers.js';
 
-/** 初始 schema 应包含的全部表 */
+/** 迁移后应包含的全部表 */
 const EXPECTED_TABLES = [
   'migrations',
   'accounts',
@@ -13,6 +13,7 @@ const EXPECTED_TABLES = [
   'recent_files',
   'autosaves',
   'settings',
+  'ai_usage',
 ];
 
 describe('migrations', () => {
@@ -46,8 +47,8 @@ describe('migrations', () => {
     ctx.db.migrate();
     ctx.db.migrate();
 
-    expect(version).toBe(1);
-    expect(ctx.db.currentVersion()).toBe(1);
+    expect(version).toBe(2);
+    expect(ctx.db.currentVersion()).toBe(2);
 
     const tablesAfter = ctx.db
       .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -55,7 +56,10 @@ describe('migrations', () => {
       .sort();
     expect(tablesAfter).toEqual(tablesBefore);
     expect(ctx.db.all('SELECT version, name FROM migrations')).toEqual(migrationsBefore);
-    expect(migrationsBefore).toEqual([{ version: 1, name: 'initial-schema' }]);
+    expect(migrationsBefore).toEqual([
+      { version: 1, name: 'initial-schema' },
+      { version: 2, name: 'ai-usage' },
+    ]);
   });
 
   it('重复 migrate 不破坏已有数据', () => {
@@ -123,6 +127,18 @@ describe('migrations', () => {
       { name: 'key', type: 'TEXT', notnull: 0, pk: 1 },
       { name: 'value', type: 'TEXT', notnull: 1, pk: 0 },
     ]);
+
+    expect(columns('ai_usage')).toEqual([
+      { name: 'id', type: 'TEXT', notnull: 0, pk: 1 },
+      { name: 'at', type: 'INTEGER', notnull: 1, pk: 0 },
+      { name: 'model', type: 'TEXT', notnull: 1, pk: 0 },
+      { name: 'config_id', type: 'TEXT', notnull: 0, pk: 0 },
+      { name: 'feature', type: 'TEXT', notnull: 0, pk: 0 },
+      { name: 'prompt_tokens', type: 'INTEGER', notnull: 1, pk: 0 },
+      { name: 'completion_tokens', type: 'INTEGER', notnull: 1, pk: 0 },
+      { name: 'total_tokens', type: 'INTEGER', notnull: 1, pk: 0 },
+      { name: 'points', type: 'INTEGER', notnull: 1, pk: 0 },
+    ]);
   });
 
   it('重开数据库文件：迁移不重复执行，数据完整保留', async () => {
@@ -134,7 +150,7 @@ describe('migrations', () => {
 
     const reopened = await Database.open(ctx.dbPath);
     try {
-      expect(reopened.currentVersion()).toBe(1);
+      expect(reopened.currentVersion()).toBe(2);
       expect(reopened.all("SELECT value FROM settings WHERE key = 'theme'")).toEqual([
         { value: 'light' },
       ]);

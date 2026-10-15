@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, Code2, FolderOpen, HardDrive, Moon, Sun, Type } from 'lucide-react';
+import { ChevronDown, Code2, FolderOpen, Gauge, HardDrive, Moon, Sun, Type } from 'lucide-react';
 import { Modal } from './Modal';
 import { Select } from './Select';
 import { AiConfigSection } from './AiConfigSection';
@@ -7,6 +7,7 @@ import { MacroSection } from './MacroSection';
 import { Button } from './Button';
 import { toast } from '../stores/toastStore';
 import { useUiStore, type ThemeMode } from '../stores/uiStore';
+import { useAiMeteringStore, AI_METER_RECENT_LIMIT } from '../stores/aiMeteringStore';
 import { FONT_GROUPS } from '../lib/fonts';
 
 /** 可折叠设置分区（手风琴）：标题可点击展开/收起 */
@@ -120,6 +121,106 @@ function StorageSectionBody() {
   );
 }
 
+/** 计量流水时间戳格式化（本地时间） */
+function formatMeterTime(ms: number): string {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 数字千分位（token / 积分展示） */
+function formatCount(n: number): string {
+  return n.toLocaleString('zh-CN');
+}
+
+/**
+ * 算力用量分区（为后续 AI 功能与商业化铺路）：
+ * 展示 AI 调用的总调用数 / 总 token / 总积分，以及最近用量流水（模型 / 时间 / token / 积分）。
+ * 数据经 IPC 从主进程本地库读取（`ai:meter:summary` / `ai:meter:records`）。
+ */
+function MeteringSectionBody() {
+  const summary = useAiMeteringStore((s) => s.summary);
+  const records = useAiMeteringStore((s) => s.records);
+  const loading = useAiMeteringStore((s) => s.loading);
+  const loaded = useAiMeteringStore((s) => s.loaded);
+  const loadSummary = useAiMeteringStore((s) => s.loadSummary);
+  const loadRecords = useAiMeteringStore((s) => s.loadRecords);
+
+  useEffect(() => {
+    void loadSummary().catch(() => undefined);
+    void loadRecords().catch(() => undefined);
+  }, [loadSummary, loadRecords]);
+
+  return (
+    <>
+      <p className="text-tiny leading-relaxed text-muted">
+        AI 调用消耗的算力会按「模型 + token 用量」折算为积分并记账。当前仅展示统计口径——
+        后续 AI 功能与商业化（token → 积分计量）将复用该计量链路。
+      </p>
+
+      {/* 汇总卡片：总调用数 / 总 token / 总积分 */}
+      <div className="grid grid-cols-3 gap-1.5">
+        <div className="flex flex-col rounded-sm border border-border bg-muted-bg/50 px-2.5 py-2">
+          <span className="text-tiny text-muted">总调用数</span>
+          <span className="text-body font-medium text-fg">{formatCount(summary.totalCalls)}</span>
+        </div>
+        <div className="flex flex-col rounded-sm border border-border bg-muted-bg/50 px-2.5 py-2">
+          <span className="text-tiny text-muted">总 token</span>
+          <span className="text-body font-medium text-fg">{formatCount(summary.totalTokens)}</span>
+        </div>
+        <div className="flex flex-col rounded-sm border border-border bg-muted-bg/50 px-2.5 py-2">
+          <span className="text-tiny text-muted">总积分</span>
+          <span className="text-body font-medium text-accent">
+            {formatCount(summary.totalPoints)}
+          </span>
+        </div>
+      </div>
+
+      {/* 最近用量流水 */}
+      <div className="flex items-center justify-between">
+        <span className="text-tiny font-medium text-fg">最近用量</span>
+        <button
+          type="button"
+          className="rounded p-1 text-muted hover:bg-hover hover:text-accent disabled:opacity-40"
+          disabled={loading}
+          onClick={() => void loadRecords().catch(() => undefined)}
+        >
+          {loading ? '刷新中…' : '刷新'}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        {loaded && records.length === 0 && (
+          <div className="rounded border border-dashed border-border p-3 text-center text-tiny text-muted">
+            暂无 AI 用量记录。配置 AI 服务商并开始对话后，调用用量将在此汇总。
+          </div>
+        )}
+        {records.slice(0, AI_METER_RECENT_LIMIT).map((record) => (
+          <div
+            key={record.id}
+            className="flex items-center justify-between rounded border border-border px-2.5 py-1.5"
+          >
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-body text-fg">{record.model}</span>
+              <span className="truncate text-tiny text-muted">
+                {formatMeterTime(record.at)}
+                {record.feature ? ` · ${record.feature}` : ''}
+              </span>
+            </div>
+            <div className="flex shrink-0 flex-col items-end">
+              <span className="text-tiny text-muted">
+                {formatCount(record.usage.totalTokens)} token
+              </span>
+              <span className="text-tiny text-accent">-{formatCount(record.points)} 积分</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 /** 主题分段按钮（浅色 / 深色） */
 function ThemeSegmented({
   theme,
@@ -169,6 +270,11 @@ export function SettingsPanel() {
         {/* AI 服务商配置（T4.2）—— 可折叠；默认展开，避免藏起核心配置 */}
         <CollapsibleSection title="AI 服务商" defaultOpen={true}>
           <AiConfigSection />
+        </CollapsibleSection>
+
+        {/* 算力用量（token → 积分计量）：汇总 + 最近用量流水，为后续 AI 商业化铺路 */}
+        <CollapsibleSection title="算力用量" icon={Gauge} defaultOpen={false}>
+          <MeteringSectionBody />
         </CollapsibleSection>
 
         {/* 字体（版权合规版）：推荐免费商用字体 + 官方下载直达（docs/fonts.md） */}

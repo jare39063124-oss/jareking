@@ -2,7 +2,7 @@
  * 数据库迁移列表：按 version 升序应用。
  * 新增迁移只需在数组末尾追加一项（version 递增），切勿修改已应用的迁移。
  * 字段严格对齐 src/contracts/ 中的 DocumentMeta / RecentFile / AutosaveSnapshot /
- * LocalAccount / PointsEntry / PointsBalance 契约。
+ * LocalAccount / PointsEntry / PointsBalance / AiUsageRecord 契约。
  */
 import type { Migration } from './database.js';
 
@@ -58,6 +58,28 @@ export const MIGRATIONS: Migration[] = [
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );
+      `);
+    },
+  },
+  {
+    // v2：AI 算力计量——用量流水表（字段对齐 contracts/ai.ts 的 AiUsageRecord）
+    version: 2,
+    name: 'ai-usage',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_usage (
+          id TEXT PRIMARY KEY,
+          at INTEGER NOT NULL,
+          model TEXT NOT NULL,
+          config_id TEXT,
+          feature TEXT,
+          prompt_tokens INTEGER NOT NULL,
+          completion_tokens INTEGER NOT NULL,
+          total_tokens INTEGER NOT NULL,
+          points INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_usage_at ON ai_usage (at DESC);
       `);
     },
   },

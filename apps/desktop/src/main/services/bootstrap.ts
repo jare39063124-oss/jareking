@@ -11,6 +11,7 @@ import {
 } from './documentLibraryService.js';
 import { AiConfigService } from './aiConfigService.js';
 import { MacroService } from './macroService.js';
+import { getAiMeteringService, type AiMeteringService } from './aiMeteringService.js';
 
 /** 主进程全部本地服务实例 */
 export interface AppServices {
@@ -19,6 +20,7 @@ export interface AppServices {
   library: DocumentLibraryService;
   ai: AiConfigService;
   macro: MacroService;
+  metering: AiMeteringService;
 }
 
 /** 初始化全部本地服务（内部为单例，重复调用返回同一组实例） */
@@ -28,5 +30,6 @@ export async function initServices(): Promise<AppServices> {
   const library = await getDocumentLibraryService();
   const ai = new AiConfigService();
   const macro = new MacroService();
-  return { db, account, library, ai, macro };
+  const metering = await getAiMeteringService();
+  return { db, account, library, ai, macro, metering };
 }
