@@ -1,7 +1,7 @@
 # jareking 工程说明书（面向 Agent / AI 协作）
 
-> 用途：修复 bug、优化迭代、新增功能时，让 Agent 无需通读全仓即可快速定位模块、复现环境、理解约定。
-> 维护规则：任何人（人或 Agent）改动架构 / 新增模块 / 修正重大风险后，同步更新本文件第 5、6、7 节。
+> 用途：修复 bug、优化迭代、新增功能时，让 Agent 无需通读全仓即可快速定位模块、复现环境、理解约定。>   
+> 维护规则：任何人（人或 Agent）改动架构 / 新增模块 / 修正重大风险后，同步更新本文件第 5、6、7 节。>   
 > 配套文档：`spec.md`（产品规格 v1.1）、`todo.md`（Phase 0–8 任务与验收，含当前勾选状态）。
 
 ---
@@ -48,32 +48,33 @@ jareking/
 
 ### 2.1 各包职责与关键文件
 
-| 包 | 职责 | 必读文件 |
-|---|---|---|
-| `packages/core` | SQLite（SQL.js WASM）、本地账户、积分账本、文档库、自动保存；**接口契约单一事实源** | `src/contracts/*.ts`（ai/account/document/license）、`src/db/`、`src/library/autosaveManager.ts`、`src/account/pointsLedger.ts` |
-| `packages/writer` | **自研** docx 模型/解析/导出；保真分级 L1/L2/L3 | `src/model/document.ts`（模型）、`src/parser/docxParser.ts`、`src/exporter/document.ts`、`src/exporter/units.ts`（单位换算，解析/导出必须互逆）、`src/model/fidelity.ts` |
-| `packages/sheet` | xlsx 读写为 ExcelJS；公式与单元格渲染由 Univer 承担 | `src/parser/xlsxParser.ts`、`src/exporter/index.ts`、`src/exporter/csv.ts` |
-| `packages/presentation` | pptx 解析（JSZip+fast-xml）+ **自研**序列化导出 | `src/parser/pptxParser.ts`、`src/exporter/index.ts`、`src/model/index.ts` |
-| `packages/ai` | AIAdapter（OpenAI兼容/Claude/Gemini/Ollama）、流式/重试、Planner→Executor 的 ops 协议 | `src/adapter.ts`、`src/planner/{writerOps,sheetOps,presentationOps}.ts`、`src/planner/index.ts` |
-| `packages/pdf` | pdf-lib 页面级操作 | `src/index.ts` |
+| 包                       | 职责                                                                       | 必读文件                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core`         | SQLite（SQL.js WASM）、本地账户、积分账本、文档库、自动保存；**接口契约单一事实源**                     | `src/contracts/*.ts`（ai/account/document/license）、`src/db/`、`src/library/autosaveManager.ts`、`src/account/pointsLedger.ts`                        |
+| `packages/writer`       | **自研** docx 模型/解析/导出；保真分级 L1/L2/L3                                       | `src/model/document.ts`（模型）、`src/parser/docxParser.ts`、`src/exporter/document.ts`、`src/exporter/units.ts`（单位换算，解析/导出必须互逆）、`src/model/fidelity.ts` |
+| `packages/sheet`        | xlsx 读写为 ExcelJS；公式与单元格渲染由 Univer 承担                                     | `src/parser/xlsxParser.ts`、`src/exporter/index.ts`、`src/exporter/csv.ts`                                                                          |
+| `packages/presentation` | pptx 解析（JSZip+fast-xml）+ **自研**序列化导出                                     | `src/parser/pptxParser.ts`、`src/exporter/index.ts`、`src/model/index.ts`                                                                           |
+| `packages/ai`           | AIAdapter（OpenAI兼容/Claude/Gemini/Ollama）、流式/重试、Planner→Executor 的 ops 协议 | `src/adapter.ts`、`src/planner/{writerOps,sheetOps,presentationOps}.ts`、`src/planner/index.ts`                                                     |
+| `packages/pdf`          | pdf-lib 页面级操作                                                            | `src/index.ts`                                                                                                                                    |
 
 ### 2.2 渲染进程关键文件
 
-| 文件 | 职责 |
-|---|---|
-| `writer/WriterEditor.tsx` | TipTap 编辑器；加载= `parseDocx→jkToHtml→setContent`；保存= `htmlToJk→exportDocx`；持有 `__jkWriterDebug` |
-| `writer/jkToHtml.ts` / `htmlToJk.ts` | 文档模型 ↔ HTML（编辑器 ↔ 模型 ↔ 文件 的枢纽，**任何格式漂移先查这里**） |
-| `writer/opsExecutor.ts` | AI ops 的本地确定性执行；新增 Writer AI 能力在此接 |
-| `sheet/univerAdapter.ts` | Univer ↔ JkWorkbook 双向映射（`JK→Univer` 打开、`Univer→JK` 保存）；**样式回写目前是空实现，见第 7 节** |
-| `sheet/SheetEditor.tsx` | 挂载 Univer、打开/保存/重置、查找替换、单元格格式（Ctrl+1）、**插入图表（T2.5，选区→PNG 生成/预览/下载）**、持有 `__jkDebug` |
-| `sheet/chartData.ts` | 单元格矩阵 → 图表数据（`buildChartData`，纯函数；Sheet 图表复用 `lib/chartRenderer`） |
-| `slide/SlideEditor.tsx` | Konva 舞台；所有幻灯片/形状一次性渲染（无懒加载）；`addChart` 复用 `lib/chartRenderer`；持有 `__jkSlideDebug` |
-| `lib/chartRenderer.ts` | 零依赖 canvas→PNG 图表（bar/line/pie），**PPT 与 Sheet 共用**（原 `slide/chartRenderer.ts` 下沉，公共能力） |
-| `lib/fonts.ts` | 字体清单（系统/OFL/厂商三分组）+ 字号 + 字数统计；Ribbon/设置/编辑器共用（原 `writer/fonts.ts` 下沉） |
-| `lib/download.ts` | 统一下载助手 `downloadBlob`/`downloadDataUrl`（收敛各处重复的 createObjectURL + `<a download>`） |
-| `components/Ribbon.tsx` | 功能区（已支持折叠：`ribbonCollapsed` + Ctrl+F1） |
-| `components/AIPanel.tsx` | 右侧 AI 面板（可折叠 + 拖拽调宽 `aiPanelWidth`） |
-| `components/SettingsPanel.tsx` | 设置弹窗（分区可折叠 Accordion） |
+| 文件                                   | 职责                                                                                            |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `writer/WriterEditor.tsx`            | TipTap 编辑器；加载= `parseDocx→jkToHtml→setContent`；保存= `htmlToJk→exportDocx`；持有 `__jkWriterDebug` |
+| `writer/jkToHtml.ts` / `htmlToJk.ts` | 文档模型 ↔ HTML（编辑器 ↔ 模型 ↔ 文件 的枢纽，**任何格式漂移先查这里**）                                                 |
+| `writer/opsExecutor.ts`              | AI ops 的本地确定性执行；新增 Writer AI 能力在此接                                                            |
+| `sheet/univerAdapter.ts`             | Univer ↔ JkWorkbook 双向映射（`JK→Univer` 打开、`Univer→JK` 保存）；**样式回写目前是空实现，见第 7 节**                 |
+| `sheet/SheetEditor.tsx`              | 挂载 Univer、打开/保存/重置、查找替换、**插入图表（T2.5）**、持有 `__jkDebug`                                         |
+| `sheet/SheetEditor.tsx`              | 挂载 Univer、打开/保存/重置、单元格格式（Ctrl+1）、**插入图表（T2.5，选区→PNG 生成/预览/下载）**、持有 `__jkDebug`                |
+| `sheet/chartData.ts`                 | 单元格矩阵 → 图表数据（`buildChartData`，纯函数；Sheet 图表复用 `lib/chartRenderer`）                             |
+| `slide/SlideEditor.tsx`              | Konva 舞台；所有幻灯片/形状一次性渲染（无懒加载）；`addChart` 复用 `lib/chartRenderer`；持有 `__jkSlideDebug`            |
+| `lib/chartRenderer.ts`               | 零依赖 canvas→PNG 图表（bar/line/pie），**PPT 与 Sheet 共用**（原 `slide/chartRenderer.ts` 下沉，公共能力）        |
+| `lib/fonts.ts`                       | 字体清单（系统/OFL/厂商三分组）+ 字号 + 字数统计；Ribbon/设置/编辑器共用（原 `writer/fonts.ts` 下沉）                         |
+| `lib/download.ts`                    | 统一下载助手 `downloadBlob`/`downloadDataUrl`（收敛各处重复的 createObjectURL + `<a download>`）             |
+| `components/Ribbon.tsx`              | 功能区（已支持折叠：`ribbonCollapsed` + Ctrl+F1）                                                        |
+| `components/AIPanel.tsx`             | 右侧 AI 面板（可折叠 + 拖拽调宽 `aiPanelWidth`）                                                           |
+| `components/SettingsPanel.tsx`       | 设置弹窗（分区可折叠 Accordion）                                                                         |
 
 ---
 
@@ -131,11 +132,11 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 ## 4. 调试钩子（需 URL 带 `?jk-debug`）
 
-| 钩子 | 方法 | 用途 |
-|---|---|---|
-| `window.__jkWriterDebug` | `.html()` `.text()` | 取 Writer 当前 HTML / 纯文本 |
-| `window.__jkDebug` | `.snapshot()` `.runSheetAi(s)` `.activeSheet()` `.readCell(a1)` `.setValueAt(r,c,v)` `.getValueAt(r,c)` `.directSet()` | Sheet 当前工作簿快照 / 触发 AI / 读单元格 |
-| `window.__jkSlideDebug` | `.slideCount()` `.imageCount()` `.mediaCount()` `.insertChart()` `.renderChartTest()` `.runPresentationAi(s)` | PPT 幻灯片/媒体计数 / 插入图表 / 触发 AI |
+| 钩子                       | 方法                                                                                                                     | 用途                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `window.__jkWriterDebug` | `.html()` `.text()`                                                                                                    | 取 Writer 当前 HTML / 纯文本       |
+| `window.__jkDebug`       | `.snapshot()` `.runSheetAi(s)` `.activeSheet()` `.readCell(a1)` `.setValueAt(r,c,v)` `.getValueAt(r,c)` `.directSet()` | Sheet 当前工作簿快照 / 触发 AI / 读单元格 |
+| `window.__jkSlideDebug`  | `.slideCount()` `.imageCount()` `.mediaCount()` `.insertChart()` `.renderChartTest()` `.runPresentationAi(s)`          | PPT 幻灯片/媒体计数 / 插入图表 / 触发 AI  |
 
 调试流程：带 `--jk-debug` 启动 → 打开对应模块 → 在 CDP `Runtime.evaluate` 里调用钩子（冒烟脚本即此模式）。
 
@@ -158,6 +159,7 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 > 结论时间线：**2026-10-14** 首轮复检（🔴/🟠/🟡 分级）；**2026-10-15** 复检问题逐步修复（#46/#47/#48 已落地，仅大文件深层架构债暂缓，见下）。
 
 ### ✅ #46 大文件（100MB+）稳定性 —— 已落地「安全降级」缓解（非根治）
+
 - **已做（不丢交互、不崩溃）**：
   - `lib/largeFile.ts` 新增 `LARGE_FILE_WARN_BYTES=30MB` / `LARGE_FILE_HARD_BYTES=200MB`、`fileSizeLevel()`、`formatBytes()`、`largeFileHint(bytes,'word'|'ppt')` —— 统一告警阈值与文案。
   - `WriterEditor.tsx`：开大文档时先 `setTimeout(0)` 让出主线程再 `setContent`，期间挂 `LoadingOverlay` 遮罩，**解析不冻结 UI**；超阈值弹可关闭的"大文件"横幅提示（非阻塞）。
@@ -168,12 +170,15 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 - **✅ ③ Sheet/PPT 解析迁 Worker + PPT 流式解压（#46-C，已落地 2026-10-15）**：① 解析迁移 Web Worker——`lib/parseDispatch.ts`（纯分发，worker/单测共用）+ `lib/parse.worker.ts`（独立 chunk 1.8MB，含 exceljs+fflate）+ `lib/parseClient.ts`（transferable 零拷贝 buffer 转移 + 10 分钟超时自动重建），`SheetEditor`/`SlideEditor` 打开文件改走 `parseInWorker`：主线程不再冻结、worker 崩溃被隔离。② PPT 解析改 **fflate 流式解压**（原评估的 yauzl 为 Node-only 不可用于渲染进程，换浏览器同构的 fflate）——逐条目按需解压，幻灯片 XML 解析完即丢弃、theme/embeddings/docProps 等不驻留，峰值下降；解析逻辑零改动。**顺带修复存量 bug**：`createWb` 固定 unit id `jareking-sheet` 重复创建抛 "cannot create a unit with the same unit id"（打开 xlsx 必炸，该链路此前从未端到端验证过），现先 `disposeUnit` 卸载旧 unit；两个 Editor 静默 catch 补 `console.error`。新增 `packages/presentation/test/pptxParser.test.ts`（2 测）与 `scripts/worker-smoke.mjs`（CDP 注入真实 xlsx/pptx 端到端）。**验证**：presentation 2/2 + 桌面 32/32 单测；全仓 typecheck；build；worker-smoke / gui-smoke / chunk-smoke 全绿 0 控制台错误。
 - **⏸ 暂缓（真正流式 xlsx 读取器，明确不丢项，排入 M3）**：exceljs 不支持流式读，Worker 隔离已解决「冻结 + 崩溃隔离」但 Sheet 内存峰值仍随体积线性增长。真流式 xlsx 解析（自行解析 sharedStrings/sheet XML/styles）工作量大，排 M3（T8.3）按实测数据决定是否立项。
 
+
 ### ✅ #47 Sheet 样式回写断裂（跨设备保真回归）—— 已根治
+
 - 旧 `sheet/univerAdapter.ts` 注释"样式暂不映射"，`styles:{}`，保存只回读公式/合并 → Univer 里改的填充/字体/边框/对齐**存盘即丢**。
 - **修复**：`univerAdapter.ts` 新增 `jkStyleToUniver()` / `univerStyleToJk()` 双向映射（`IStyleData` ↔ `JkCellStyle`，覆盖 bold/italic/underline/strike/color/bgColor/fontSize/fontFamily/对齐/换行/数字格式/四向边框）；`StyleRegistry` 内容去重避免大表样式表膨胀；`sheetToUniver` 写 `s=sid`，`cellDataToJk` 读 `u.s`（sid 或内联对象）回写。保真结论升级为"样式已双向映射"。
 - **验证**：`univerAdapter.test.ts` 7/7 通过（写入/去重/常规对齐跳过/回读全字段/内联对象/ rgb() 归一化 / JK→Univer→JK 往返）；桌面端 typecheck 通过。
 
 ### ✅ #48 Writer 域（页码/目录/交叉引用/公式域）—— 已建模（简单+复杂域）
+
 - 旧 `docxParser.ts` 将 `fldsimple/fldchar/instrtxt` 记为 `field` 类 UnsupportedFeature，未建模 → round-trip 降级为静态文本，Word/WPS 打开后页码/目录/公式不重算。
 - **修复**：
   - 模型：`model/document.ts` `Inline` 联合新增 `Field`（`type:'field'`、`instr`、`result?`）。
@@ -184,12 +189,15 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 - **已知局限（不丢项，留痕）**：仅保留指令+结果（fldSimple 形态），未保留 `separate/end` 之间的完整 run 格式细节；嵌套域、IF/INDEX 等带参数域的指令原文保留但 jareking 不重算值（交给 Word/WPS 打开时计算），符合 v1 L2 保真预期。
 
 ### 🟠 命名样式未保留为 Word 样式（复查已确认：实际已完整，非缺口）
+
 - 复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已**完整贯通** Word 命名样式（Heading 1 等）的读写 —— 该项**不是真实缺口**，已从风险清单移除（留痕以免重复排查）。
 
 ### 🟡 字体未嵌入
+
 - 未嵌入字体子集，目标设备缺字体会回退。与 WPS 默认行为一致（非缺陷），但中文文档跨设备需留意字体可用性。
 
 ### 已验证"不会坏"的项（避免重复排查）
+
 - **公式写回 xlsx：正常**。`xlsxParser` 读 `f`（去 `=`）、`exporter/index.ts:78` 写 `cell.value={formula}`、`univerAdapter` 双向映射，公式可存活（含本次 #47 样式映射）。
 - **表格底纹（shd）保真：已补全**（cell/row/table 三级，`packages/writer` + 桌面端 HTML 链路），有单测。
 - **Sheet 单元格样式保真：已补全**（#47，双向映射 + 去重），有单测。
@@ -200,18 +208,18 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 ## 7. 症状 → 定位索引（bug 排查起点）
 
-| 现象 | 先看 |
-|---|---|
-| 打开 .docx 后格式丢/乱 | `writer/jkToHtml.ts`、`writer/htmlToJk.ts`、`packages/writer/src/exporter/document.ts`、`packages/writer/src/model/document.ts` |
-| 保存后再打开结构变了 | `packages/writer` 的 `exporter` 与 `parser` 单位换算（`exporter/units.ts` 必须互逆） |
-| 表格显示/保存异常 | `packages/writer/src/model/document.ts` 的 `Table*` 类型 + `exporter/document.ts` 的 `serializeTable*` + `jkToHtml/htmlToJk` 的 `renderTable/parseTable` |
-| Sheet 公式算错/丢 | `packages/sheet/src/parser/xlsxParser.ts`、`exporter/index.ts`、`sheet/univerAdapter.ts`、`packages/ai/src/planner/sheetOps.ts` |
-| Sheet 改了样式存盘没变 | **优先查 `sheet/univerAdapter.ts` 的 `univerToJk`（样式回写空实现）** |
-| PPT 打不开/图形错位 | `packages/presentation/src/parser/pptxParser.ts`、`exporter/index.ts`（EMU↔px 换算） |
-| AI 指令不生效 | `packages/ai/src/planner/*`、`apps/desktop/.../writer/opsExecutor.ts`、`sheet/SheetEditor.tsx` 的 `aiRunRef`、`slide/SlideEditor.tsx` 的执行器 |
-| 弹窗按钮点了没反应 | `components/Modal.tsx`（必须 portal 到 `#root` 内，不能到 `document.body`） |
-| 大文件卡死/OOM | `docxParser.ts` 的 `loadAsync` + `WriterEditor` 的 `setContent`；`SlideEditor` 的全量渲染 |
-| 控制台报错 | 跑 `scripts/gui-smoke.mjs`，关注 `consoleErrors` 字段 |
+| 现象              | 先看                                                                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 打开 .docx 后格式丢/乱 | `writer/jkToHtml.ts`、`writer/htmlToJk.ts`、`packages/writer/src/exporter/document.ts`、`packages/writer/src/model/document.ts`                        |
+| 保存后再打开结构变了      | `packages/writer` 的 `exporter` 与 `parser` 单位换算（`exporter/units.ts` 必须互逆）                                                                            |
+| 表格显示/保存异常       | `packages/writer/src/model/document.ts` 的 `Table*` 类型 + `exporter/document.ts` 的 `serializeTable*` + `jkToHtml/htmlToJk` 的 `renderTable/parseTable` |
+| Sheet 公式算错/丢    | `packages/sheet/src/parser/xlsxParser.ts`、`exporter/index.ts`、`sheet/univerAdapter.ts`、`packages/ai/src/planner/sheetOps.ts`                        |
+| Sheet 改了样式存盘没变  | **优先查 `sheet/univerAdapter.ts` 的 `univerToJk`（样式回写空实现）**                                                                                            |
+| PPT 打不开/图形错位    | `packages/presentation/src/parser/pptxParser.ts`、`exporter/index.ts`（EMU↔px 换算）                                                                     |
+| AI 指令不生效        | `packages/ai/src/planner/*`、`apps/desktop/.../writer/opsExecutor.ts`、`sheet/SheetEditor.tsx` 的 `aiRunRef`、`slide/SlideEditor.tsx` 的执行器              |
+| 弹窗按钮点了没反应       | `components/Modal.tsx`（必须 portal 到 `#root` 内，不能到 `document.body`）                                                                                   |
+| 大文件卡死/OOM       | `docxParser.ts` 的 `loadAsync` + `WriterEditor` 的 `setContent`；`SlideEditor` 的全量渲染                                                                   |
+| 控制台报错           | 跑 `scripts/gui-smoke.mjs`，关注 `consoleErrors` 字段                                                                                                     |
 
 ---
 

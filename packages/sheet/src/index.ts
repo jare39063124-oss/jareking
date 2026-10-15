@@ -11,3 +11,4 @@ export * from './exporter/index.js';
 export * from './exporter/csv.js';
 export * from './findReplace.js';
 export * from './cellStyle.js';
+export * from './pivot.js';

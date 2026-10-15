@@ -25,7 +25,7 @@ import DvZhCN from '@univerjs/preset-sheets-data-validation/locales/zh-CN';
 import '@univerjs/preset-sheets-core/lib/index.css';
 import type { FUniver } from '@univerjs/presets';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
-import { BarChart3, Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles } from 'lucide-react';
+import { BarChart3, Download, FileSpreadsheet, FolderOpen, Paintbrush, RefreshCw, Search, Sparkles, Table2 } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -48,10 +48,16 @@ import {
   cellValueStr,
   normalizeColor,
   normalizeCellStyle,
+  colToLetters,
+  parseA1Range,
+  buildPivot,
+  pivotToNumber,
   type JkWorkbook,
   type JkCellStyle,
   type FindResult,
   type FindOpts,
+  type PivotConfig,
+  type PivotAgg,
 } from '@jareking/sheet';
 
 /**
@@ -169,6 +175,24 @@ export function SheetEditor() {
   const [chartTitle, setChartTitle] = useState('');
   const [chartPng, setChartPng] = useState<string | null>(null);
   const [chartError, setChartError] = useState<string | null>(null);
+
+  // 数据透视表（WPS 对齐专项）：选区 → buildPivot → 写入新工作表
+  const [pivotOpen, setPivotOpen] = useState(false);
+  /** 数据范围（A1 记法，默认取当前选区） */
+  const [pivotRange, setPivotRange] = useState('A1');
+  /** 由选区首行推断出的字段名（供行/列/值字段选择） */
+  const [pivotFields, setPivotFields] = useState<string[]>([]);
+  /** 首行是否作为表头（由首行是否全为非数字推断，可手动切换） */
+  const [pivotHasHeader, setPivotHasHeader] = useState(true);
+  /** 行字段列索引（可多选=多级分组） */
+  const [pivotRowFields, setPivotRowFields] = useState<number[]>([]);
+  /** 列字段列索引（可选：横向展开） */
+  const [pivotColField, setPivotColField] = useState<number | null>(null);
+  /** 值字段列索引 */
+  const [pivotValueField, setPivotValueField] = useState<number>(0);
+  /** 聚合方式 */
+  const [pivotAgg, setPivotAgg] = useState<PivotAgg>('sum');
+  const [pivotError, setPivotError] = useState<string | null>(null);
 
   const configs = useAiStore((s) => s.configs);
   const aiLoaded = useAiStore((s) => s.loaded);
@@ -741,6 +765,170 @@ export function SheetEditor() {
     toast.success('已导出图表 PNG');
   };
 
+  /* =========================================================================
+   * 数据透视表（WPS 对齐专项）
+   * 范式：选区 getValues() → buildPivot（纯函数）→ 结果写入新工作表（insertSheet）。
+   * ========================================================================= */
+
+  /** 读取指定范围的单元格矩阵；范围非法/无活动表 → null */
+  const readPivotMatrix = (
+    rangeStr: string,
+  ): (string | number | boolean | null | undefined)[][] | null => {
+    const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+    if (!sheet) return null;
+    const range = rangeStr.trim();
+    if (!range) return null;
+    try {
+      // FRange.getValues() 返回选区二维值矩阵（行→列）
+      return sheet.getRange(range).getValues() as (string | number | boolean | null | undefined)[][];
+    } catch {
+      return null;
+    }
+  };
+
+  /** 由选区矩阵推断字段名与「首行是否表头」（首行全为非数字 → 视为表头） */
+  const derivePivotFieldList = (
+    matrix: (string | number | boolean | null | undefined)[][] | null,
+  ): { names: string[]; hasHeader: boolean } => {
+    if (!matrix || !matrix.length) return { names: [], hasHeader: false };
+    const colCount = Math.max(...matrix.map((r) => r.length), 1);
+    const first = matrix[0] ?? [];
+    const nonEmpty = first
+      .slice(0, colCount)
+      .filter((c) => c !== null && c !== undefined && String(c).trim() !== '');
+    const hasHeader = nonEmpty.length > 0 && nonEmpty.every((c) => pivotToNumber(c) === null);
+    const names = Array.from({ length: colCount }, (_, i) => {
+      const v = first[i];
+      if (hasHeader && v !== null && v !== undefined && String(v).trim() !== '') return String(v);
+      return `列${colToLetters(i)}`;
+    });
+    return { names, hasHeader };
+  };
+
+  /** 应用字段清单并重置默认选择（第 0 列作行字段、末列作值字段） */
+  const applyPivotFieldList = (
+    matrix: (string | number | boolean | null | undefined)[][] | null,
+  ): void => {
+    const { names, hasHeader } = derivePivotFieldList(matrix);
+    setPivotFields(names);
+    setPivotHasHeader(hasHeader);
+    setPivotRowFields(names.length ? [0] : []);
+    setPivotColField(null);
+    setPivotValueField(names.length > 1 ? names.length - 1 : 0);
+  };
+
+  /** 打开「数据透视表」：预填当前选区 A1、按选区首行推导字段清单 */
+  const openPivotDialog = () => {
+    const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet();
+    const a1 = sheet?.getActiveRange?.()?.getA1Notation?.() ?? 'A1';
+    setPivotRange(a1);
+    setPivotAgg('sum');
+    setPivotError(null);
+    applyPivotFieldList(readPivotMatrix(a1));
+    setPivotOpen(true);
+  };
+
+  /** 按当前「数据范围」重新读取并推导字段清单（范围被手动修改时用） */
+  const onReloadPivotFields = () => {
+    const matrix = readPivotMatrix(pivotRange);
+    if (!matrix) {
+      setPivotError('无法读取该范围，请检查地址（如 A1:D20）');
+      return;
+    }
+    setPivotError(null);
+    applyPivotFieldList(matrix);
+  };
+
+  /** 切换行字段勾选（保持升序，确定性） */
+  const togglePivotRowField = (idx: number) => {
+    setPivotRowFields((prev) =>
+      prev.includes(idx) ? prev.filter((x) => x !== idx) : [...prev, idx].sort((a, b) => a - b),
+    );
+  };
+
+  /** 生成新工作表名（「数据透视表」「数据透视表2」…，避免重名） */
+  const nextPivotSheetName = (fwb: NonNullable<ReturnType<FUniver['getActiveWorkbook']>>): string => {
+    const base = '数据透视表';
+    const names = new Set(fwb.getSheets().map((s) => s.getSheetName()));
+    if (!names.has(base)) return base;
+    let i = 2;
+    while (names.has(`${base}${i}`)) i++;
+    return `${base}${i}`;
+  };
+
+  /**
+   * 生成数据透视表：读选区 → buildPivot → 写入新工作表；
+   * 若 Univer 建表 API 不可用，退化为「写入当前表源区域右侧空区」并如实提示。
+   */
+  const generatePivot = () => {
+    setPivotError(null);
+    const api = apiRef.current;
+    const fwb = api?.getActiveWorkbook();
+    const sheet = fwb?.getActiveSheet();
+    if (!api || !fwb || !sheet) {
+      setPivotError('表格尚未就绪');
+      return;
+    }
+    if (!pivotRowFields.length) {
+      setPivotError('请至少选择一个行字段');
+      return;
+    }
+    const matrix = readPivotMatrix(pivotRange);
+    if (!matrix) {
+      setPivotError('无法读取该范围，请检查地址（如 A1:D20）');
+      return;
+    }
+    const config: PivotConfig = {
+      rowFields: pivotRowFields,
+      colField: pivotColField === null ? undefined : pivotColField,
+      values: [{ field: pivotValueField, agg: pivotAgg }],
+      hasHeader: pivotHasHeader,
+    };
+    const result = buildPivot(matrix, config);
+    if (!result.rows.length) {
+      setPivotError('所选范围没有可汇总的数据');
+      return;
+    }
+
+    // 结果矩阵：表头 + 数据行，补齐为等宽（缺列补空串）
+    const all: (string | number)[][] = [result.header, ...result.rows];
+    const cols = Math.max(...all.map((r) => r.length), 1);
+    const values: (string | number)[][] = all.map((r) =>
+      Array.from({ length: cols }, (_, c) => (r[c] === undefined ? '' : r[c])),
+    );
+
+    try {
+      // 主路径：写入新建工作表（FWorkbook.insertSheet，1.0.4 实测可用）
+      const name = nextPivotSheetName(fwb);
+      const newSheet = fwb.insertSheet(name);
+      newSheet.getRange(0, 0, values.length, cols).setValues(values);
+      // 表头加粗（样式失败不阻断）
+      try {
+        newSheet.getRange(0, 0, 1, cols).setFontWeight('bold');
+      } catch {
+        /* 忽略：部分版本字体接口差异 */
+      }
+      newSheet.activate();
+      toast.success(`已生成数据透视表「${name}」`);
+      setPivotOpen(false);
+    } catch (err) {
+      // 退化路径：建表失败 → 写入当前表源区域右侧空区，避免覆盖源数据
+      try {
+        const parsed = parseA1Range(pivotRange.trim());
+        const startRow = parsed?.startRow ?? 0;
+        const startCol = (parsed?.endCol ?? 0) + 2; // 右侧留 1 列空白间隔
+        sheet.getRange(startRow, startCol, values.length, cols).setValues(values);
+        toast.success(
+          `已生成数据透视表（写入当前表右侧 ${colToLetters(startCol)}${startRow + 1} 起）`,
+        );
+        setPivotOpen(false);
+      } catch (err2) {
+        setPivotError(`生成失败：${err2 instanceof Error ? err2.message : String(err2)}`);
+        console.warn('[数据透视表] 写入失败:', err, err2);
+      }
+    }
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 顶栏：文件操作（编辑能力由 Univer 自带工具栏提供） */}
@@ -772,6 +960,16 @@ export function SheetEditor() {
           aria-label="插入图表"
         >
           插入图表
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<Table2 size={13} />}
+          onClick={openPivotDialog}
+          title="数据透视表"
+          aria-label="数据透视表"
+        >
+          数据透视表
         </Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
@@ -1263,6 +1461,131 @@ export function SheetEditor() {
               />
             </div>
           )}
+        </div>
+      </Modal>
+
+      {/* 数据透视表（WPS 对齐专项）：选区首行表头 → 行/列/值字段选择 → buildPivot → 写入新工作表。
+          严禁 window.prompt/alert；字段名由选区首行推导，可点「读取字段」按新范围刷新。 */}
+      <Modal
+        open={pivotOpen}
+        onClose={() => setPivotOpen(false)}
+        title="数据透视表"
+        width={480}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setPivotOpen(false)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={generatePivot}>
+              生成
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">数据范围</span>
+            <div className="flex items-center gap-2">
+              <Input
+                aria-label="数据范围"
+                className="w-full"
+                value={pivotRange}
+                onChange={(e) => setPivotRange(e.target.value)}
+                placeholder="如 A1:D20（默认当前选区）"
+              />
+              <Button variant="secondary" size="sm" onClick={onReloadPivotFields}>
+                读取字段
+              </Button>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-1.5 text-tiny text-fg">
+            <input
+              type="checkbox"
+              checked={pivotHasHeader}
+              onChange={(e) => setPivotHasHeader(e.target.checked)}
+            />
+            首行为表头
+          </label>
+
+          {pivotFields.length === 0 && (
+            <p className="text-tiny text-muted">未读取到字段，请检查数据范围后点「读取字段」。</p>
+          )}
+
+          {pivotFields.length > 0 && (
+            <>
+              {/* 行字段（多选=多级分组） */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-tiny text-muted">行字段（可多选，多级分组）</span>
+                <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+                  {pivotFields.map((name, idx) => (
+                    <label key={`rf-${idx}`} className="flex items-center gap-1 text-tiny text-fg">
+                      <input
+                        type="checkbox"
+                        checked={pivotRowFields.includes(idx)}
+                        onChange={() => togglePivotRowField(idx)}
+                      />
+                      {name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 列字段（单选，可选：横向展开） */}
+              <div className="flex items-center gap-2">
+                <span className="w-20 shrink-0 text-tiny text-muted">列字段</span>
+                <select
+                  aria-label="列字段"
+                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={pivotColField === null ? '' : String(pivotColField)}
+                  onChange={(e) =>
+                    setPivotColField(e.target.value === '' ? null : Number(e.target.value))
+                  }
+                >
+                  <option value="">（无）</option>
+                  {pivotFields.map((name, idx) => (
+                    <option key={`cf-${idx}`} value={idx}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 值字段 + 聚合方式 */}
+              <div className="flex items-center gap-2">
+                <span className="w-20 shrink-0 text-tiny text-muted">值字段</span>
+                <select
+                  aria-label="值字段"
+                  className="flex-1 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={pivotValueField}
+                  onChange={(e) => setPivotValueField(Number(e.target.value))}
+                >
+                  {pivotFields.map((name, idx) => (
+                    <option key={`vf-${idx}`} value={idx}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="聚合方式"
+                  className="w-24 rounded border border-border bg-surface px-2 py-1 text-tiny text-fg"
+                  value={pivotAgg}
+                  onChange={(e) => setPivotAgg(e.target.value as PivotAgg)}
+                >
+                  <option value="sum">求和</option>
+                  <option value="count">计数</option>
+                  <option value="avg">平均值</option>
+                  <option value="max">最大值</option>
+                  <option value="min">最小值</option>
+                </select>
+              </div>
+            </>
+          )}
+
+          {pivotError && <p className="text-tiny text-warning">{pivotError}</p>}
+          <p className="text-tiny text-muted">
+            生成结果写入新建工作表「数据透视表」；若引擎不支持建表，则退化为写入源区域右侧空区。
+          </p>
         </div>
       </Modal>
     </div>
