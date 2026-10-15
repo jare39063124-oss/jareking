@@ -97,6 +97,23 @@ function parseSolidFill(solidFill: any): string | undefined {
   return undefined;
 }
 
+/**
+ * 从形状 cNvPr 取超链接关系 id（a:hlinkClick@r:id）。
+ *
+ * 结构（removeNSPrefix 后，标签不带 p:/a:/r: 前缀）：
+ *   cNvPr / hlinkClick@id
+ * 位置因形状而异：p:sp→nvSpPr/cNvPr、p:pic→nvPicPr/cNvPr、
+ * p:graphicFrame→nvGraphicFramePr/cNvPr（由调用方传入对应 cNvPr）。
+ * 仅返回关系 id，具体「外部 URL / 内部跳转」需结合该页 rels 判定。
+ */
+function hlinkRidOf(cNvPr: any): string | undefined {
+  for (const node of ensureArray(cNvPr?.hlinkClick)) {
+    const rid = getAttr(node, '@_id');
+    if (rid) return rid;
+  }
+  return undefined;
+}
+
 /** a:p（→ p）→ TextParagraph（含 run 格式） */
 function parseParagraph(p: any): TextParagraph {
   const para: TextParagraph = { runs: [] };
@@ -309,22 +326,32 @@ function parseGraphicFrame(gf: any): JkShape | null {
   return table;
 }
 
-/** spTree → JkShape[]（sp/pic/graphicFrame(表格) 按序；图表等 graphicFrame v1 降级） */
-function parseShapeTree(spTree: any): JkShape[] {
+/**
+ * spTree → { shapes, hlinkRids }。
+ *
+ * shapes：sp/pic/graphicFrame(表格) 按序；图表等 graphicFrame v1 降级跳过。
+ * hlinkRids：与 shapes 一一对齐的超链接关系 id（无则 undefined）——
+ * 因该页 rels 与本页 XML 是各自独立的 zip 条目（到达顺序不定），
+ * 超链接在此仅取 r:id，待主入口拿到 rels 后再回填 JkShape.hyperlink。
+ */
+function parseShapeTree(spTree: any): { shapes: JkShape[]; hlinkRids: (string | undefined)[] } {
   const shapes: JkShape[] = [];
+  const hlinkRids: (string | undefined)[] = [];
+  const push = (s: JkShape | null, rid: string | undefined) => {
+    if (!s) return;
+    shapes.push(s);
+    hlinkRids.push(rid);
+  };
   for (const sp of childArray(spTree, 'sp')) {
-    const s = parseSp(sp);
-    if (s) shapes.push(s);
+    push(parseSp(sp), hlinkRidOf(sp?.nvSpPr?.cNvPr));
   }
   for (const pic of childArray(spTree, 'pic')) {
-    const s = parsePic(pic);
-    if (s) shapes.push(s);
+    push(parsePic(pic), hlinkRidOf(pic?.nvPicPr?.cNvPr));
   }
   for (const gf of childArray(spTree, 'graphicFrame')) {
-    const s = parseGraphicFrame(gf);
-    if (s) shapes.push(s);
+    push(parseGraphicFrame(gf), hlinkRidOf(gf?.nvGraphicFramePr?.cNvPr));
   }
-  return shapes;
+  return { shapes, hlinkRids };
 }
 
 /* =========================================================================
@@ -443,6 +470,8 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
 interface SlideAccum {
   partName: string;
   shapes: JkShape[];
+  /** 与 shapes 一一对齐的超链接关系 id（无则 undefined），待主入口结合本页 rels 回填 hyperlink */
+  hlinkRids: (string | undefined)[];
   /** 切换效果：与模型 JkSlide.transition 保持一致（含 slide 推送） */
   transition: 'none' | 'fade' | 'slide';
 }
@@ -621,10 +650,12 @@ function streamUnzip(
         const tr = slideObj?.sld?.transition;
         const transition: 'none' | 'fade' | 'slide' =
           tr?.fade !== undefined ? 'fade' : tr?.push !== undefined ? 'slide' : 'none';
-        // 解析后立即丢弃 XML 字符串（仅留模型），降低峰值
+        // 形状树解析（含超链接关系 id 采集）；解析后立即丢弃 XML 字符串（仅留模型），降低峰值
+        const { shapes, hlinkRids } = parseShapeTree(spTree);
         slidesByPart.set(name, {
           partName: name,
-          shapes: parseShapeTree(spTree),
+          shapes,
+          hlinkRids,
           transition,
         });
         return;
@@ -749,10 +780,12 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
   for (const partName of orderedParts) {
     const accum = slidesByPart.get(partName);
     if (!accum) continue;
-    // 本页 media 提取（rId 每页独立，键为 `${index}:${relId}`）+ 版式关联
+    // 本页 media 提取（rId 每页独立，键为 `${index}:${relId}`）+ 版式关联 + 外部超链接解析
     const relsPath = partName.replace(/([^/]+)$/, '_rels/$1.rels');
     const relsXml = slideRelsByPart.get(relsPath);
     let layoutPart: string | undefined;
+    // 本页 rId → 外部超链接 URL（仅 TargetMode="External"；内部跳转 v1 忽略）
+    const externalHrefs = new Map<string, string>();
     if (relsXml) {
       const rels = parseXml(relsXml);
       for (const rel of childArray(rels?.Relationships, 'Relationship')) {
@@ -761,6 +794,16 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
         if (type.endsWith('/slideLayout')) {
           const target = getAttr(rel, '@_Target') ?? '';
           if (target) layoutPart = resolvePartName(partName, target);
+          continue;
+        }
+        // 对象超链接：仅取外部链接（TargetMode="External" → Target 即 URL）；
+        // 内部跳转（如 Target="#slide2"、无 TargetMode）v1 不建模，直接跳过
+        if (type.endsWith('/hyperlink')) {
+          if (getAttr(rel, '@_TargetMode') === 'External') {
+            const id = getAttr(rel, '@_Id') ?? '';
+            const target = getAttr(rel, '@_Target') ?? '';
+            if (id && target) externalHrefs.set(id, target);
+          }
           continue;
         }
         if (!type.endsWith('/image')) continue;
@@ -773,7 +816,16 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
         if (bytes) media[`${index}:${id}`] = bytes;
       }
     }
-    const slide: JkSlide = { partName, shapes: accum.shapes, transition: accum.transition };
+    // 回填形状超链接：按解析期采集的 r:id 关联本页外部 URL
+    let shapes = accum.shapes;
+    if (externalHrefs.size && accum.hlinkRids.some(Boolean)) {
+      shapes = accum.shapes.map((s, i) => {
+        const rid = accum.hlinkRids[i];
+        const url = rid ? externalHrefs.get(rid) : undefined;
+        return url ? { ...s, hyperlink: url } : s;
+      });
+    }
+    const slide: JkSlide = { partName, shapes, transition: accum.transition };
     if (layoutPart) slide.layout = layoutPart;
     slides.push(slide);
     index++;

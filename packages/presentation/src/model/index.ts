@@ -104,6 +104,12 @@ export interface ShapeBase {
   h: number;
   /** 旋转（度，顺时针，对应 xfrm@rot/60000） */
   rotation?: number;
+  /**
+   * 对象超链接（外部 URL，如 https://…；对应 cNvPr/a:hlinkClick → slide rels 的外部关系 Target）。
+   * 统一放在形状公共基类，四端（model/parser/exporter/SlideEditor）语义一致；
+   * 未设置时为 undefined。v1 仅支持外部链接，内部跳转（如 #slideN）暂不建模。
+   */
+  hyperlink?: string;
 }
 
 /** 文本框（含占位符文本） */

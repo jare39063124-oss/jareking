@@ -10,7 +10,7 @@
  * v1 范围：基础编辑（移动/文字/增删）；缩放变换手柄、多选、动画后续迭代。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Group, Image as KImage, Layer, Rect, Stage, Text as KText, Ellipse } from 'react-konva';
+import { Group, Image as KImage, Layer, Line, Rect, Stage, Text as KText, Ellipse } from 'react-konva';
 import type Konva from 'konva';
 import {
   Circle,
@@ -18,6 +18,7 @@ import {
   Download,
   FolderOpen,
   ImageIcon,
+  Link,
   Play,
   Plus,
   Sparkles,
@@ -49,6 +50,9 @@ import { takePendingOpen } from '../stores/pendingOpenStore';
 import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
 import { registerEditorCommands } from '../stores/editorCommands';
+import { presentationToPrintBody, SLIDE_PRINT_CSS } from './presentationToHtml';
+import { buildPrintDocument } from '../lib/printHtml';
+import { exportHtmlToPdf } from '../lib/pdfExport';
 import { SlideshowOverlay } from './SlideshowOverlay';
 
 /** 舞台像素宽（画布 EMU 宽按比例缩放） */
@@ -276,6 +280,21 @@ function useLoadedImages(urls: string[]): Record<string, HTMLImageElement> {
   return loaded;
 }
 
+/**
+ * 超链接角标（Konva）：置于形状右下角的小徽标，标识该形状带外部超链接。
+ * 用纯 Rect/Line 绘制（不依赖图片/字体），不影响形状本身样式；listening=false 不拦截点击。
+ */
+function LinkBadge({ x, y }: { x: number; y: number }) {
+  return (
+    <Group x={x} y={y} listening={false}>
+      <Rect width={16} height={16} cornerRadius={3} fill="#2563EB" opacity={0.92} />
+      {/* 白色外链箭头（斜线 + 箭头折线） */}
+      <Line points={[4, 12, 12, 4]} stroke="#FFFFFF" strokeWidth={1.6} lineCap="round" />
+      <Line points={[7, 4, 12, 4, 12, 9]} stroke="#FFFFFF" strokeWidth={1.6} lineCap="round" lineJoin="round" />
+    </Group>
+  );
+}
+
 export function SlideEditor() {
   const [pres, setPres] = useState<JkPresentation>(demoPresentation);
   const [slideIdx, setSlideIdx] = useState(0);
@@ -322,6 +341,11 @@ export function SlideEditor() {
   const [editOpen, setEditOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+
+  // 对象超链接（WPS 对齐：给形状/图片/文本加外部超链接，放映时点击跳转）
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkId, setLinkId] = useState<string | null>(null);
+  const [linkUrl, setLinkUrl] = useState('');
 
   useEffect(() => {
     if (!aiLoaded) void loadAiConfigs();
@@ -412,6 +436,47 @@ export function SlideEditor() {
     );
     setEditOpen(false);
     setEditId(null);
+  };
+
+  /** 工具栏「超链接」：需先选中一个形状，打开弹窗并预填当前链接（无 window.prompt） */
+  const openHyperlink = () => {
+    if (!selectedId) {
+      toast.warning('请先选中一个形状');
+      return;
+    }
+    const shape = slide?.shapes.find((s) => s.id === selectedId);
+    if (!shape) {
+      toast.warning('请先选中一个形状');
+      return;
+    }
+    setLinkId(selectedId);
+    setLinkUrl(shape.hyperlink ?? '');
+    setLinkOpen(true);
+  };
+
+  /** 弹窗「应用」：写入/更新目标形状的 hyperlink（空串视为不修改内容，交由「移除」处理） */
+  const applyHyperlink = () => {
+    if (linkId === null) return;
+    const id = linkId;
+    const url = linkUrl.trim();
+    if (!url) {
+      toast.warning('请输入链接地址，或点击「移除链接」');
+      return;
+    }
+    updateShapes((shapes) => shapes.map((s) => (s.id === id ? { ...s, hyperlink: url } : s)));
+    setLinkOpen(false);
+    setLinkId(null);
+    toast.success('已设置超链接');
+  };
+
+  /** 弹窗「移除链接」：清空目标形状的 hyperlink */
+  const removeHyperlink = () => {
+    if (linkId === null) return;
+    const id = linkId;
+    updateShapes((shapes) => shapes.map((s) => (s.id === id ? { ...s, hyperlink: undefined } : s)));
+    setLinkOpen(false);
+    setLinkId(null);
+    toast.success('已移除超链接');
   };
 
   const addShape = (kind: 'text' | 'rect' | 'ellipse') => {
@@ -717,13 +782,45 @@ export function SlideEditor() {
   addChartRunRef.current = addChart;
 
   /**
-   * Ribbon「插入 → 表格」按钮经命令总线（editorCommands）驱动本编辑器：
-   * 挂载时注册 `table` 命令，点击即打开表格插入弹窗（行列数选择）。
+   * 导出 PDF（WPS 对齐批2）：演示文稿 → 逐页打印 HTML → Electron 打印管线 → downloadBlob。
+   * mediaMap：遍历 pres.media，键 `${slideIndex}:${relId}` → data URL（复用 bytesToDataUrl）。
+   * landscape 由画布宽高自动判定（slideWidth > slideHeight 视为横向）。
+   */
+  const onExportPdf = async () => {
+    try {
+      const mediaMap = new Map<string, string>();
+      for (const [key, bytes] of Object.entries(pres.media ?? {})) {
+        mediaMap.set(key, bytesToDataUrl(bytes));
+      }
+      const body = presentationToPrintBody(pres, mediaMap);
+      const landscape = pres.slideWidth > pres.slideHeight;
+      const html = buildPrintDocument({
+        title: '导出',
+        bodyHtml: body,
+        extraCss: SLIDE_PRINT_CSS,
+        landscape,
+      });
+      await exportHtmlToPdf({ html, fileName: '导出.pdf' });
+      toast.success('已导出「导出.pdf」');
+    } catch (err) {
+      toast.warning('导出 PDF 失败：' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  /**
+   * Ribbon「插入 → 表格」与「文件 → 导出 PDF」按钮经命令总线（editorCommands）驱动本编辑器：
+   * 挂载时注册 `table` / `export-pdf` 命令。
    */
   const openTableRef = useRef(() => {});
   openTableRef.current = () => setTableOpen(true);
+  const exportPdfRef = useRef(() => {});
+  exportPdfRef.current = () => void onExportPdf();
   useEffect(
-    () => registerEditorCommands({ table: { run: () => openTableRef.current() } }),
+    () =>
+      registerEditorCommands({
+        table: { run: () => openTableRef.current() },
+        'export-pdf': { run: () => exportPdfRef.current() },
+      }),
     [],
   );
 
@@ -766,6 +863,24 @@ export function SlideEditor() {
         insertChart: () => addChartRunRef.current(),
         renderChartTest: () =>
           renderChartToPng('bar', ['A', 'B'], [{ name: 'x', values: [1, 2] }], 't')?.length ?? -1,
+        // 导出 PDF 探针（QA 冒烟）：与 onExportPdf 同路径构建 HTML，不下载，直接返回 { size, head }
+        pdfProbe: async () => {
+          const mediaMap = new Map<string, string>();
+          for (const [key, bytes] of Object.entries(pres.media ?? {})) {
+            mediaMap.set(key, bytesToDataUrl(bytes));
+          }
+          const html = buildPrintDocument({
+            title: '导出',
+            bodyHtml: presentationToPrintBody(pres, mediaMap),
+            extraCss: SLIDE_PRINT_CSS,
+            landscape: pres.slideWidth > pres.slideHeight,
+          });
+          const bytes = await window.jareking.invoke<Uint8Array>(
+            window.jareking.IPC.PDF_EXPORT_HTML,
+            { html, fileName: '导出.pdf' },
+          );
+          return { size: bytes.length, head: String.fromCharCode(...bytes.slice(0, 5)) };
+        },
       };
     }
   });
@@ -951,6 +1066,8 @@ export function SlideEditor() {
             );
           }),
         )}
+        {/* 超链接标识：右下角小链角标 */}
+        {shape.hyperlink ? <LinkBadge x={totalWpx - 18} y={totalHpx - 18} /> : null}
       </Group>
     );
   };
@@ -985,6 +1102,7 @@ export function SlideEditor() {
           ) : (
             <Rect width={w} height={h} fill="#E5E7EB" />
           )}
+          {shape.hyperlink ? <LinkBadge x={w - 18} y={h - 18} /> : null}
         </Group>
       );
     }
@@ -1013,6 +1131,7 @@ export function SlideEditor() {
               listening={false}
             />
           ) : null}
+          {shape.hyperlink ? <LinkBadge x={w - 18} y={h - 18} /> : null}
         </Group>
       );
     }
@@ -1038,6 +1157,7 @@ export function SlideEditor() {
           fontStyle={`${firstRun?.bold ? 'bold ' : ''}${firstRun?.italic ? 'italic' : ''}`.trim() || 'normal'}
           fill={firstRun?.color ?? '#1F2937'}
         />
+        {shape.hyperlink ? <LinkBadge x={w - 18} y={h - 18} /> : null}
       </Group>
     );
   };
@@ -1129,6 +1249,17 @@ export function SlideEditor() {
           </Button>
           <Button variant="ghost" size="sm" icon={<Table2 size={13} />} onClick={() => setTableOpen(true)}>
             表格
+          </Button>
+          {/* 对象超链接：需先选中形状；未选中则 toast 提示（内部用 Modal，无 window.prompt） */}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Link size={13} />}
+            aria-label="超链接"
+            title="超链接"
+            onClick={openHyperlink}
+          >
+            超链接
           </Button>
           <span className="mx-1 h-5 w-px bg-border" />
           <Button variant="ghost" size="sm" icon={<Copy size={13} />} disabled={!selectedId} onClick={duplicateSelected}>
@@ -1465,6 +1596,49 @@ export function SlideEditor() {
             placeholder="换行分段"
           />
           <p className="text-tiny leading-relaxed text-muted">多行文本以换行分段。</p>
+        </div>
+      </Modal>
+
+      {/* 对象超链接弹窗（替代 window.prompt，避免阻断 Electron CDP 自动化） */}
+      <Modal
+        open={linkOpen}
+        onClose={() => {
+          setLinkOpen(false);
+          setLinkId(null);
+        }}
+        title="超链接"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={removeHyperlink}>
+              移除链接
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setLinkOpen(false);
+                setLinkId(null);
+              }}
+            >
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={applyHyperlink}>
+              应用
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 p-1">
+          <span className="text-tiny text-muted">链接地址（外部 URL）</span>
+          <Input
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            placeholder="https://…"
+            aria-label="超链接地址"
+          />
+          <p className="text-tiny leading-relaxed text-muted">
+            为选中形状设置外部超链接，放映时点击该形状即可跳转；「移除链接」可清空。
+          </p>
         </div>
       </Modal>
 

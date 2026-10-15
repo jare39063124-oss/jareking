@@ -83,32 +83,42 @@ function serializeTxBody(paragraphs: TextParagraph[] | undefined): string {
  * 形状序列化
  * ========================================================================= */
 
-function shapeHeader(s: JkShape, id: number): string {
+/**
+ * 形状公共头：p:nvSpPr(cNvPr) + p:spPr(a:xfrm)。
+ *
+ * 当 hrefRid 存在（该形状带外部超链接）时，在 p:cNvPr 内写 <a:hlinkClick r:id="rIdX"/>，
+ * rIdX 指向本页 rels 中的 hyperlink 关系（由 exportPptx 统一分配，避免与图片等冲突）。
+ */
+function shapeHeader(s: JkShape, id: number, hrefRid?: string): string {
   const rot = s.rotation !== undefined ? ` rot="${Math.round(s.rotation * 60000)}"` : '';
+  const nameAttr = `id="${id}" name="${escapeXmlAttr(s.name ?? `Shape ${id}`)}"`;
+  const cNvPr = hrefRid
+    ? `<p:cNvPr ${nameAttr}><a:hlinkClick r:id="${escapeXmlAttr(hrefRid)}"/></p:cNvPr>`
+    : `<p:cNvPr ${nameAttr}/>`;
   return (
-    `<p:nvSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(s.name ?? `Shape ${id}`)}"/>` +
+    `<p:nvSpPr>${cNvPr}` +
     `<p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
     `<p:spPr><a:xfrm${rot}><a:off x="${Math.round(s.x)}" y="${Math.round(s.y)}"/>` +
     `<a:ext cx="${Math.round(s.w)}" cy="${Math.round(s.h)}"/></a:xfrm>`
   );
 }
 
-function serializeTextShape(s: JkTextShape, id: number): string {
+function serializeTextShape(s: JkTextShape, id: number, hrefRid?: string): string {
   const geom = s.geom ?? 'rect';
   return (
-    `<p:sp>${shapeHeader(s, id)}` +
+    `<p:sp>${shapeHeader(s, id, hrefRid)}` +
     `<a:prstGeom prst="${escapeXmlAttr(geom)}"><a:avLst/></a:prstGeom></p:spPr>` +
     serializeTxBody(s.paragraphs) +
     `</p:sp>`
   );
 }
 
-function serializeAutoShape(s: JkAutoShape, id: number): string {
+function serializeAutoShape(s: JkAutoShape, id: number, hrefRid?: string): string {
   const fill = s.fill
     ? `<a:solidFill><a:srgbClr val="${escapeXmlAttr(s.fill.replace(/^#/, ''))}"/></a:solidFill>`
     : '';
   return (
-    `<p:sp>${shapeHeader(s, id)}` +
+    `<p:sp>${shapeHeader(s, id, hrefRid)}` +
     `<a:prstGeom prst="${escapeXmlAttr(s.geom)}"><a:avLst/></a:prstGeom>${fill}</p:spPr>` +
     (s.paragraphs?.length ? serializeTxBody(s.paragraphs) : '') +
     `</p:sp>`
@@ -166,7 +176,7 @@ function serializeTableCell(cell: JkTableCell): string {
  * 列宽由 colWidths 求和得外框宽；行高逐行取 row.height，缺省按 (height|h)/行数 均分，
  * 再兜底 DEFAULT_ROW_H。表格高 = height ?? h ?? 行高之和。
  */
-function serializeTableShape(s: JkTableShape, id: number): string {
+function serializeTableShape(s: JkTableShape, id: number, hrefRid?: string): string {
   const cols = s.colWidths.length ? s.colWidths : [s.w];
   const rows = s.rows.length ? s.rows : [{ cells: [] }];
   const cx = cols.reduce((a, b) => a + b, 0) || s.w;
@@ -189,9 +199,12 @@ function serializeTableShape(s: JkTableShape, id: number): string {
     `<a:tblGrid>${gridCols}</a:tblGrid>${trs}</a:tbl>`;
 
   const rot = s.rotation !== undefined ? ` rot="${Math.round(s.rotation * 60000)}"` : '';
+  const cNvPr = hrefRid
+    ? `<p:cNvPr id="${id}" name="${escapeXmlAttr(s.name ?? `表格 ${id}`)}"><a:hlinkClick r:id="${escapeXmlAttr(hrefRid)}"/></p:cNvPr>`
+    : `<p:cNvPr id="${id}" name="${escapeXmlAttr(s.name ?? `表格 ${id}`)}"/>`;
   return (
     `<p:graphicFrame><p:nvGraphicFramePr>` +
-    `<p:cNvPr id="${id}" name="${escapeXmlAttr(s.name ?? `表格 ${id}`)}"/>` +
+    cNvPr +
     `<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/></p:nvGraphicFramePr>` +
     `<p:xfrm${rot}><a:off x="${Math.round(s.x)}" y="${Math.round(s.y)}"/>` +
     `<a:ext cx="${Math.round(cx)}" cy="${Math.round(cy)}"/></p:xfrm>` +
@@ -216,21 +229,28 @@ function serializeSlide(
   slideIndex: number,
   images: SlideImage[],
   transition?: 'none' | 'fade' | 'slide',
+  /** 形状在 shapes 中的下标 → 超链接关系 id（仅含带 hyperlink 的形状） */
+  hlinkByIndex?: Map<number, string>,
 ): string {
   let id = 2; // id=1 保留给 spTree 组
   const parts: string[] = [];
-  for (const s of shapes) {
+  shapes.forEach((s, i) => {
+    const hrefRid = hlinkByIndex?.get(i);
     if (s.type === 'text') {
-      parts.push(serializeTextShape(s, id++));
+      parts.push(serializeTextShape(s, id++, hrefRid));
     } else if (s.type === 'shape') {
-      parts.push(serializeAutoShape(s, id++));
+      parts.push(serializeAutoShape(s, id++, hrefRid));
     } else if (s.type === 'table') {
-      parts.push(serializeTableShape(s, id++));
+      parts.push(serializeTableShape(s, id++, hrefRid));
     } else if (s.type === 'image') {
       const img = images.find((im) => im.modelKey === `${slideIndex}:${s.relId}`);
-      if (!img) continue; // 无字节：降级跳过（fidelity 记录由调用方汇总）
+      if (!img) return; // 无字节：降级跳过（fidelity 记录由调用方汇总）
+      const picId = id++;
+      const cNvPr = hrefRid
+        ? `<p:cNvPr id="${picId}" name="${escapeXmlAttr(s.name ?? '图片')}"><a:hlinkClick r:id="${escapeXmlAttr(hrefRid)}"/></p:cNvPr>`
+        : `<p:cNvPr id="${picId}" name="${escapeXmlAttr(s.name ?? '图片')}"/>`;
       parts.push(
-        `<p:pic><p:nvPicPr><p:cNvPr id="${id++}" name="${escapeXmlAttr(s.name ?? '图片')}"/>` +
+        `<p:pic><p:nvPicPr>${cNvPr}` +
           `<p:cNvPicPr/><p:nvPr/></p:nvPicPr>` +
           `<p:blipFill><a:blip r:embed="${escapeXmlAttr(img.relId)}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>` +
           `<p:spPr><a:xfrm><a:off x="${Math.round(s.x)}" y="${Math.round(s.y)}"/>` +
@@ -238,7 +258,7 @@ function serializeSlide(
           `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`,
       );
     }
-  }
+  });
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:cSld><p:spTree>
@@ -541,20 +561,37 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
       images.push({ relId: `rId${images.length + 2}`, ext: sniffImageExt(bytes), bytes, modelKey });
     }
 
+    // 收集本页对象超链接（按 shape 顺序分配 rId，续在图片之后，从 rId(images.length+2) 起）
+    const hlinkByIndex = new Map<number, string>();
+    const hyperlinks: { shapeIndex: number; relId: string; url: string }[] = [];
+    (slide.shapes ?? []).forEach((s, si) => {
+      if (!s.hyperlink) return;
+      const relId = `rId${images.length + 2 + hyperlinks.length}`;
+      hlinkByIndex.set(si, relId);
+      hyperlinks.push({ shapeIndex: si, relId, url: s.hyperlink });
+    });
+
     zip.file(
       `ppt/slides/slide${i + 1}.xml`,
-      serializeSlide(slide.shapes ?? [], i, images, slide.transition),
+      serializeSlide(slide.shapes ?? [], i, images, slide.transition, hlinkByIndex),
     );
 
-    // 汇总本页 rels 关系（图片 + 备注 + 版式）
+    // 汇总本页 rels 关系（图片 + 超链接 + 备注 + 版式）
     const rels: string[] = [];
     for (const im of images) {
       rels.push(
         `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
       );
     }
-    // 图片已用 rId2…rId(1+images.length)，后续关系从 rId(images.length+2) 起递增
-    let relSeq = images.length + 2;
+    // 对象超链接关系：仅外部 URL，TargetMode="External"；每条 hyperlink 一个关系
+    for (const h of hyperlinks) {
+      rels.push(
+        `<Relationship Id="${h.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${escapeXmlAttr(h.url)}" TargetMode="External"/>`,
+      );
+    }
+    // 图片已用 rId2…rId(1+images.length)，超链接续用 rId(images.length+2)…，
+    // 备注 / 版式关系再依次递增，保证本页 rId 全局唯一、互不冲突
+    let relSeq = images.length + 2 + hyperlinks.length;
     if (notesText) {
       rels.push(
         `<Relationship Id="rId${relSeq++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`,

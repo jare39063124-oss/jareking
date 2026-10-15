@@ -205,6 +205,17 @@ export function SlideshowOverlay({
 
   const prev = useCallback(() => setIdx((i) => Math.max(0, i - 1)), []);
 
+  /**
+   * 打开外部链接：复用 Electron 主进程 system:openExternal 通道（安全，仅放行 https）。
+   * 非 Electron 环境（如浏览器预览）无 window.jareking，静默忽略，不硬造 window.open。
+   */
+  const openExternal = useCallback((url: string) => {
+    if (!/^https:\/\//i.test(url)) return;
+    const api = (window as unknown as { jareking?: { invoke: (ch: string, payload?: unknown) => Promise<unknown> } })
+      .jareking;
+    void api?.invoke('system:openExternal', { url });
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -279,6 +290,27 @@ export function SlideshowOverlay({
             animateEnter={transition !== 'none'}
           />
         ))}
+        {/* 超链接热区：放映时点击带 hyperlink 的形状 → 打开外部链接（阻止翻页冒泡） */}
+        {slide?.shapes
+          .filter((shape) => !!shape.hyperlink)
+          .map((shape, i) => (
+            <div
+              key={`lnk-${shape.id ?? i}`}
+              title={shape.hyperlink}
+              style={{
+                position: 'absolute',
+                left: shape.x * scale,
+                top: shape.y * scale,
+                width: shape.w * scale,
+                height: shape.h * scale,
+                cursor: 'pointer',
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                openExternal(shape.hyperlink ?? '');
+              }}
+            />
+          ))}
       </div>
       <div
         className="absolute bottom-4 rounded-full bg-black/60 px-4 py-1 text-sm text-white/90"
