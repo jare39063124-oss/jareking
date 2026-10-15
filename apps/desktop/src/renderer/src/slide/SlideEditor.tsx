@@ -24,6 +24,8 @@ import {
   Sparkles,
   Square,
   Table2,
+  Timer,
+  TimerOff,
   Trash2,
   Type,
   BarChart3,
@@ -54,6 +56,17 @@ import { presentationToPrintBody, SLIDE_PRINT_CSS } from './presentationToHtml';
 import { buildPrintDocument } from '../lib/printHtml';
 import { exportHtmlToPdf } from '../lib/pdfExport';
 import { SlideshowOverlay } from './SlideshowOverlay';
+import {
+  MAX_ADVANCE_MS,
+  MIN_ADVANCE_MS,
+  applyRehearsalTimings,
+  clearRehearsalTimings,
+  createRehearsal,
+  hasRehearsalTimings,
+  recordSlideTime,
+  rehearsalSummary,
+  type RehearsalRecord,
+} from './rehearse';
 
 /** 舞台像素宽（画布 EMU 宽按比例缩放） */
 const STAGE_W = 896;
@@ -346,6 +359,11 @@ export function SlideEditor() {
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkId, setLinkId] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState('');
+
+  // 排练计时（WPS 对齐：幻灯片放映 → 排练计时）——以放映层计时，结束后询问是否保留为自动换片时间
+  const [rehearsing, setRehearsing] = useState(false);
+  const [rehearsalResult, setRehearsalResult] = useState<RehearsalRecord | null>(null);
+  const [rehearseConfirmOpen, setRehearseConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!aiLoaded) void loadAiConfigs();
@@ -856,6 +874,34 @@ export function SlideEditor() {
         parseInWorker: (kind: 'xlsx' | 'pptx', buf: Uint8Array) => parseInWorker(kind, buf),
         // T3.3：各页切换效果（断言工具栏设置生效）
         transitions: () => pres.slides.map((s) => s.transition ?? 'none'),
+        // 排练计时：每页自动换片时间（advTm），无/非法则 null
+        advanceTimings: () =>
+          pres.slides.map((s) =>
+            typeof s.advanceAfterMs === 'number' && Number.isFinite(s.advanceAfterMs)
+              ? s.advanceAfterMs
+              : null,
+          ),
+        // 排练计时探针：内部走 applyRehearsalTimings 写回，再校验结果与预期一致（一致则应用）
+        rehearsalProbe: (slideMs: number[]) => {
+          let rec = createRehearsal(pres.slides.length);
+          slideMs.forEach((ms, i) => {
+            rec = recordSlideTime(rec, i, ms);
+          });
+          const applied = applyRehearsalTimings(pres, rec);
+          const actual = applied.slides.map((s) =>
+            typeof s.advanceAfterMs === 'number' && Number.isFinite(s.advanceAfterMs)
+              ? s.advanceAfterMs
+              : null,
+          );
+          const expected = pres.slides.map((_, i) => {
+            const ms = slideMs[i];
+            if (ms === undefined || !Number.isFinite(ms) || ms < MIN_ADVANCE_MS) return null;
+            return Math.min(Math.max(ms, MIN_ADVANCE_MS), MAX_ADVANCE_MS);
+          });
+          const ok = JSON.stringify(actual) === JSON.stringify(expected);
+          if (ok) setPres(applied);
+          return ok;
+        },
         slideCount: () => pres.slides.length,
         imageCount: () =>
           pres.slides.flatMap((s) => s.shapes).filter((sh) => sh.type === 'image').length,
@@ -1335,6 +1381,29 @@ export function SlideEditor() {
           <Button variant="secondary" size="sm" icon={<Play size={13} />} onClick={() => setPlaying(true)} title="F5">
             放映
           </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Timer size={13} />}
+            onClick={() => setRehearsing(true)}
+            title="排练计时：以放映方式预演并记录每页用时"
+          >
+            排练计时
+          </Button>
+          {hasRehearsalTimings(pres) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<TimerOff size={13} />}
+              onClick={() => {
+                setPres((prev) => clearRehearsalTimings(prev));
+                toast.success('已清除排练计时');
+              }}
+              title="清除全部页的自动换片时间"
+            >
+              清除计时
+            </Button>
+          )}
           <select
             className="h-7 rounded border border-border bg-surface px-1 text-xs text-text outline-none"
             value={slide?.transition ?? 'none'}
@@ -1454,13 +1523,91 @@ export function SlideEditor() {
         }}
       />
 
-      {playing && (
+      {(playing || rehearsing) && (
         <SlideshowOverlay
           pres={pres}
-          startIndex={slideIdx}
-          onClose={() => setPlaying(false)}
+          // 排练计时从第 1 页开始（保证每页都被访问并录入，避免删除前面各页既有 advTm）；
+          // 普通放映仍从当前页开始，行为不变。
+          startIndex={rehearsing ? 0 : slideIdx}
+          onClose={() => {
+            setPlaying(false);
+            setRehearsing(false);
+          }}
+          rehearse={rehearsing}
+          onRehearsalFinish={(rec) => {
+            // 排练结束：结束放映层并弹出确认对话框（是否保留本次排练时间）
+            setRehearsing(false);
+            setRehearsalResult(rec);
+            setRehearseConfirmOpen(true);
+          }}
         />
       )}
+
+      {/* 排练计时结果确认：保留 → 写回自动换片时间；不保留 → 丢弃（严禁原生弹窗） */}
+      <Modal
+        open={rehearseConfirmOpen}
+        onClose={() => setRehearseConfirmOpen(false)}
+        title="排练计时"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setRehearsalResult(null);
+                setRehearseConfirmOpen(false);
+              }}
+            >
+              不保留
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => {
+                const rec = rehearsalResult;
+                if (rec) {
+                  setPres((prev) => applyRehearsalTimings(prev, rec));
+                  toast.success('已保留排练计时（自动换片时间）');
+                }
+                setRehearseConfirmOpen(false);
+              }}
+            >
+              保留
+            </Button>
+          </>
+        }
+      >
+        {rehearsalResult ? (
+          (() => {
+            const sum = rehearsalSummary(rehearsalResult);
+            return (
+              <div className="flex flex-col gap-3">
+                <p className="text-ui text-fg">是否保留本次排练时间？</p>
+                <p className="text-tiny text-muted">
+                  总用时 {sum.totalText} · 平均每页 {sum.averageText} · 共 {sum.slideTexts.length} 页
+                </p>
+                <div className="max-h-48 overflow-auto rounded border border-border">
+                  {sum.slideTexts.map((t, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between px-2 py-1 text-tiny even:bg-hover"
+                    >
+                      <span className="text-muted">第 {i + 1} 页</span>
+                      {/* NaN = 本次排练未访问（结算产物），文本为 0:00 不足以区分，故显式标注「未排练」 */}
+                      <span className="text-fg">
+                        {Number.isNaN(rehearsalResult.slideMs[i]) ? '未排练' : t}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-tiny text-muted">
+                  低于 {(MIN_ADVANCE_MS / 1000).toFixed(1)} 秒的页面视为「点击换片」，不写入自动换片时间。
+                </p>
+              </div>
+            );
+          })()
+        ) : null}
+      </Modal>
 
       <Modal
         open={chartOpen}

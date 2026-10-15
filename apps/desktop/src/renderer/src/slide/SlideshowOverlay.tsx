@@ -5,8 +5,9 @@
  * 按 slideWidth/Height EMU 等比缩放；淡入切换（slide.transition === 'fade'）。
  * 操作：点击/→/↓/空格/PgDn 下一页，←/↑/PgUp 上一页，Home/End 首末页，Esc 退出。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JkPresentation, JkShape } from '@jareking/presentation';
+import { createRehearsal, finalizeRehearsal, formatClock, recordSlideTime, type RehearsalRecord } from './rehearse';
 
 /** media 字节 → dataURL */
 function bytesToDataUrl(bytes: Uint8Array): string {
@@ -179,13 +180,46 @@ export function SlideshowOverlay({
   pres,
   startIndex,
   onClose,
+  rehearse = false,
+  onRehearsalFinish,
 }: {
   pres: JkPresentation;
   startIndex: number;
   onClose: () => void;
+  /** 排练计时模式：Esc 结束排练并回传记录（不直接关闭）；默认 false 保持既有放映行为 */
+  rehearse?: boolean;
+  /** 排练结束回调（收到完整计时记录，含当前页补记） */
+  onRehearsalFinish?: (rec: RehearsalRecord) => void;
 }) {
   const [idx, setIdx] = useState(startIndex);
   const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
+
+  // —— 排练计时状态（仅 rehearse 模式使用；普通放映不产生任何计时副作用）——
+  /** 本页计时起点（时间戳，毫秒） */
+  const slideStartRef = useRef<number>(Date.now());
+  /** 当前页下标（ref 版，同步维护：导航时即时写入，供事件处理器读取最新值） */
+  const idxRef = useRef<number>(startIndex);
+  /** 排练记录（ref + state 双写：ref 供事件回调即时读取，state 驱动显示） */
+  const recordRef = useRef<RehearsalRecord>(createRehearsal(pres.slides.length));
+  const [record, setRecord] = useState<RehearsalRecord>(recordRef.current);
+  /**
+   * 本页是否**已访问**（下标与页序一致；仅排练模式维护）。
+   * 排练中途 Esc 结束时，从未访问的页在记录里是 `0`，若直接写回会被误判为
+   * 「本次排练刻意点击换片」而删除既有自动换片时间——故用此标记区分「0 = 访问过但瞬间切换」
+   * 与「未访问」，结算时把未访问页转为 NaN（见 {@link finalizeRehearsal}）。
+   * 初始长度按 pres.slides.length。
+   */
+  const visitedRef = useRef<boolean[]>(new Array(pres.slides.length).fill(false));
+  /** 是否已结算（保证 onRehearsalFinish 只回调一次；**仅**在显式结算路径内首次置位） */
+  const finishedRef = useRef<boolean>(false);
+  /** 最新回调引用，避免陈旧闭包 */
+  const onRehearsalFinishRef = useRef(onRehearsalFinish);
+  onRehearsalFinishRef.current = onRehearsalFinish;
+  /** 最新 onClose 引用（使 next/Esc 回调保持稳定，避免自动换片定时器被反复重建） */
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  /** 本页已用时（毫秒，供渲染显示；同时驱动排练时钟刷新） */
+  const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
     const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
@@ -193,17 +227,79 @@ export function SlideshowOverlay({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const next = useCallback(() => {
-    setIdx((i) => {
-      if (i >= pres.slides.length - 1) {
-        onClose();
-        return i;
-      }
-      return i + 1;
-    });
-  }, [pres.slides.length, onClose]);
+  /** 排练时钟：每 200ms 刷新「本页用时」（仅排练模式） */
+  useEffect(() => {
+    if (!rehearse) return;
+    const timer = window.setInterval(() => setElapsedMs(Date.now() - slideStartRef.current), 200);
+    return () => window.clearInterval(timer);
+  }, [rehearse]);
 
-  const prev = useCallback(() => setIdx((i) => Math.max(0, i - 1)), []);
+  /**
+   * 切页（**唯一导航入口**）：排练模式下先把**当前页**停留时长写入记录并重置计时起点，
+   * 再更新 idx。所有副作用都在事件处理器内同步完成，**不进入 setState updater**，
+   * 从而避免 StrictMode 双调用导致重复计时 / 重复结算；普通模式仅更新 idx（行为不变）。
+   */
+  const navigate = useCallback(
+    (target: number) => {
+      const last = Math.max(0, pres.slides.length - 1);
+      const clamped = Math.max(0, Math.min(target, last));
+      const from = idxRef.current;
+      if (rehearse && clamped !== from) {
+        const stamp = Date.now();
+        // 标记「离开的页」已访问（用于结算时区分「已访问的 0」与「未访问」）
+        visitedRef.current[from] = true;
+        const nextRec = recordSlideTime(recordRef.current, from, stamp - slideStartRef.current);
+        recordRef.current = nextRec;
+        setRecord(nextRec);
+        slideStartRef.current = stamp;
+        setElapsedMs(0);
+      }
+      idxRef.current = clamped;
+      setIdx(clamped);
+    },
+    [pres.slides.length, rehearse],
+  );
+
+  /**
+   * 结算当前页并回传（**幂等**：finishedRef 只在显式结算路径内首次置位）。
+   * 结算前把**当前页**停留时长补记进 record 并标记该页已访问，保证最后一页
+   * （被 Escape / 末页 next 结算时）的计时不丢失；再用 {@link finalizeRehearsal}
+   * 把**未访问**的页转为 NaN（= 无记录 → 保持既有值）后回传。
+   *
+   * 注意：**不**把 NaN 写进 `recordRef.current`（否则 `recordSlideTime` 求和的 `totalMs`
+   * 会被 NaN 污染、排练时钟「累计」显示会变 NaN）；NaN 只出现在结算产出的**副本**里。
+   */
+  const finishRehearsal = useCallback(() => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    const cur = idxRef.current;
+    // 补记当前页（recordRef.current 始终只含有限数，保证浮层累计显示正常）
+    const recorded = recordSlideTime(recordRef.current, cur, Date.now() - slideStartRef.current);
+    recordRef.current = recorded;
+    setRecord(recorded);
+    // 标记当前页已访问
+    visitedRef.current[cur] = true;
+    // 结算：未访问页 → NaN（视为「无记录」，写回时保持既有值）；finishedRef 幂等守卫保持不变
+    const finalRec = finalizeRehearsal(recorded, visitedRef.current);
+    onRehearsalFinishRef.current?.(finalRec);
+  }, []);
+
+  /**
+   * 下一页。副作用直接在事件处理器内执行，不再放进 setIdx 的函数式 updater：
+   *  - 非末页 → 切换下一页；
+   *  - 末页 → 排练模式结算回传（不关闭，由父组件决策）；普通模式关闭放映（既有行为）。
+   */
+  const next = useCallback(() => {
+    const i = idxRef.current;
+    if (i >= pres.slides.length - 1) {
+      if (rehearse) finishRehearsal();
+      else onCloseRef.current();
+      return;
+    }
+    navigate(i + 1);
+  }, [pres.slides.length, rehearse, finishRehearsal, navigate]);
+
+  const prev = useCallback(() => navigate(idxRef.current - 1), [navigate]);
 
   /**
    * 打开外部链接：复用 Electron 主进程 system:openExternal 通道（安全，仅放行 https）。
@@ -218,19 +314,22 @@ export function SlideshowOverlay({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      else if (['ArrowRight', 'ArrowDown', ' ', 'PageDown', 'Enter'].includes(e.key)) {
+      if (e.key === 'Escape') {
+        // Esc 语义按模式分流：排练模式 → 结算回传（不关闭）；普通模式 → 直接关闭（既有行为）
+        if (rehearse) finishRehearsal();
+        else onCloseRef.current();
+      } else if (['ArrowRight', 'ArrowDown', ' ', 'PageDown', 'Enter'].includes(e.key)) {
         e.preventDefault();
         next();
       } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) {
         e.preventDefault();
         prev();
-      } else if (e.key === 'Home') setIdx(0);
-      else if (e.key === 'End') setIdx(pres.slides.length - 1);
+      } else if (e.key === 'Home') navigate(0);
+      else if (e.key === 'End') navigate(pres.slides.length - 1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [next, prev, onClose, pres.slides.length]);
+  }, [next, prev, pres.slides.length, rehearse, finishRehearsal, navigate]);
 
   const slide = pres.slides[idx];
   const scale = Math.min(
@@ -251,6 +350,38 @@ export function SlideshowOverlay({
   }, [slide, pres.media, idx]);
 
   const transition = slide?.transition ?? 'none';
+
+  // —— 自动换片（非排练模式）：当前页存在合法 advTm → 到时自动 next()，并显示剩余倒计时 ——
+  // 切页 / 卸载时清理定时器，避免定时器泄漏与卸载后 setState。
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
+  useEffect(() => {
+    const adv = pres.slides[idx]?.advanceAfterMs;
+    if (rehearse || typeof adv !== 'number' || !Number.isFinite(adv) || adv <= 0) {
+      setRemainingMs(null);
+      return;
+    }
+    const deadline = Date.now() + adv;
+    setRemainingMs(adv);
+    const tick = window.setInterval(() => setRemainingMs(Math.max(0, deadline - Date.now())), 200);
+    const advance = window.setTimeout(next, adv);
+    return () => {
+      window.clearInterval(tick);
+      window.clearTimeout(advance);
+    };
+  }, [idx, rehearse, pres.slides, next]);
+
+  // 页脚文案：排练模式显示本页/累计用时；自动换片显示倒计时；否则维持既有提示
+  const cumulativeMs = record.totalMs + (elapsedMs > 0 ? elapsedMs : 0);
+  const footerText = (() => {
+    const pos = `${idx + 1} / ${pres.slides.length}`;
+    if (rehearse) {
+      return `${pos} · 本页 ${formatClock(elapsedMs)} · 累计 ${formatClock(cumulativeMs)} · Esc 结束排练`;
+    }
+    if (remainingMs !== null) {
+      return `${pos} · ${Math.ceil(remainingMs / 1000)}s 后自动换片 · Esc 退出`;
+    }
+    return `${pos} · Esc 退出 · 右键上一页`;
+  })();
 
   return (
     <div
@@ -316,7 +447,7 @@ export function SlideshowOverlay({
         className="absolute bottom-4 rounded-full bg-black/60 px-4 py-1 text-sm text-white/90"
         onClick={(e) => e.stopPropagation()}
       >
-        {idx + 1} / {pres.slides.length} · Esc 退出 · 右键上一页
+        {footerText}
       </div>
     </div>
   );

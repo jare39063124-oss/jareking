@@ -1,7 +1,7 @@
 # jareking 对抗性审计报告（adversarial-audit）
 
 > 生成者：QA 严过关 · 并行任务 3/3 · 由 `scripts/adversarial-audit.mjs` 自动生成
-> 生成时间：2026-10-15T18:42:34.043Z
+> 生成时间：2026-10-15T22:23:35.392Z
 > 运行环境：win32 / Node v22.22.2
 
 ## 1. 概述
@@ -130,47 +130,46 @@
 - 建议：将本脚本纳入交付前门禁（`node scripts/adversarial-audit.mjs`）；把「悬空关系检测」并入导出门禁。
 - **水印结论（本轮复验）**：中文水印经**双路径**提供 —— 矢量 `addWatermark` 对 CJK **明确降级**（抛出可读错误，非 WinAnsi 原始异常、不静默产乱码/损坏 PDF），位图 `addImageWatermark`（PdfToolbox 经 canvas→PNG 调用）产出合法 PDF；见 §2 的 T25。
 
-## 9. GUI 冒烟与定向验证（本轮新增能力）
+## 9. GUI 冒烟与定向验证（2026-10-16 · WPS 对齐批6「排练计时」复验）
 
-> 在真实 Electron 应用（`cd apps/desktop && env -u ELECTRON_RUN_AS_NODE ./node_modules/.bin/electron . --remote-debugging-port=9222 --jk-debug`）上执行；构建产物 `apps/desktop/out`（2026-10-16 构建，含本轮修复）。
+> 在真实 Electron 应用（`cd apps/desktop && env -u ELECTRON_RUN_AS_NODE ./node_modules/.bin/electron . --remote-debugging-port=9223 --jk-debug`）上执行；构建产物 `apps/desktop/out`（2026-10-16 构建，含本轮改动）。端口用 9223 以避开并行 run 常占的 9222。
 
 ### 9.1 GUI 冒烟（`scripts/gui-smoke.mjs`）
 
 - 结果：**✅ 通过**，`consoleErrors = []`（无未过滤控制台错误 / 未捕获异常）。
-- 关键断言全绿：Writer（ProseMirror / 一键整理 / 千分符 / 目录 / 页码 / 公式 / 加粗）、Sheet（Univer canvas）、幻灯片（Konva / 放映 / 动画切换）、AI（配置保存 / Key 不泄漏 / mock 网关调用 / 文档变更 / 图表插入）、PDF 工具箱入口。
-- 说明：**本轮未出现「早期步骤因 AI 配置 IPC 冷启动失败」**——脚本开头的历史 AI 配置清理成功（清理 1 条遗留配置），随后全部 AI 断言通过。
+- 关键断言全绿：Writer（ProseMirror / 一键整理 / 千分符 / 目录 / 页码 / 公式 / 加粗）、Sheet（Univer canvas + AI 写入）、幻灯片（Konva / **放映页脚文案 `1 / 2 · Esc 退出 · 右键上一页` 未被本轮改动破坏** / 动画切换）、AI（配置保存 / Key 不泄漏 / mock 网关调用 / 文档变更 / 图表插入）、PDF 工具箱入口。
+- 说明：本轮新增的「排练计时 / 清除计时」按钮位于幻灯片顶栏「放映」右侧，**未影响既有冒烟断言**。
 
-### 9.2 PDF 阅读器定向验证（`scripts/pdf-reader-smoke.mjs`）
+### 9.2 排练计时定向验证（`scripts/rehearse-smoke.mjs`，本轮新增）
 
-- 路径：Ribbon「PDF 工具 → 打开PDF」→ CDP 拦截文件选择器注入自造 3 页 PDF（`%PDF-`，3149 字节）→ 阅读器渲染。
+- 路径：打开「演示」→ 点顶栏「**排练计时**」→ 排练浮层出现（页脚 `本页 / 累计 / Esc 结束排练`）→ → 翻到第 2 页并停留 ≈1.2s → **Esc 结算** → 弹出确认对话框（项目 `Modal`，含总用时/平均/逐页）→ 点「保留」→ 读回 `__jkSlideDebug.advanceTimings()` → 点「清除计时」→ 再次读回。
 - 断言（全部 ✅）：
-  - 渲染出 `<canvas>`（2 个，含 dpr 放大 backing store）与文本层（`.jk-pdf-text-layer`）；
-  - 状态栏读回 `sample-3page.pdf | 单页 · 共 3 页` → 总页数正确；
-  - 翻页：点「下一页」页码输入框 `1 → 2`；
-  - 缩放：默认「适应宽度」按下（`aria-pressed=true`）→ 点「放大」后切自由缩放（`false`）、缩放显示 `110%`；
-  - 无控制台错误。
+  - `rehearseBtnExists = true`；`footerText` 命中排练浮层文案；
+  - `rehearsePage2 = true`（翻页有效）；`confirmDialog = true` 且 `confirmSummary = true`（`是否保留本次排练时间？` + 总用时/平均每页）；
+  - `advanceTimings = [911, 1216]` → `timingsApplied = true`（两页均被访问且 ≥ `MIN_ADVANCE_MS=500`，写入成功）；
+  - `clearBtnExists = true` → `afterClear = [null, null]` → `cleared = true`（「清除计时」真正清空 advTm）；
+  - `consoleErrors = []`。
+- 结论：**排练计时全链路（计时 → 结算 → 确认 → 写回自动换片时间 → 清除）在真实 Electron 中可用**。
 
-### 9.3 中文水印定向验证（`scripts/pdf-reader-smoke.mjs`）
+### 9.3 跨软件（WPS COM）advTm 形态复验 —— 本轮新增覆盖
 
-- 路径：Ribbon「PDF 工具 → 添加水印」→ 水印面板输入「机密」（面板出现「位图水印」提示）→ 选目标 PDF（1 页）→「开始处理」。
-- 断言（全部 ✅）：运行时捕获产出 Blob → **头 = `%PDF-`、大小 = 4548 字节**；note 显示「✅ 已导出「sample-1page-已加水印.pdf」」；无控制台错误。
-- 结论：**中文水印经 `PdfToolbox` 的 canvas→PNG→`addImageWatermark` 位图链路端到端可用**（零新依赖、零字体分发）。
-
-### 9.4 复验观察（非缺陷）
-
-- pdf.js worker/资源首次加载较慢：打开 PDF 后约需 15~20s 才完成首帧渲染（其后操作即时）。定向脚本已延长轮询窗口以容纳冷启动；如后续优化首屏，可考虑预热 worker。
+- 本轮改了 pptx 导出的 XML 形态（新增 `<p:transition advTm="…">`），故审计样本已扩展为**两种新形态**：
+  - `jareking-slide-1.pptx` 第 1 页：**切换效果 `fade` + `advTm=3000` 合并到同一 `<p:transition>`**；
+  - `jareking-slide-2.pptx` 第 2 页：**仅 `advTm=2500`（无切换效果）→ 自闭合 `<p:transition advTm="2500"/>`**。
+- 真实 WPS COM（`Word.Application` / `Excel.Application` / `KWPP.Application`）实测：**7/7 样本打开成功**，其中 pptx 读回 `slides=1` / `slides=2`（见 §2 的 T36/T37 与 §4）。
+- 结论：**新的 advTm 导出形态跨软件可读**（未触发 WPS「修复」弹窗 / 未挂起）。
 
 ## 10. 剩余问题与未覆盖（如实）
 
 - **剩余 bug：无**（P0/P1/P2 = 0）。设计内降级 1 项（T14：单格合并 A1:A1 被规范化丢弃，Excel/WPS 本身不支持）。
 - 未覆盖 / 局限（沿用 §7，另补本轮）：
-  - **视觉保真**：跨软件仅比对结构计数；PDF 阅读器仅验证「渲染/翻页/缩放存在且生效」，未逐像素比对渲染结果。
-  - **中文水印位图链路依赖本机中文字体**（Microsoft YaHei / SimSun / SimHei），缺字体会回退 `sans-serif`（可能字形偏差）。
-  - **pdf.js 首屏加载时延**（§9.4）未做性能基线。
+  - **视觉保真**：跨软件仅比对结构计数；「排练计时」只验证 advTm 写入/读回与浮层交互，**未做放映全程时序逐帧核验**（自动换片为计时器驱动）。
+  - **advTm 语义降级**：解析侧 `advTm="3000.7"` 原样读回小数（导出取整，往返收敛）；低于 `MIN_ADVANCE_MS` 的页被视为「点击换片」而不写该属性。
+  - **GUI 交互近似**：排练计时冒烟经 CDP 派发键盘事件与会话内读数，未覆盖真实鼠标轨迹与人眼观感。
   - MS Office 真机、旧二进制格式（.doc/.xls/.ppt）、SmartArt / OLE / 宏(VBA) / 数字签名 / 加密文档仍未覆盖。
 
 ## 11. 路由判定
 
-- **判定：NoOne（全部通过）**。无源码级失败项；P0/P1 均已闭环（P0 pptx 骨架、P1 母版结构已修复并由本机 WPS COM 复验打开；中文水印路线变更后 T25 已反映真实状态，不再误报为阻断项）。
-- 建议：将 `scripts/adversarial-audit.mjs` 与 `scripts/pdf-reader-smoke.mjs` 纳入交付前门禁（前者需 PowerShell 两步执行跨软件校验）；把「悬空关系检测」并入导出门禁。
+- **判定：NoOne（全部通过）**。无源码级失败项；P0/P1 均已闭环（P0 pptx 骨架、P1 母版结构已修复并由本机 WPS COM 复验打开）；本轮新增的 advTm 导出形态亦由同一 COM 通道复验通过。
+- 建议：将 `scripts/adversarial-audit.mjs`（跨软件需 PowerShell 两步执行）、`scripts/gui-smoke.mjs`、`scripts/rehearse-smoke.mjs` 纳入交付前门禁；把「悬空关系检测」并入导出门禁。
 

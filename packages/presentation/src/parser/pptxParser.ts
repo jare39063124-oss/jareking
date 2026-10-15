@@ -474,6 +474,8 @@ interface SlideAccum {
   hlinkRids: (string | undefined)[];
   /** 切换效果：与模型 JkSlide.transition 保持一致（含 slide 推送） */
   transition: 'none' | 'fade' | 'slide';
+  /** 自动换片时间（毫秒，取自 p:transition@advTm；非法值一律为 undefined，见主入口） */
+  advanceAfterMs?: number;
 }
 
 /** 判断 zip 条目是否为解析需要保留的部件（其余条目数据直接丢弃，降峰值） */
@@ -650,6 +652,10 @@ function streamUnzip(
         const tr = slideObj?.sld?.transition;
         const transition: 'none' | 'fade' | 'slide' =
           tr?.fade !== undefined ? 'fade' : tr?.push !== undefined ? 'slide' : 'none';
+        // 自动换片时间（排练计时结果）：读回 advTm，非数字/非有限数/<=0 一律忽略为 undefined。
+        // 注意 removeNSPrefix 后属性键形如 '@_advTm'（与其余属性一致）。
+        const advTmRaw = num(getAttr(tr, '@_advTm'));
+        const advanceAfterMs = advTmRaw !== undefined && advTmRaw > 0 ? advTmRaw : undefined;
         // 形状树解析（含超链接关系 id 采集）；解析后立即丢弃 XML 字符串（仅留模型），降低峰值
         const { shapes, hlinkRids } = parseShapeTree(spTree);
         slidesByPart.set(name, {
@@ -657,6 +663,7 @@ function streamUnzip(
           shapes,
           hlinkRids,
           transition,
+          advanceAfterMs,
         });
         return;
       }
@@ -827,6 +834,8 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
     }
     const slide: JkSlide = { partName, shapes, transition: accum.transition };
     if (layoutPart) slide.layout = layoutPart;
+    // 自动换片时间：仅当解析到合法 advTm 时挂上（无则保持字段缺省，保证既有导出逐字节不变）
+    if (accum.advanceAfterMs !== undefined) slide.advanceAfterMs = accum.advanceAfterMs;
     slides.push(slide);
     index++;
   }

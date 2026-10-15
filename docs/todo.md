@@ -27,7 +27,23 @@
 - [x] **W-批4（2026-10-15 全部落地）**：[x] 批注（Writer，comments 全链路 round-trip）+ [x] 修订（track changes，w:ins/w:del 解析导出 + 编辑器标记 + 接受/拒绝）+ [x] 数据透视表（Sheet，buildPivot 纯函数 + 11 测 + Modal）+ [x] 母版/版式（演示，解析保留 round-trip + 编辑器版式展示）+ [x] JS 宏实现（Worker 沙箱 + 宏管理，25 测；弱隔离·非硬沙箱）
 - [x] **W-长尾（2026-10-15）**：[x] Writer 脚注/尾注（footnotes/endnotes.xml 读写 + 引用节点 + 编辑 Modal）+ [x] Writer 分栏（w:cols）+ [x] PDF 水印（addWatermark：居中/平铺/透明度/角度，4 测）
 - [x] **W-批5（2026-10-16，三线并行）**：[x] Writer 样式管理器 UI（styleManager 纯函数 4 + jkParagraphStyle mark + 应用/新建/修改/删除 Modal + Ribbon 入口，10 测）+ [x] Sheet 分列/删除重复项（dataTools 纯函数 + 双 Modal + setValues 回写，15 测）+ [x] 演示对象超链接（ShapeBase.hyperlink + a:hlinkClick/rels 全链路 + 选中角标 + 放映热区，5 测）
+- [x] **W-批6（2026-10-16）**：演示「**排练计时**」（对标 WPS 幻灯片放映 → 排练计时；parity 矩阵「演示」P0 最后一项）
+  - **模型**：`JkSlide.advanceAfterMs?: number`（毫秒）=「自动换片时间」，对应 OOXML `<p:transition advTm="毫秒">`；缺省 = 不自动换片（点击换片）。
+  - **OOXML 全链路**：解析读回 `p:transition@advTm`（非数字 / 非有限 / ≤0 一律忽略）；导出四态正确且**合并到同一 `<p:transition>`**：仅效果 / 仅 advTm（自闭合）/ 两者合并 / 都无（**不输出，与改造前逐字节一致 = 零回归**）；`Math.round` 后再判 >0，杜绝写出无意义的 `advTm="0"`。
+  - **纯函数层** `slide/rehearse.ts`：`formatClock` / `createRehearsal` / `recordSlideTime` / `rehearsalSummary` / `finalizeRehearsal`（未访问页标记 `NaN`）/ `applyRehearsalTimings` / `clearRehearsalTimings` / `hasRehearsalTimings` / `totalRehearsalMs` + `MIN_ADVANCE_MS=500` / `MAX_ADVANCE_MS=600000`（钳制）。
+  - **语义（关键，勿回退）**：`applyRehearsalTimings` 三分支——**无记录（undefined/非有限/NaN，即本次排练未访问）→ 保持该页既有 advTm 不变**；有记录且 `< 500ms` → 删除该字段（本次排练刻意「点击换片」）；有记录且 ≥ 下限 → 写入 `clamp(ms, 500, 600000)`。
+  - **放映层** `SlideshowOverlay.tsx`：排练模式（`rehearse` / `onRehearsalFinish`）浮层实时显示「本页 / 累计」用时，**Esc 结算回传而不关闭**（普通模式 Esc 行为逐字节不变）；`finishedRef` 保证结算**幂等**；结算前补记当前页；未访问页仅在结算副本中标 `NaN`（不污染浮层累计）。非排练模式若当前页有合法 advTm 则**倒计时自动换片**（切页/卸载清理定时器）。
+  - **UI** `SlideEditor.tsx`：顶栏「排练计时」（从第 1 页开始排练）/「清除计时」；结束后用项目 `Modal` 确认「是否保留本次排练时间？」（总用时/平均/逐页列表，未访问页显示「未排练」）——**零 window.prompt/alert/confirm**。
+  - **踩坑（血泪，勿重犯）**：① 不要用 effect 卸载兜底做结算——`main.tsx` 挂 `<StrictMode>`，dev 下 effect 双调用会**一进排练就误结算**（P1，已由 QA 的 StrictMode 双 invoke 探针抓出）；② `setState` updater 内不要做副作用；③ 排练记录里的「未访问」不能用 `0` 表示（会被判成「刻意点击换片」而**静默删除**用户既有的自动换片时间）。
+  - **验收**：`scripts/rehearse-smoke.mjs`（真实 Electron 全流程：排练浮层 → Esc → 确认 Modal → 保留写回 → advanceTimings 全部 ≥500 → 清除计时归零 → consoleErrors 0）；单测 rehearse 19（工程师）/ rehearseTiming 10（工程师）/ QA 反证轮补充（rehearse.test / rehearseTiming.test / rehearseStrictMode.qa.test / rehearseTiming.qa.test）；typecheck / build / test 全绿。
+  - 已知限制：不做「排练计时」的逐页停留曲线/多轮平均；放映倒计时为 UI 近似（不改 OOXML 语义）；解析侧 `advTm="3000.7"` 原样读回小数（导出取整，往返收敛）。
 - [x] **字体合规**：调研完成（docs/fonts.md：红线=方正/汉仪/微软雅黑嵌入；内置白名单=OFL 清单）；批 1 已把 系统字体/开源 OFL/厂商免费商用 三组 23 款进字体下拉；批 2 待办=安装包内置思源黑体+霞鹜文楷（附 OFL.txt 与鸣谢页）；批 3 待办=字体管理器（扫描本机字体+授权提示）
+
+### 待确认 / 待排期（不擅自决定，留痕待产品决策）
+
+- **T5.2 PDF 编辑器门控 —— 待产品决策**：pdf-lib 的页面增删/合并/拆分/旋转/提取已在 PDF 工具箱可用；但「**门控**」依赖 T6.5（商业化权限中间件，未实施）。是否先做「无门控的 PDF 编辑器 MVP（注释 / 基础文本编辑）」需产品拍板，本轮未擅自决定。
+- **W-批2续 打印剩余项 —— 待排期**：WPS 级「精确分页」需自研分页/测量引擎（当前为 CSS 流式分页）；「打印缩放比例 / 每页页数 / 分页预览」同属该专项，单独排期。
+- **其余 P1/P2 残留**：演示 SmartArt / 音视频嵌入；Writer 水印 / 封面页 / 比较文档；Sheet 名称管理器 / 函数向导 / 工作表保护 UI；PDF 压缩 / OCR / 表单 / 签名；宏 v2、加密、邮件合并。
 
 ## 阶段总览
 

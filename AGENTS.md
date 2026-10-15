@@ -89,11 +89,11 @@ done
 | `docs/macros.md` | 宏方案（JS 宏 Worker 沙箱） | 宏相关 |
 
 ## 4. 当前基线（每次变化请更新；截至 2026-10-16）
-- **测试**：writer 58 / desktop 148 / presentation 19 / core 46 / sheet 55 / pdf 15 / ai 16。
+- **测试**：writer 58 / desktop 232 / presentation 52 / core 46 / sheet 55 / pdf 15 / ai 16（合计 474）。
 - **已实现**：
   - Writer：docx 读写（L2）+ 域/页码/目录 + **批注** + **修订** + 查找替换 + 页眉页脚 + 脚注/尾注 + 分栏 + 公式（OMML）+ **样式管理器**；
   - Sheet：xlsx + 公式 + 样式双向映射 + 查找替换 + **单元格格式对话框（Ctrl+1）** + **插入图表（选区→PNG 预览/下载）** + **数据透视表** + **分列/删除重复项**；
-  - Presentation：开/编/存 + **表格** + 备注 + 图表 + 动画切换 + 放映 + **母版/版式** + **对象超链接**；
+  - Presentation：开/编/存 + **表格** + 备注 + 图表 + 动画切换 + 放映 + **母版/版式** + **对象超链接** + **排练计时**（advTm 自动换片，2026-10-16）；
   - PDF：页面工具（合并/拆分/提取/删除/旋转/插入/替换）+ **转 TXT / 转图片** + **Office 转 PDF（本机 COM）** + 水印；
   - **全模块导出 PDF**：Writer/Sheet/Presentation → Electron 原生打印管线（`shared/pdfPrint.ts` 纸张单一事实源 + `lib/printHtml.ts` + `sheet/sheetToHtml.ts` + `slide/presentationToHtml.ts` + `main/services/pdfExport.ts`，IPC `pdf:export-html`）；验收脚本 `scripts/pdf-export-smoke.mjs`；
   - AI：适配器（OpenAI 兼容/Claude/Gemini/Ollama）+ Planner + 本地 ops 执行。

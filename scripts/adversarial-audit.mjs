@@ -1201,9 +1201,12 @@ async function generateCrossSoftSamples() {
   }
 
   // pptx 样本
+  // 样本 1 第 1 页：切换效果 fade **且** 带排练计时结果（advTm=3000）→ 覆盖「效果 + advTm 合并到同一 p:transition」
+  // 样本 2 第 2 页：只带 advTm（无切换效果）→ 覆盖自闭合 <p:transition advTm="2500"/> 形态
+  // 意图：让跨软件（WPS COM）实测真正覆盖 WPS 对齐批6 新增的 advTm 导出形态
   const presses = [
-    { name: 'jareking-slide-1.pptx', pres: { slides: [{ shapes: [{ type: 'text', x: 1000000, y: 1000000, w: 5000000, h: 1000000, paragraphs: [{ runs: [{ text: 'Hello WPS', bold: true, fontSize: 32 }] }], geom: 'rect' }, { type: 'shape', geom: 'ellipse', x: 1000000, y: 2500000, w: 3000000, h: 1500000, fill: '#FF0000' }] }], slideWidth: 9144000, slideHeight: 6858000 } },
-    { name: 'jareking-slide-2.pptx', pres: { slides: [{ shapes: [{ type: 'text', x: 500000, y: 500000, w: 6000000, h: 800000, paragraphs: [{ runs: [{ text: '第二页' }] }], geom: 'rect' }] }, { shapes: [{ type: 'table', x: 500000, y: 500000, w: 4000000, h: 2000000, colWidths: [2000000, 2000000], rows: [{ cells: [{ text: 'A' }, { text: 'B' }] }, { cells: [{ text: 'C' }, { text: 'D' }] }] }] }], slideWidth: 9144000, slideHeight: 6858000 } },
+    { name: 'jareking-slide-1.pptx', pres: { slides: [{ transition: 'fade', advanceAfterMs: 3000, shapes: [{ type: 'text', x: 1000000, y: 1000000, w: 5000000, h: 1000000, paragraphs: [{ runs: [{ text: 'Hello WPS', bold: true, fontSize: 32 }] }], geom: 'rect' }, { type: 'shape', geom: 'ellipse', x: 1000000, y: 2500000, w: 3000000, h: 1500000, fill: '#FF0000' }] }], slideWidth: 9144000, slideHeight: 6858000 } },
+    { name: 'jareking-slide-2.pptx', pres: { slides: [{ shapes: [{ type: 'text', x: 500000, y: 500000, w: 6000000, h: 800000, paragraphs: [{ runs: [{ text: '第二页' }] }], geom: 'rect' }] }, { advanceAfterMs: 2500, shapes: [{ type: 'table', x: 500000, y: 500000, w: 4000000, h: 2000000, colWidths: [2000000, 2000000], rows: [{ cells: [{ text: 'A' }, { text: 'B' }] }, { cells: [{ text: 'C' }, { text: 'D' }] }] }] }], slideWidth: 9144000, slideHeight: 6858000 } },
   ];
   for (const { name, pres } of presses) {
     const out = await exportPptx(pres);

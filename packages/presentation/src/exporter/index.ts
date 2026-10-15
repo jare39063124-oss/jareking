@@ -241,6 +241,8 @@ function serializeSlide(
   transition?: 'none' | 'fade' | 'slide',
   /** 形状在 shapes 中的下标 → 超链接关系 id（仅含带 hyperlink 的形状） */
   hlinkByIndex?: Map<number, string>,
+  /** 自动换片时间（毫秒，排练计时结果）；合法（有限数且 > 0）时写入 p:transition@advTm */
+  advanceAfterMs?: number,
 ): string {
   let id = 2; // id=1 保留给 spTree 组
   const parts: string[] = [];
@@ -269,6 +271,28 @@ function serializeSlide(
       );
     }
   });
+  // 切换效果子元素（无效果时为空串）
+  const effectXml =
+    transition === 'fade' ? '<p:fade/>' : transition === 'slide' ? '<p:push dir="u"/>' : '';
+  // 自动换片时间属性：先四舍五入取整，仅当取整结果 > 0 才写出——
+  // 否则 `0 < advTm < 0.5`（如 0.4）会写出无意义的 advTm="0"（语义为「立即换片」），
+  // 此时整页回落到「不输出 p:transition 或仅输出切换效果」。
+  const advRoundedMs =
+    advanceAfterMs !== undefined && Number.isFinite(advanceAfterMs) ? Math.round(advanceAfterMs) : 0;
+  const advTmAttr = advRoundedMs > 0 ? ` advTm="${advRoundedMs}"` : '';
+  // 组装 <p:transition>：切换效果与 advTm 合并到同一元素——
+  //   · 仅效果：<p:transition><p:fade/></p:transition>
+  //   · 仅 advTm：<p:transition advTm="3000"/>
+  //   · 两者都有：<p:transition advTm="3000"><p:fade/></p:transition>
+  //   · 都没有：不输出（与改造前逐字节一致，保证零回归）
+  const transitionXml =
+    effectXml && advTmAttr
+      ? `<p:transition${advTmAttr}>${effectXml}</p:transition>`
+      : effectXml
+        ? `<p:transition>${effectXml}</p:transition>`
+        : advTmAttr
+          ? `<p:transition${advTmAttr}/>`
+          : '';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:cSld><p:spTree>
@@ -276,7 +300,7 @@ function serializeSlide(
     <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
     ${parts.join('')}
   </p:spTree></p:cSld>
-      ${transition === 'fade' ? '<p:transition><p:fade/></p:transition>' : transition === 'slide' ? '<p:transition><p:push dir="u"/></p:transition>' : ''}
+      ${transitionXml}
 </p:sld>`;
 }
 
@@ -797,7 +821,7 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
 
     zip.file(
       `ppt/slides/slide${i + 1}.xml`,
-      serializeSlide(slide.shapes ?? [], i, images, slide.transition, hlinkByIndex),
+      serializeSlide(slide.shapes ?? [], i, images, slide.transition, hlinkByIndex, slide.advanceAfterMs),
     );
 
     // 汇总本页 rels 关系（图片 + 超链接 + 备注 + 版式）

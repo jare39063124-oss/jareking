@@ -82,6 +82,11 @@ export interface JkSlide {
   layout?: string;
   /** 切换效果（v1 仅 none/fade；其余效果解析降级为 none） */
   transition?: 'none' | 'fade' | 'slide';
+  /**
+   * 自动换片时间（毫秒，对应 OOXML `<p:transition advTm="毫秒">`），即「排练计时」结果。
+   * 合法值须为有限数且 > 0；缺省（undefined）表示不自动换片（需点击/按键换片）。
+   */
+  advanceAfterMs?: number;
   /** 演讲者备注（纯文本，段落以 \n 分隔；WPS/PowerPoint 备注栏内容，放映时不显示） */
   notes?: string;
 }
