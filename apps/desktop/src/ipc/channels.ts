@@ -22,6 +22,11 @@ export const IPC = {
   SYSTEM_OPEN_DATA_DIR: 'system:openDataDir',
   SYSTEM_OPEN_EXTERNAL: 'system:openExternal',
   PDF_OFFICE_TO_PDF: 'pdf:office-to-pdf',
+  // 宏（用户 JavaScript 宏）：CRUD 由主进程文件系统实现；执行在渲染进程 Worker 沙箱
+  MACRO_LIST: 'macro:list',
+  MACRO_READ: 'macro:read',
+  MACRO_SAVE: 'macro:save',
+  MACRO_DELETE: 'macro:delete',
 } as const;
 
 /** 允许通过 db:query 执行的操作名（白名单，杜绝任意 SQL 注入） */

@@ -10,6 +10,7 @@ import {
   type DocumentLibraryService,
 } from './documentLibraryService.js';
 import { AiConfigService } from './aiConfigService.js';
+import { MacroService } from './macroService.js';
 
 /** 主进程全部本地服务实例 */
 export interface AppServices {
@@ -17,6 +18,7 @@ export interface AppServices {
   account: AccountService;
   library: DocumentLibraryService;
   ai: AiConfigService;
+  macro: MacroService;
 }
 
 /** 初始化全部本地服务（内部为单例，重复调用返回同一组实例） */
@@ -25,5 +27,6 @@ export async function initServices(): Promise<AppServices> {
   const account = await getAccountService();
   const library = await getDocumentLibraryService();
   const ai = new AiConfigService();
-  return { db, account, library, ai };
+  const macro = new MacroService();
+  return { db, account, library, ai, macro };
 }

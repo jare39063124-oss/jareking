@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { ChevronDown, FolderOpen, HardDrive, Moon, Sun, Type } from 'lucide-react';
+import { ChevronDown, Code2, FolderOpen, HardDrive, Moon, Sun, Type } from 'lucide-react';
 import { Modal } from './Modal';
 import { Select } from './Select';
 import { AiConfigSection } from './AiConfigSection';
+import { MacroSection } from './MacroSection';
 import { Button } from './Button';
 import { toast } from '../stores/toastStore';
 import { useUiStore, type ThemeMode } from '../stores/uiStore';
@@ -178,6 +179,11 @@ export function SettingsPanel() {
         {/* 存储管理（数据透明，对标 WPS C 盘痛点） */}
         <CollapsibleSection title="存储管理" icon={HardDrive}>
           <StorageSectionBody />
+        </CollapsibleSection>
+
+        {/* 宏（JS 宏 Worker 沙箱）：列出/新建/编辑/删除/运行，见 docs/macros.md */}
+        <CollapsibleSection title="宏" icon={Code2} defaultOpen={false}>
+          <MacroSection />
         </CollapsibleSection>
 
         {/* 外观：主题 */}
