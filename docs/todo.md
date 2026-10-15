@@ -13,6 +13,7 @@
 - [x] **W-批3**：[x] 动画切换 + 放映模式（T3.3）+ [x] PPT 演讲者备注 + [x] Sheet 查找替换 + [x] PPT 表格 + [x] Sheet 图表（T2.5，2026-10-15：选区→PNG 生成/预览/下载，chartData 12 测）
 - [x] **W-批4（2026-10-15 全部落地）**：[x] 批注（Writer，comments 全链路 round-trip）+ [x] 修订（track changes，w:ins/w:del 解析导出 + 编辑器标记 + 接受/拒绝）+ [x] 数据透视表（Sheet，buildPivot 纯函数 + 11 测 + Modal）+ [x] 母版/版式（演示，解析保留 round-trip + 编辑器版式展示）+ [x] JS 宏实现（Worker 沙箱 + 宏管理，25 测；弱隔离·非硬沙箱）
 - [x] **W-长尾（2026-10-15）**：[x] Writer 脚注/尾注（footnotes/endnotes.xml 读写 + 引用节点 + 编辑 Modal）+ [x] Writer 分栏（w:cols）+ [x] PDF 水印（addWatermark：居中/平铺/透明度/角度，4 测）
+- [x] **W-批5（2026-10-16，三线并行）**：[x] Writer 样式管理器 UI（styleManager 纯函数 4 + jkParagraphStyle mark + 应用/新建/修改/删除 Modal + Ribbon 入口，10 测）+ [x] Sheet 分列/删除重复项（dataTools 纯函数 + 双 Modal + setValues 回写，15 测）+ [x] 演示对象超链接（ShapeBase.hyperlink + a:hlinkClick/rels 全链路 + 选中角标 + 放映热区，5 测）
 - [x] **字体合规**：调研完成（docs/fonts.md：红线=方正/汉仪/微软雅黑嵌入；内置白名单=OFL 清单）；批 1 已把 系统字体/开源 OFL/厂商免费商用 三组 23 款进字体下拉；批 2 待办=安装包内置思源黑体+霞鹜文楷（附 OFL.txt 与鸣谢页）；批 3 待办=字体管理器（扫描本机字体+授权提示）
 
 ## 阶段总览
