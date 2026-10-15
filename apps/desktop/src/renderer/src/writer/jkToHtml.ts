@@ -280,9 +280,15 @@ function renderParagraph(
   const inner = renderRunsWithComments(p.runs, p.commentRanges, relMap, mediaMap);
   const align = alignToCss(p.pPr?.jc);
   const style = align ? ` style="text-align:${align}"` : '';
+  // 段落样式引用（pPr.styleId）：以 data-jk-para-style 包裹整段行内内容，
+  // 供编辑器 jkParagraphStyle mark 承载，保存时 htmlToJk 再读回 pPr.styleId。
+  const sid = p.pPr?.styleId;
+  const content = sid
+    ? `<span data-jk-para-style="${escapeHtml(sid)}">${inner}</span>`
+    : inner;
   const lvl = headingLevel(p.pPr);
-  if (lvl) return `<h${lvl}${style}>${inner}</h${lvl}>`;
-  return `<p${style}>${inner}</p>`;
+  if (lvl) return `<h${lvl}${style}>${content}</h${lvl}>`;
+  return `<p${style}>${content}</p>`;
 }
 
 /** 渲染表格单元格内的一组块（段落 / 嵌套表格），不支持单元格内列表分组 */

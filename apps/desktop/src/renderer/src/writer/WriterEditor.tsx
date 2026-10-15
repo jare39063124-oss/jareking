@@ -20,6 +20,7 @@ import { takePendingOpen, peekPendingOpen } from "../stores/pendingOpenStore";
 import { JkFormula } from "./jkFormula";
 import { JK_COMMENT_MARK } from "./jkComment";
 import { JK_NOTE_REF } from "./jkNoteRef";
+import { JK_PARAGRAPH_STYLE } from "./jkParagraphStyle";
 import { linearToOmml, validateLinearFormula } from "@jareking/writer";
 import { Modal } from "../components/Modal";
 import { Input } from "../components/Input";
@@ -30,7 +31,27 @@ import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Link from '@tiptap/extension-link';
 import { exportDocx, parseDocx } from '@jareking/writer';
-import type { Block, Inline, JkComment, JkDocument, JkNote, Run, Section } from '@jareking/writer';
+// 样式管理器纯函数（packages/writer/src/styleManager.ts）
+import {
+  cloneStyleDef,
+  groupStyles,
+  makeUniqueStyleId,
+  resolveParagraphAttrs,
+} from '@jareking/writer';
+import type {
+  Alignment,
+  Block,
+  Inline,
+  JkComment,
+  JkDocument,
+  JkNote,
+  ParagraphProperties,
+  Run,
+  RunProperties,
+  Section,
+  StyleDef,
+  StyleSheet,
+} from '@jareking/writer';
 import {
   applyChunkEdits,
   collectImageRelIds,
@@ -41,7 +62,7 @@ import {
   WRITER_CHUNK_BLOCK_THRESHOLD,
 } from './chunking';
 import type { ChunkRange } from './chunking';
-import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon, MessageSquarePlus, Footprints, Columns2 } from 'lucide-react';
+import { Link as LinkIcon, Sigma, Hash, PanelTop, PanelBottom, Bold, Italic, Underline as UnderlineIcon, MessageSquarePlus, Footprints, Columns2, Plus, Trash2, Check } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { LoadingOverlay } from '../components/LoadingOverlay';
@@ -53,6 +74,9 @@ import { JkTrackChanges } from './jkRevision';
 import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
 import { downloadBlob } from '../lib/download';
+import { buildPrintDocument } from '../lib/printHtml';
+import { exportHtmlToPdf } from '../lib/pdfExport';
+import { FONT_SIZES } from '../lib/fonts';
 import { useUiStore } from '../stores/uiStore';
 import {
   notifyEditorChange,
@@ -129,6 +153,56 @@ function maxNoteId(list: JkNote[]): number {
   }, 0);
 }
 
+/* -------------------- 样式管理器（WPS 对齐）辅助 -------------------- */
+
+/** 模型对齐方式（w:jc）→ 样式管理器下拉/命令取值（left/center/right/justify；其它返回空串） */
+function jcToUi(jc?: Alignment): '' | 'left' | 'center' | 'right' | 'justify' {
+  switch (jc) {
+    case 'center':
+      return 'center';
+    case 'right':
+    case 'end':
+      return 'right';
+    case 'justify':
+    case 'both':
+    case 'distribute':
+      return 'justify';
+    case 'left':
+    case 'start':
+      return 'left';
+    default:
+      return '';
+  }
+}
+
+/** 样式管理器下拉取值 → 模型对齐方式（非四值之一返回 undefined） */
+function uiToJc(ui: string): Alignment | undefined {
+  if (ui === 'left' || ui === 'center' || ui === 'right' || ui === 'justify') return ui;
+  return undefined;
+}
+
+/**
+ * 样式管理器「属性摘要」文案：把有效属性（pPr + rPr）拼为一段人类可读文本。
+ * 无任何可展示属性时返回「（无格式属性）」。
+ */
+function styleAttrSummary(attrs: {
+  pPr: ParagraphProperties;
+  rPr: RunProperties;
+}): string {
+  const parts: string[] = [];
+  const { pPr, rPr } = attrs;
+  const fam = rPr.font?.eastAsia ?? rPr.font?.ascii ?? rPr.font?.hAnsi;
+  if (fam) parts.push(`字体 ${fam}`);
+  if (rPr.size !== undefined) parts.push(`字号 ${rPr.size / 2}pt`);
+  if (rPr.bold) parts.push('加粗');
+  if (rPr.italic) parts.push('斜体');
+  if (rPr.underline && rPr.underline !== 'none') parts.push('下划线');
+  if (rPr.color) parts.push(`颜色 #${rPr.color}`);
+  const jc = jcToUi(pPr.jc);
+  if (jc) parts.push(`对齐 ${jc === 'justify' ? '两端' : jc === 'center' ? '居中' : jc === 'right' ? '右' : '左'}`);
+  return parts.length ? parts.join(' · ') : '（无格式属性）';
+}
+
 /**
  * 按「接受 / 拒绝」改写一组行内元素上的修订（纯函数，返回新数组）。
  *
@@ -190,6 +264,12 @@ export function WriterEditor() {
   const mediaRegistryRef = useRef<MediaRegistry | undefined>(undefined);
   if (!mediaRegistryRef.current) mediaRegistryRef.current = new MediaRegistry();
 
+  /** 导出 PDF 调试探针（--jk-debug）：与 onExportPdf 同路径构建 HTML，但不下载，直接取字节 */
+  const pdfProbeRef = useRef<() => Promise<{ size: number; head: string }>>(async () => ({
+    size: 0,
+    head: '',
+  }));
+
   // #46-A 分块编辑：完整文档留内存作真源；编辑器只渲染 body 的一个切片，DOM 节点数受限
   const fullDocRef = useRef<JkDocument | null>(null);
   const chunkRangesRef = useRef<ChunkRange[]>([]);
@@ -236,6 +316,24 @@ export function WriterEditor() {
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [colCount, setColCount] = useState(2);
   const [colSep, setColSep] = useState(false);
+
+  // —— 样式管理器（WPS 对齐：样式）——
+  // 样式定义表真源：以 ref 持有（保存时注入导出模型；分块模式与 fullDocRef.styleDefs 同引用）。
+  // 段落引用该样式经 jkParagraphStyle mark 往返（见 jkParagraphStyle / jkToHtml / htmlToJk）。
+  const styleDefsRef = useRef<StyleSheet>({ styles: [] });
+  const [styleOpen, setStyleOpen] = useState(false);
+  // ref 变更不触发渲染，用 tick 强制刷新列表/摘要
+  const [styleTick, setStyleTick] = useState(0);
+  const [styleSelectedId, setStyleSelectedId] = useState('');
+  // 编辑表单字段（新建样式 / 覆盖修改共用）
+  const [styleName, setStyleName] = useState('');
+  const [styleType, setStyleType] = useState<StyleDef['styleType']>('paragraph');
+  const [styleFontSize, setStyleFontSize] = useState('');
+  const [styleFontFamily, setStyleFontFamily] = useState('');
+  const [styleBold, setStyleBold] = useState(false);
+  const [styleItalic, setStyleItalic] = useState(false);
+  const [styleColor, setStyleColor] = useState('#000000');
+  const [styleAlign, setStyleAlign] = useState('');
 
   // 表格底纹（单元格/表头/行/表格四级）保真逻辑与统一扩展集合见 ./writerExtensions。
   // 主编辑器与「页眉页脚」Modal 共用 writerExtensions，避免重复声明。
@@ -358,6 +456,11 @@ export function WriterEditor() {
     const reg = mediaRegistryRef.current!;
     reg.clear();
     fullDocRef.current = jk;
+    // 回填样式定义表（缺省为空表）：样式管理器与保存注入的真源；
+    // 与 fullDocRef.styleDefs 同一对象引用，分块写回不会丢失定义。
+    if (!jk.styleDefs) jk.styleDefs = { styles: [] };
+    styleDefsRef.current = jk.styleDefs;
+    setStyleTick((t) => t + 1);
     // 回填当前文档的页眉/页脚内容（缺省为空数组）
     hfRef.current = {
       header: jk.sections?.[0]?.header ?? [],
@@ -489,6 +592,9 @@ export function WriterEditor() {
         }),
         // #46-A 验证：跳转到指定切片
         goToChunk: (i: number) => goToChunk(i),
+        // 导出 PDF 探针（QA 冒烟）：走与 onExportPdf 相同的 HTML 构建路径，但不下载，
+        // 直接返回可跨 CDP 序列化的 { size, head }（head 期望为 '%PDF-'）
+        pdfProbe: () => pdfProbeRef.current(),
       };
     }
     return () => {
@@ -563,6 +669,10 @@ export function WriterEditor() {
       jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
       // 注入脚注/尾注与分栏设置（两路保存都注入）
       applyNotesAndColumns(jk);
+      // 注入样式定义表（两路保存都注入）：确保新建/修改/删除的样式能落盘。
+      // 说明：非分块模式的模型由 htmlToJk 从 HTML 重建（styleDefs 为空），
+      // 故此处以 styleDefsRef 覆盖；分块模式二者本就同引用，覆盖无副作用。
+      jk.styleDefs = styleDefsRef.current;
       const buf = await exportDocx(jk);
       downloadBlob(
         buf,
@@ -572,6 +682,37 @@ export function WriterEditor() {
       toast.success('已导出「导出.docx」');
     } catch {
       toast.warning('导出失败：文档包含暂不支持的内容');
+    }
+  };
+
+  /**
+   * 构建打印用 HTML（导出 PDF 与调试探针共用同一条 HTML 构建路径）。
+   * 分块模式先写回当前切片取整文；非分块模式从编辑器取回最新模型。
+   * `jkToHtml(jk)` 不传 mediaMap —— 纯函数语义会把图片内联为 data URL，正是打印所需。
+   */
+  const buildPdfHtml = (): string => {
+    let jk: JkDocument;
+    if (chunkModeRef.current && fullDocRef.current) {
+      flushCurrentChunk();
+      jk = fullDocRef.current;
+    } else {
+      jk = collectModelFromEditor();
+    }
+    const body = jkToHtml(jk);
+    // 纸张宽度相关 CSS：正文占满页宽，图片/表格不溢出
+    const extraCss = '.jk-prose{max-width:100%;}img{max-width:100%;}table{max-width:100%;}';
+    return buildPrintDocument({ title: '导出', bodyHtml: body, extraCss });
+  };
+
+  /** 导出 PDF：经 Electron 打印管线生成 PDF 并交给统一下载助手 */
+  const onExportPdf = async () => {
+    if (!editor) return;
+    try {
+      const html = buildPdfHtml();
+      await exportHtmlToPdf({ html, fileName: '导出.pdf' });
+      toast.success('已导出「导出.pdf」');
+    } catch (err) {
+      toast.warning('导出 PDF 失败：' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -609,6 +750,20 @@ export function WriterEditor() {
   const saveRef = useRef<() => void>(() => {});
   useEffect(() => {
     saveRef.current = () => void onSave();
+  });
+
+  // 导出 PDF 命令要读到最新闭包（命令只在 editor 变化时注册），用 ref 同步
+  const exportPdfRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    exportPdfRef.current = () => void onExportPdf();
+    pdfProbeRef.current = async () => {
+      const html = buildPdfHtml();
+      const bytes = await window.jareking.invoke<Uint8Array>(window.jareking.IPC.PDF_EXPORT_HTML, {
+        html,
+        fileName: '导出.pdf',
+      });
+      return { size: bytes.length, head: String.fromCharCode(...bytes.slice(0, 5)) };
+    };
   });
 
   /** 插入图片：选择本地文件 → 读为 data URL → TipTap Image（保存时由 htmlToJk 落盘为 media） */
@@ -799,6 +954,177 @@ export function WriterEditor() {
     toast.success(colCount <= 1 ? '已设为单栏' : `已设为 ${colCount} 栏`);
   };
 
+  /* -------------------- 样式管理器（WPS 对齐：样式） -------------------- */
+
+  /** 把某个样式（含 basedOn 链继承的有效属性）回显到编辑表单 */
+  const loadStyleToForm = (def: StyleDef) => {
+    const attrs = resolveParagraphAttrs(styleDefsRef.current, def.styleId);
+    setStyleSelectedId(def.styleId);
+    setStyleName(def.name ?? def.styleId);
+    setStyleType(def.styleType);
+    setStyleFontSize(attrs.rPr.size !== undefined ? String(attrs.rPr.size / 2) : '');
+    setStyleFontFamily(
+      attrs.rPr.font?.eastAsia ?? attrs.rPr.font?.ascii ?? attrs.rPr.font?.hAnsi ?? '',
+    );
+    setStyleBold(attrs.rPr.bold === true);
+    setStyleItalic(attrs.rPr.italic === true);
+    setStyleColor(attrs.rPr.color ? `#${attrs.rPr.color}` : '#000000');
+    setStyleAlign(jcToUi(attrs.pPr.jc));
+  };
+
+  /** 打开样式管理器时，若尚未选择样式则默认选中第一个（便于直接查看/应用） */
+  useEffect(() => {
+    if (!styleOpen) return;
+    const styles = styleDefsRef.current.styles;
+    if (!styleSelectedId && styles.length) loadStyleToForm(styles[0]);
+    // 仅在「打开」动作时同步一次默认选择，避免每次列表变动都覆盖用户选择
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [styleOpen]);
+
+  /** 表单字段 → RunProperties（仅写入显式设置的项；字号 pt → half-point 存储） */
+  const buildRPrFromForm = (): RunProperties | undefined => {
+    const rPr: RunProperties = {};
+    const size = Number(styleFontSize);
+    if (styleFontSize !== '' && Number.isFinite(size) && size > 0) rPr.size = Math.round(size * 2);
+    const fam = styleFontFamily.trim();
+    if (fam) rPr.font = { ascii: fam, eastAsia: fam, hAnsi: fam };
+    if (styleBold) rPr.bold = true;
+    if (styleItalic) rPr.italic = true;
+    const c = styleColor.trim().replace(/^#/, '');
+    if (/^[0-9a-fA-F]{6}$/.test(c)) rPr.color = c.toUpperCase();
+    return Object.keys(rPr).length ? rPr : undefined;
+  };
+
+  /** 表单字段 → ParagraphProperties（当前仅对齐；缩进/行距本轮不入 UI） */
+  const buildPPrFromForm = (): ParagraphProperties | undefined => {
+    const jc = uiToJc(styleAlign);
+    return jc ? { jc } : undefined;
+  };
+
+  /** 新建样式：以表单（名称 + 关键属性）创建并 push 进样式表（makeUniqueStyleId 保证唯一） */
+  const createStyleFromForm = () => {
+    const name = styleName.trim() || '新样式';
+    const existing = styleDefsRef.current.styles.map((s) => s.styleId);
+    const styleId = makeUniqueStyleId(name, existing);
+    // 以当前所选样式为「派生来源」复制基础属性，再以表单值覆盖
+    const src = styleDefsRef.current.styles.find((s) => s.styleId === styleSelectedId);
+    const def = cloneStyleDef(src, name, styleType);
+    def.styleId = styleId;
+    def.rPr = buildRPrFromForm();
+    def.pPr = buildPPrFromForm();
+    styleDefsRef.current.styles.push(def);
+    setStyleSelectedId(styleId);
+    setStyleTick((t) => t + 1);
+    toast.success(`已新建样式「${name}」`);
+  };
+
+  /** 保存修改：覆盖当前所选样式的名称与属性（同 styleId 就地更新） */
+  const overwriteSelectedStyle = () => {
+    const def = styleDefsRef.current.styles.find((s) => s.styleId === styleSelectedId);
+    if (!def) {
+      toast.warning('请先选择一个样式');
+      return;
+    }
+    def.name = styleName.trim() || def.name || def.styleId;
+    def.styleType = styleType;
+    def.rPr = buildRPrFromForm();
+    def.pPr = buildPPrFromForm();
+    setStyleTick((t) => t + 1);
+    toast.success(`已更新样式「${def.name}」`);
+  };
+
+  /**
+   * 删除样式：仅从定义表移除，**不清理**正文中对该 styleId 的引用
+   * （引用保留便于撤销/后续恢复；Word/WPS 打开时缺失样式按默认格式呈现）。
+   */
+  const deleteSelectedStyle = () => {
+    const styles = styleDefsRef.current.styles;
+    const idx = styles.findIndex((s) => s.styleId === styleSelectedId);
+    if (idx < 0) {
+      toast.warning('请先选择一个样式');
+      return;
+    }
+    const [removed] = styles.splice(idx, 1);
+    setStyleSelectedId('');
+    setStyleTick((t) => t + 1);
+    toast.success(`已删除样式「${removed.name ?? removed.styleId}」`);
+  };
+
+  /**
+   * 应用样式到当前光标/选区覆盖的段落：
+   *  1) 段落样式 → 打 jkParagraphStyle mark（承载 styleId，随 HTML 往返落盘为 w:pStyle）；
+   *  2) 把有效属性（字号/字体/加粗/斜体/颜色/对齐）应用到当前选区，使效果立即可见；
+   *  3) 同步模型（fullDocRef），保证「保存再打开不丢」。
+   * 字符样式仅下发字符属性（不设段落 pStyle）；表格样式暂缓（明确提示，不留空壳）。
+   */
+  const applySelectedStyle = () => {
+    const ed = editor;
+    const def = styleDefsRef.current.styles.find((s) => s.styleId === styleSelectedId);
+    if (!ed || !def) {
+      toast.warning('请先选择一个样式');
+      return;
+    }
+    if (def.styleType === 'table') {
+      toast.warning('表格样式应用将在后续版本支持');
+      return;
+    }
+    const isChar = def.styleType === 'character';
+    const attrs = resolveParagraphAttrs(styleDefsRef.current, def.styleId);
+    // 扩展到选区覆盖段落的整段：光标落在段内时作用于整段（对齐 WPS 段落样式语义）
+    const { $from, $to } = ed.state.selection;
+    const from = $from.start($from.depth);
+    const to = $to.end($to.depth);
+
+    // 1) 段落样式：给选区覆盖的段落加 mark（承载 styleId）
+    if (!isChar) {
+      const markType = ed.schema.marks[JK_PARAGRAPH_STYLE];
+      if (markType) {
+        const tr = ed.state.tr;
+        let touched = false;
+        ed.state.doc.nodesBetween(from, to, (node, pos) => {
+          if (node.isTextblock) {
+            const s = pos + 1;
+            const e = pos + node.content.size;
+            if (e > s) {
+              tr.removeMark(s, e, markType);
+              tr.addMark(s, e, markType.create({ styleId: def.styleId }));
+              touched = true;
+            }
+          }
+          return true;
+        });
+        if (touched) ed.view.dispatch(tr);
+      }
+    }
+
+    // 2) 可见格式：逐属性应用到当前选区
+    let chain = ed.chain().focus().setTextSelection({ from, to });
+    if (attrs.rPr.size !== undefined) chain = chain.setFontSize(`${attrs.rPr.size / 2}pt`);
+    const fam = attrs.rPr.font?.eastAsia ?? attrs.rPr.font?.ascii ?? attrs.rPr.font?.hAnsi;
+    if (fam) chain = chain.setFontFamily(fam);
+    if (attrs.rPr.bold === true) chain = chain.setBold();
+    else if (attrs.rPr.bold === false) chain = chain.unsetBold();
+    if (attrs.rPr.italic === true) chain = chain.setItalic();
+    else if (attrs.rPr.italic === false) chain = chain.unsetItalic();
+    if (attrs.rPr.color) chain = chain.setColor(`#${attrs.rPr.color}`);
+    const uiJc = jcToUi(attrs.pPr.jc);
+    if (!isChar && uiJc) chain = chain.setTextAlign(uiJc);
+    chain.run();
+
+    // 3) 模型同步：把 styleId 与格式写回保存真源
+    if (chunkModeRef.current && fullDocRef.current) {
+      // 分块模式：把当前切片写回整文（含 styleId），定义表本就同引用
+      flushCurrentChunk();
+    } else if (editor) {
+      const doc = collectModelFromEditor();
+      doc.styleDefs = styleDefsRef.current;
+      fullDocRef.current = doc;
+    }
+
+    setStyleTick((t) => t + 1);
+    toast.success(`已应用样式「${def.name ?? def.styleId}」`);
+  };
+
   /**
    * 把编辑能力注册到命令总线：Ribbon 的按钮 / 控件由此驱动。
    * 依赖 editor，命令闭包读最新 editor；卸载时自动注销。
@@ -870,6 +1196,8 @@ export function WriterEditor() {
         run: () => editor.chain().focus().setParagraph().run(),
         state: () => ({ active: editor.isActive('paragraph'), disabled: false }),
       },
+      // —— 样式管理器（WPS 对齐：样式）——
+      'style-manager': { run: () => setStyleOpen(true) },
       'align-left': {
         run: () => editor.chain().focus().setTextAlign('left').run(),
         state: () => ({ active: editor.isActive({ textAlign: 'left' }), disabled: false }),
@@ -1007,6 +1335,10 @@ export function WriterEditor() {
       save: {
         run: () => saveRef.current(),
       },
+      // —— 文件：导出 PDF（WPS 对齐批2：统一走 Electron 打印管线）——
+      'export-pdf': {
+        run: () => exportPdfRef.current(),
+      },
     };
     return registerEditorCommands(commands);
   }, [editor]);
@@ -1057,6 +1389,11 @@ export function WriterEditor() {
     hfRef.current = { header: headerJk.body, footer: footerJk.body };
     setHfOpen(false);
   };
+
+  // —— 样式管理器渲染派生的数据（styleTick 变化时随重渲染刷新）——
+  const styleGroups = groupStyles(styleDefsRef.current);
+  const selectedStyleDef = styleDefsRef.current.styles.find((s) => s.styleId === styleSelectedId);
+  const selectedAttrs = resolveParagraphAttrs(styleDefsRef.current, styleSelectedId);
 
   return (
     <div className="relative flex h-full w-full min-h-0 flex-col">
@@ -1555,6 +1892,170 @@ export function WriterEditor() {
           <p className="text-tiny text-muted">
             作用于当前节；1 栏且无分隔线即恢复单栏。保存后写入 sectPr 的 w:cols。
           </p>
+        </div>
+      </Modal>
+
+      {/* 样式管理器（WPS 对齐：样式）：左分组列表 + 右属性摘要/编辑；严禁 window.prompt/alert */}
+      <Modal
+        open={styleOpen}
+        onClose={() => setStyleOpen(false)}
+        title="样式管理器"
+        width={640}
+        footer={
+          <>
+            <Button variant="ghost" size="sm" icon={<Plus size={13} />} onClick={createStyleFromForm}>
+              新建样式
+            </Button>
+            <Button variant="ghost" size="sm" onClick={overwriteSelectedStyle}>
+              保存修改
+            </Button>
+            <Button variant="ghost" size="sm" icon={<Trash2 size={13} />} onClick={deleteSelectedStyle}>
+              删除样式
+            </Button>
+            <Button variant="primary" size="sm" icon={<Check size={13} />} onClick={applySelectedStyle}>
+              应用
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setStyleOpen(false)}>
+              关闭
+            </Button>
+          </>
+        }
+      >
+        <div className="flex gap-3" data-style-tick={styleTick}>
+          {/* 左：按 styleType 分组的样式列表（groupStyles 已排序） */}
+          <div className="max-h-[380px] w-[210px] shrink-0 overflow-auto rounded border border-border">
+            {styleGroups.length === 0 ? (
+              <p className="p-2 text-tiny text-muted">暂无样式，点「新建样式」创建。</p>
+            ) : (
+              styleGroups.map((g) => (
+                <div key={g.group} className="border-b border-border last:border-b-0">
+                  <div className="bg-muted-bg px-2 py-1 text-tiny font-medium text-muted">
+                    {g.group}
+                  </div>
+                  {g.styles.map((s) => (
+                    <button
+                      key={s.styleId}
+                      type="button"
+                      onClick={() => loadStyleToForm(s)}
+                      aria-pressed={s.styleId === styleSelectedId}
+                      title={s.name ?? s.styleId}
+                      className={`flex w-full items-center px-2 py-1 text-left text-tiny transition-colors ${
+                        s.styleId === styleSelectedId
+                          ? 'bg-accent/15 text-accent'
+                          : 'text-fg hover:bg-hover'
+                      }`}
+                    >
+                      <span className="truncate">{s.name ?? s.styleId}</span>
+                    </button>
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* 右：属性摘要 + 编辑表单 */}
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="rounded-sm border border-border bg-muted-bg px-2 py-1.5 text-tiny text-muted">
+              {selectedStyleDef
+                ? `样式「${selectedStyleDef.name ?? selectedStyleDef.styleId}」 · ${styleAttrSummary(selectedAttrs)}`
+                : '未选择样式'}
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-tiny text-muted">样式名</span>
+              <Input
+                value={styleName}
+                onChange={(e) => setStyleName(e.target.value)}
+                placeholder="样式名称"
+              />
+            </label>
+
+            <div className="flex gap-2">
+              <label className="flex flex-1 flex-col gap-1">
+                <span className="text-tiny text-muted">类型</span>
+                <select
+                  className="h-8 rounded-sm border border-border bg-surface px-2 text-tiny text-fg outline-none"
+                  value={styleType}
+                  onChange={(e) => setStyleType(e.target.value as StyleDef['styleType'])}
+                >
+                  <option value="paragraph">段落样式</option>
+                  <option value="character">字符样式</option>
+                  <option value="table">表格样式</option>
+                </select>
+              </label>
+              <label className="flex flex-1 flex-col gap-1">
+                <span className="text-tiny text-muted">字号</span>
+                <select
+                  className="h-8 rounded-sm border border-border bg-surface px-2 text-tiny text-fg outline-none"
+                  value={styleFontSize}
+                  onChange={(e) => setStyleFontSize(e.target.value)}
+                >
+                  <option value="">默认</option>
+                  {FONT_SIZES.map((s) => (
+                    <option key={s} value={String(s)}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-tiny text-muted">字体</span>
+              <Input
+                value={styleFontFamily}
+                onChange={(e) => setStyleFontFamily(e.target.value)}
+                placeholder="如 宋体 / Microsoft YaHei（留空为默认）"
+              />
+            </label>
+
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-1.5 text-tiny text-fg">
+                <input
+                  type="checkbox"
+                  checked={styleBold}
+                  onChange={(e) => setStyleBold(e.target.checked)}
+                />
+                加粗
+              </label>
+              <label className="flex items-center gap-1.5 text-tiny text-fg">
+                <input
+                  type="checkbox"
+                  checked={styleItalic}
+                  onChange={(e) => setStyleItalic(e.target.checked)}
+                />
+                斜体
+              </label>
+              <label className="flex items-center gap-1.5 text-tiny text-fg">
+                颜色
+                <input
+                  type="color"
+                  aria-label="样式颜色"
+                  value={/^#[0-9a-fA-F]{6}$/.test(styleColor) ? styleColor : '#000000'}
+                  onChange={(e) => setStyleColor(e.target.value)}
+                />
+              </label>
+            </div>
+
+            <label className="flex items-center gap-2">
+              <span className="text-tiny text-muted">对齐</span>
+              <select
+                className="h-8 flex-1 rounded-sm border border-border bg-surface px-2 text-tiny text-fg outline-none"
+                value={styleAlign}
+                onChange={(e) => setStyleAlign(e.target.value)}
+              >
+                <option value="">默认</option>
+                <option value="left">左对齐</option>
+                <option value="center">居中</option>
+                <option value="right">右对齐</option>
+                <option value="justify">两端对齐</option>
+              </select>
+            </label>
+
+            <p className="text-tiny text-muted">
+              选择左侧样式后点「应用」套用到当前段落；「新建样式」按上方名称与属性创建；「保存修改」覆盖当前样式。保存后写入 word/styles.xml（w:style）并在段落写入 w:pStyle。
+            </p>
+          </div>
         </div>
       </Modal>
 

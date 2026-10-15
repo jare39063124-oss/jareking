@@ -25,6 +25,7 @@ import { JkFormula } from './jkFormula';
 import { JkNoteRef } from './jkNoteRef';
 import { JkCommentMark } from './jkComment';
 import { JkRevisionMark } from './jkRevision';
+import { JkParagraphStyle } from './jkParagraphStyle';
 
 /**
  * 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
@@ -85,6 +86,8 @@ export const writerExtensions: Extensions = [
   // 修订（track changes）：数据承载 mark，主编辑器与页眉页脚共用；
   // 实时记录插件（JkTrackChanges）只挂主编辑器，见 WriterEditor。
   JkRevisionMark,
+  // 段落样式引用（样式管理器）：承载 Paragraph.pPr.styleId 的往返（见 jkParagraphStyle）。
+  JkParagraphStyle,
 ];
 
 export { TableCellWithBg, TableHeaderWithBg, TableRowWithBg, TableWithBg };

@@ -191,6 +191,8 @@ function deriveRPr(tag: string, el: Element, parent: RunProperties): RunProperti
  * @param commentRanges 可选。传入时，遇到 `span[data-jk-comment]` 会记录其覆盖的
  *   run 索引区间（左闭右开）并以批注 id 归档，供保存时还原为 Paragraph.commentRanges。
  *   仅在段落顶层传递（超链接内不传，避免索引口径错位）。
+ * @param paraStyle 可选。传入时，遇到 `span[data-jk-para-style]` 会记录其样式 id
+ *   （供还原为 Paragraph.pPr.styleId）；同样仅在段落顶层传递。
  */
 function collectInlines(
   node: Node,
@@ -198,6 +200,7 @@ function collectInlines(
   out: Inline[],
   ctx: ParseCtx,
   commentRanges?: CommentRange[],
+  paraStyle?: { styleId?: string },
 ): void {
   if (node.nodeType === Node.TEXT_NODE) {
     const text = node.textContent ?? '';
@@ -238,9 +241,19 @@ function collectInlines(
   if (tag === 'span' && el.getAttribute('data-jk-comment')) {
     const id = el.getAttribute('data-jk-comment') ?? '';
     const start = out.length;
-    el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges));
+    el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges, paraStyle));
     const end = out.length;
     if (commentRanges && id && end > start) commentRanges.push({ id, start, end });
+    return;
+  }
+
+  // 段落样式 span（data-jk-para-style）：记录 styleId 后剥离外层 span 递归内容，
+  // 保存时还原为 Paragraph.pPr.styleId（经 writer 导出为 <w:pStyle>）。
+  // 传父级 rPr（而非 childRPr）：该 span 仅承载样式引用，不应把它当作字符格式来源。
+  if (tag === 'span' && el.getAttribute('data-jk-para-style')) {
+    const sid = el.getAttribute('data-jk-para-style');
+    if (paraStyle && sid) paraStyle.styleId = sid;
+    el.childNodes.forEach((c) => collectInlines(c, rPr, out, ctx, commentRanges, paraStyle));
     return;
   }
 
@@ -253,7 +266,7 @@ function collectInlines(
     const author = el.getAttribute('data-jk-rev-author') || undefined;
     const date = el.getAttribute('data-jk-rev-date') || undefined;
     const start = out.length;
-    el.childNodes.forEach((c) => collectInlines(c, rPr, out, ctx, commentRanges));
+    el.childNodes.forEach((c) => collectInlines(c, rPr, out, ctx, commentRanges, paraStyle));
     for (let i = start; i < out.length; i++) {
       const node = out[i];
       if (node.type === 'run') {
@@ -321,7 +334,7 @@ function collectInlines(
   }
 
   // 其余标签（含 strong/em/u/s/span 及未知容器）递归子节点
-  el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges));
+  el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges, paraStyle));
 }
 
 const ALIGN_MAP: Record<string, 'left' | 'center' | 'right' | 'justify'> = {
@@ -383,9 +396,13 @@ function parseParagraph(el: Element, ctx: ParseCtx, numId?: string): Paragraph {
   const tag = el.tagName.toLowerCase();
   const runs: Inline[] = [];
   const commentRanges: CommentRange[] = [];
-  el.childNodes.forEach((c) => collectInlines(c, {}, runs, ctx, commentRanges));
+  // 段落样式引用容器：collectInlines 命中 span[data-jk-para-style] 时回填 styleId
+  const paraStyle: { styleId?: string } = {};
+  el.childNodes.forEach((c) => collectInlines(c, {}, runs, ctx, commentRanges, paraStyle));
 
   const pPr: Paragraph['pPr'] = {};
+  // 段落样式引用（对应 w:pStyle），优先于由标题标签推导的大纲级别共存
+  if (paraStyle.styleId) pPr.styleId = paraStyle.styleId;
   const hm = /^h([1-6])$/.exec(tag);
   if (hm) pPr.outlineLvl = Number(hm[1]) - 1;
   const jc = readAlign(el);

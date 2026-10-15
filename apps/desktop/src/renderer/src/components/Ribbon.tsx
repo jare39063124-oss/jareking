@@ -214,6 +214,8 @@ const RIBBON_TABS: RibbonTabDef[] = [
           { kind: 'button', id: 'h2', label: '标题 2', icon: Heading2 },
           { kind: 'button', id: 'h3', label: '标题 3', icon: Heading3 },
           { kind: 'button', id: 'body', label: '正文', icon: Type },
+          // 样式管理器（WPS 对齐）：打开样式列表 / 新建 / 应用 / 删除（命令总线 id 与编辑器逐字一致）
+          { kind: 'button', id: 'style-manager', label: '样式管理器', icon: PaintBucket },
         ],
       },
       {

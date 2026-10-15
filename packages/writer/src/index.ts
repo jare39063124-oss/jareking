@@ -14,3 +14,4 @@ export * from './parser/docxParser.js';
 export * from './formatProfile.js';
 export * from './omml.js';
 export * from './exporter/index.js';
+export * from './styleManager.js';
