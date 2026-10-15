@@ -40,10 +40,11 @@ import {
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { toast } from '../stores/toastStore';
-import { renderChartToPng, type ChartType } from '../writer/chartRenderer';
+import { renderChartToPng, type ChartType } from '../lib/chartRenderer';
 import { Modal } from '../components/Modal';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { parseInWorker } from '../lib/parseClient';
+import { downloadBlob } from '../lib/download';
 import { takePendingOpen } from '../stores/pendingOpenStore';
 import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
@@ -298,7 +299,7 @@ export function SlideEditor() {
   const loadAiConfigs = useAiStore((st) => st.load);
   const resolveKey = useAiStore((st) => st.resolveKey);
 
-  // 图表插入（用户反馈：PPT 数据页可视化难）——复用 writer/chartRenderer + 图片管线
+  // 图表插入（用户反馈：PPT 数据页可视化难）——复用 lib/chartRenderer（公共能力）+ 图片管线
   const [chartOpen, setChartOpen] = useState(false);
   const [chartType, setChartType] = useState<ChartType>('bar');
   const [chartTitle, setChartTitle] = useState('季度营收');
@@ -834,17 +835,11 @@ export function SlideEditor() {
   const onSave = async () => {
     try {
       const buf = await exportPptx(pres);
-      const blob = new Blob([buf as BlobPart], {
-        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = '导出.pptx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(
+        buf,
+        '导出.pptx',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      );
       toast.success('已导出「导出.pptx」');
     } catch {
       toast.warning('导出失败');

@@ -50,6 +50,7 @@ import { jkToHtml, extToMime } from './jkToHtml';
 import { writerExtensions } from './writerExtensions';
 import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
+import { downloadBlob } from '../lib/download';
 import { useUiStore } from '../stores/uiStore';
 import {
   notifyEditorChange,
@@ -425,17 +426,11 @@ export function WriterEditor() {
       // 注入批注（两路保存都注入）：正文锚点由 htmlToJk/jkToHtml 往返，批注正文来自 ref
       jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
       const buf = await exportDocx(jk);
-      const blob = new Blob([buf as BlobPart], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = '导出.docx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(
+        buf,
+        '导出.docx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      );
       toast.success('已导出「导出.docx」');
     } catch {
       toast.warning('导出失败：文档包含暂不支持的内容');

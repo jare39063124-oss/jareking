@@ -22,6 +22,7 @@ import {
   type ImageInput,
 } from '@jareking/pdf';
 import { pdfToImages } from '../lib/pdfRender';
+import { downloadBlob } from '../lib/download';
 import { ArrowDown, ArrowUp, FileDown, Loader2, Plus, Scissors, Trash2, X } from 'lucide-react';
 import { Button } from './Button';
 import { Modal } from './Modal';
@@ -46,25 +47,14 @@ async function readBytes(file: File): Promise<Uint8Array> {
   return new Uint8Array(await file.arrayBuffer());
 }
 
-function download(bytes: Uint8Array, name: string, mime = 'application/pdf'): void {
-  // Uint8Array（ArrayBufferLike）与 BlobPart 类型不完全重叠，断言不改变运行时行为
-  const blob = new Blob([bytes as BlobPart], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // 延迟回收，确保下载已触发
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-}
-
 const stamp = () => new Date().toISOString().slice(0, 10);
 
 interface ImageResult {
   page: number;
+  /** 预览用 Blob URL（`URL.createObjectURL`，仅用于 <img src>） */
   url: string;
+  /** 下载用原始字节（统一经 lib/download 落盘） */
+  bytes: Uint8Array;
   name: string;
 }
 
@@ -172,7 +162,7 @@ export function PdfToolbox() {
         const text = await pdfToText(await readBytes(target));
         const enc = new TextEncoder().encode(text);
         const txtName = `${target.name.replace(/\.pdf$/i, '')}-文本.txt`;
-        download(enc, txtName, 'text/plain;charset=utf-8');
+        downloadBlob(enc, txtName, 'text/plain;charset=utf-8');
         setImageResults([]);
         setNote(`✅ 已提取文本（${text.length} 字），已导出「${txtName}」`);
         toast.success('PDF 转 TXT 完成');
@@ -182,16 +172,22 @@ export function PdfToolbox() {
         if (!target) throw new Error('请选择 PDF 文件');
         const pages = await pdfToImages(await readBytes(target));
         const results: ImageResult[] = pages.map((p) => {
+          // 预览：Blob URL 供 <img src>；下载：保留原始字节走 lib/download 统一落盘
           const blob = new Blob([p.png as BlobPart], { type: 'image/png' });
           const url = URL.createObjectURL(blob);
-          return { page: p.page, url, name: `${target.name.replace(/\.pdf$/i, '')}-第${p.page}页.png` };
+          return {
+            page: p.page,
+            url,
+            bytes: p.png,
+            name: `${target.name.replace(/\.pdf$/i, '')}-第${p.page}页.png`,
+          };
         });
         setImageResults(results);
         setNote(`✅ 已渲染 ${results.length} 页为 PNG`);
         toast.success(`PDF 转图片完成：${results.length} 页`);
         return;
       }
-      download(out, name);
+      downloadBlob(out, name, 'application/pdf');
       setImageResults([]);
       setNote(`✅ 已导出「${name}」`);
       toast.success(`PDF 处理完成：${name}`);
@@ -206,14 +202,8 @@ export function PdfToolbox() {
 
   const downloadAllImages = () => {
     imageResults.forEach((r, idx) => {
-      setTimeout(() => {
-        const a = document.createElement('a');
-        a.href = r.url;
-        a.download = r.name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, idx * 250);
+      // 逐张错峰触发，避免浏览器丢弃连续下载
+      setTimeout(() => downloadBlob(r.bytes, r.name, 'image/png'), idx * 250);
     });
   };
 
@@ -462,14 +452,7 @@ export function PdfToolbox() {
                     <button
                       type="button"
                       className="text-tiny text-accent hover:underline"
-                      onClick={() => {
-                        const a = document.createElement('a');
-                        a.href = r.url;
-                        a.download = r.name;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                      }}
+                      onClick={() => downloadBlob(r.bytes, r.name, 'image/png')}
                     >
                       下载
                     </button>

@@ -100,7 +100,7 @@ import {
   useEditorRevision,
   type EditorCommandState,
 } from '../stores/editorCommands';
-import { FONT_GROUPS, FONT_SIZES } from '../writer/fonts';
+import { FONT_GROUPS, FONT_SIZES } from '../lib/fonts';
 // OfficeKind 与主进程共用同一类型（单一事实源 shared/officePdfScript.ts）
 import type { OfficeKind } from '../../../shared/officePdfScript';
 

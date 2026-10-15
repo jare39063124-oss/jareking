@@ -7,7 +7,7 @@
 import type { Editor } from '@tiptap/react';
 import type { WriterOp } from '@jareking/ai';
 import { getTemplate, type FormatTemplate } from '@jareking/ai';
-import { renderChartToPng } from './chartRenderer';
+import { renderChartToPng } from '../lib/chartRenderer';
 
 export interface ApplyResult {
   applied: string[];

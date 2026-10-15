@@ -6,7 +6,7 @@ import { AiConfigSection } from './AiConfigSection';
 import { Button } from './Button';
 import { toast } from '../stores/toastStore';
 import { useUiStore, type ThemeMode } from '../stores/uiStore';
-import { FONT_GROUPS } from '../writer/fonts';
+import { FONT_GROUPS } from '../lib/fonts';
 
 /** 可折叠设置分区（手风琴）：标题可点击展开/收起 */
 function CollapsibleSection({

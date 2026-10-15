@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import { ArrowDown, ArrowUp, CaseSensitive, Replace, ReplaceAll, X } from 'lucide-react';
 import { findAllMatches, applyReplaceAll } from './findReplace';
-import { countWords } from './fonts';
+import { countWords } from '../lib/fonts';
 
 export function FindReplaceBar({
   editor,

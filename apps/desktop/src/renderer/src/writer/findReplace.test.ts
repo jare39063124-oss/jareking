@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { findAllMatches, applyReplaceAll } from './findReplace';
-import { countWords, FONT_GROUPS, ALL_FONT_NAMES } from './fonts';
+import { countWords, FONT_GROUPS, ALL_FONT_NAMES } from '../lib/fonts';
 import { Schema } from '@tiptap/pm/model';
 import { EditorState, TextSelection } from '@tiptap/pm/state';
 
