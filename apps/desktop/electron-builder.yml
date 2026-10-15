@@ -3,6 +3,18 @@
 appId: com.jareking.app
 productName: jareking
 
+# ── 安装包体积优化（2026-10-15 体积专项）──────────────────────────────
+# 1) compression: maximum —— NSIS 采用最高压缩比（LZMA）
+# 2) electronLanguages —— 只保留中英文；默认打包 55 种语言约 49MB，可省约 47MB
+# 3) asar 内的 node_modules 由 apps/desktop/package.json 的依赖归属决定：
+#    仅 dependencies（@jareking/core、electron-updater）进包；
+#    @univerjs/@tiptap/konva/pdfjs-dist/react 等 renderer-only 依赖已移入
+#    devDependencies，不再重复打进 asar（此前重复约 259MB）。
+compression: maximum
+electronLanguages:
+  - zh-CN
+  - en-US
+
 # 打包输出目录（相对 apps/desktop）
 directories:
   output: release
@@ -50,6 +62,14 @@ asar: true
 files:
   - out/**
   - package.json
+  # 依赖精简（体积专项 2026-10-15）：运行期不需要的类型声明/源码映射/测试/文档一律不打进 asar
+  - "!node_modules/**/*.d.ts"
+  - "!node_modules/**/*.d.mts"
+  - "!node_modules/**/*.d.cts"
+  - "!node_modules/**/*.map"
+  - "!node_modules/**/{test,tests,__tests__,spec,specs,docs,example,examples,benchmark,benchmarks}/**"
+  - "!node_modules/**/*.md"
+  - "!node_modules/**/LICENSE*"
 
 # 发布渠道：GitHub Releases（组织 jareking-office，仓库待建）；T8.4 落地自动更新
 publish:
