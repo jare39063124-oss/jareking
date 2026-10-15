@@ -1221,6 +1221,46 @@ export function SlideEditor() {
             <option value="fade">淡入</option>
             <option value="slide">滑动</option>
           </select>
+          {/* 版式（母版/版式）：只读展示当前页版式名；有版式清单时可轻量切换（仅改 JkSlide.layout，不动形状） */}
+          {(() => {
+            const layoutList = pres.layouts ?? [];
+            const curPart = slide?.layout ?? '';
+            const curName = layoutList.find((l) => l.partName === curPart)?.name ?? curPart;
+            if (!layoutList.length) {
+              return (
+                <span className="text-tiny text-muted" title={curPart || '未关联版式'}>
+                  版式：{curName || '默认'}
+                </span>
+              );
+            }
+            return (
+              <label
+                className="flex items-center gap-1 text-tiny text-muted"
+                title="切换当前页版式（仅记录，不改变形状）"
+              >
+                版式
+                <select
+                  className="h-7 rounded border border-border bg-surface px-1 text-xs text-text outline-none"
+                  value={curPart}
+                  onChange={(e) => {
+                    const v = e.target.value || undefined;
+                    setPres((prev) => {
+                      const slides = [...prev.slides];
+                      slides[slideIdx] = { ...slides[slideIdx], layout: v };
+                      return { ...prev, slides };
+                    });
+                  }}
+                >
+                  <option value="">（未指定）</option>
+                  {layoutList.map((l) => (
+                    <option key={l.partName} value={l.partName}>
+                      {l.name ?? l.partName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            );
+          })()}
           <span className="ml-2 text-xs text-text-secondary">拖拽移动 · 双击改文字 · 单击选中 · F5 放映</span>
         </div>
 

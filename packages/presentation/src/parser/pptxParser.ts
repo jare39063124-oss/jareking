@@ -2,8 +2,9 @@
  * T3.1 pptx 解析器：fflate 流式解压 + fast-xml-parser → JkPresentation。
  *
  * 覆盖（基础保真）：幻灯片顺序 / 画布尺寸 / 文本框（段落+run 格式）/
- * 预设几何形状（含形状内文字与纯色填充）/ 图片（记录 relId）/ 表格（graphicFrame → a:tbl）。
- * 动画/切换/主题母版/SmartArt/图表 v1 降级忽略并记录。
+ * 预设几何形状（含形状内文字与纯色填充）/ 图片（记录 relId）/ 表格（graphicFrame → a:tbl）/
+ * 幻灯片母版与版式（最小承载：名称、占位符类型、背景色、所属关系）。
+ * 动画/切换/SmartArt/图表 v1 降级忽略并记录。
  *
  * 注意：XMLParser 开启 removeNSPrefix，所有标签键不带 p:/a: 前缀
  * （与 docx 解析器同一约定）：sp / pic / spPr / xfrm / off / ext /
@@ -25,6 +26,8 @@ import type {
   JkPresentation,
   JkShape,
   JkSlide,
+  JkSlideLayout,
+  JkSlideMaster,
   JkTableCell,
   JkTableRow,
   JkTableShape,
@@ -325,6 +328,101 @@ function parseShapeTree(spTree: any): JkShape[] {
 }
 
 /* =========================================================================
+ * 母版 / 版式解析（ppt/slideMasters/*、ppt/slideLayouts/*、ppt/theme/*）
+ * ========================================================================= */
+
+/** 从部件名提取序号（slideLayout1.xml → 1；用于稳定排序） */
+function partIndex(partName: string): number {
+  const m = /(\d+)\.xml$/.exec(partName);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * 关系 Target → 包内绝对部件名。
+ *
+ * OOXML 的 rels Target 以「源部件所在目录」为基准，可为相对（含 ../ 回退）或
+ * 以 `/` 开头的绝对包路径；此处统一规整为 `ppt/...` 形式的包内绝对名。
+ */
+function resolvePartName(sourcePart: string, target: string): string {
+  const t = (target ?? '').replace(/\\/g, '/').trim();
+  if (!t) return '';
+  if (t.startsWith('/')) return t.replace(/^\/+/, '');
+  const baseDir = sourcePart.includes('/') ? sourcePart.replace(/\/[^/]+$/, '') : '';
+  const segs = `${baseDir}/${t}`.split('/');
+  const out: string[] = [];
+  for (const seg of segs) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return out.join('/');
+}
+
+/** 在 rels XML 中查找指定关系类型（后缀匹配）的 Target（规整为包内绝对部件名） */
+function findRelTarget(
+  relsXml: string | undefined,
+  sourcePart: string,
+  typeSuffix: string,
+): string | undefined {
+  if (!relsXml) return undefined;
+  const rels = parseXml(relsXml);
+  for (const rel of childArray(rels?.Relationships, 'Relationship')) {
+    const type = getAttr(rel, '@_Type') ?? '';
+    if (!type.endsWith(typeSuffix)) continue;
+    const target = getAttr(rel, '@_Target') ?? '';
+    if (target) return resolvePartName(sourcePart, target);
+  }
+  return undefined;
+}
+
+/** theme 部件 XML → 主题名（a:theme@name） */
+function parseThemeName(xml: string | undefined): string | undefined {
+  if (!xml) return undefined;
+  const obj = parseXml(xml);
+  return getAttr(obj?.theme, '@_name');
+}
+
+/** slideMaster XML → JkSlideMaster（名称 / 背景色 / 主题名） */
+function parseMaster(partName: string, xml: string, themeName?: string): JkSlideMaster {
+  const obj = parseXml(xml);
+  const cSld = obj?.sldMaster?.cSld;
+  const master: JkSlideMaster = { partName };
+  const name = getAttr(cSld, '@_name');
+  if (name) master.name = name;
+  if (themeName) master.themeName = themeName;
+  // 背景色：cSld/bg/bgPr/solidFill（复用 srgbClr 提取）
+  const bg = parseSolidFill(cSld?.bg?.bgPr?.solidFill);
+  if (bg) master.bgColor = bg;
+  return master;
+}
+
+/** slideLayout XML → JkSlideLayout（名称 / 占位符类型清单 / 所属母版） */
+function parseLayout(partName: string, xml: string, masterPartName?: string): JkSlideLayout {
+  const obj = parseXml(xml);
+  const cSld = obj?.sldLayout?.cSld;
+  const layout: JkSlideLayout = { partName };
+  const name = getAttr(cSld, '@_name');
+  if (name) layout.name = name;
+  if (masterPartName) layout.masterPartName = masterPartName;
+  // 占位符类型：spTree 下 sp/graphicFrame 的 nvPr/ph@type（去重，仅记录）
+  const placeholders: string[] = [];
+  const pushPh = (t: string | undefined) => {
+    if (t && !placeholders.includes(t)) placeholders.push(t);
+  };
+  for (const sp of childArray(cSld?.spTree, 'sp')) {
+    pushPh(getAttr(sp?.nvSpPr?.nvPr?.ph, '@_type'));
+  }
+  for (const gf of childArray(cSld?.spTree, 'graphicFrame')) {
+    pushPh(getAttr(gf?.nvGraphicFramePr?.nvPr?.ph, '@_type'));
+  }
+  if (placeholders.length) layout.placeholders = placeholders;
+  return layout;
+}
+
+/* =========================================================================
  * 流式 zip 读取（fflate）—— 逐条目解压，降低解析峰值
  * ========================================================================= */
 
@@ -358,6 +456,12 @@ function isNeededPart(name: string): boolean {
     /^ppt\/slides\/_rels\/slide\d+\.xml\.rels$/.test(name) ||
     /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name) ||
     /^ppt\/notesSlides\/_rels\/notesSlide\d+\.xml\.rels$/.test(name) ||
+    // 母版 / 版式 / 主题（母版名称、占位符类型、背景色、主题名所需）
+    /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(name) ||
+    /^ppt\/slideMasters\/_rels\/slideMaster\d+\.xml\.rels$/.test(name) ||
+    /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(name) ||
+    /^ppt\/slideLayouts\/_rels\/slideLayout\d+\.xml\.rels$/.test(name) ||
+    /^ppt\/theme\/theme\d+\.xml$/.test(name) ||
     /^ppt\/media\//.test(name)
   );
 }
@@ -398,8 +502,11 @@ function parseNotesSlide(xml: string): string {
  * - presXml / presRels：小，保留（决定幻灯片顺序）。
  * - slidesByPart：每页幻灯片 XML 解析为模型后**立即丢弃 XML 字符串**。
  * - notesByPart：每页备注 XML 提取文本（键 ppt/notesSlides/notesSlideN.xml）。
+ * - mastersXml / layoutsXml：母版 / 版式 XML（后续解析名称、占位符、背景色）。
+ * - masterRels / layoutRels：母版 / 版式关系（定位主题与所属母版）。
+ * - themesXml：主题 XML（取主题名）。
  * - mediaByPath：保留显示必需的图片字节。
- * - 其余无关条目（theme/embeddings/docProps/notesMaster 等）直接丢弃，不占内存。
+ * - 其余无关条目（embeddings/docProps/handoutMaster 等）直接丢弃，不占内存。
  */
 function streamUnzip(
   u8: Uint8Array,
@@ -409,6 +516,11 @@ function streamUnzip(
   slidesByPart: Map<string, SlideAccum>;
   slideRelsByPart: Map<string, string>;
   notesByPart: Map<string, string>;
+  mastersXml: Map<string, string>;
+  layoutsXml: Map<string, string>;
+  masterRels: Map<string, string>;
+  layoutRels: Map<string, string>;
+  themesXml: Map<string, string>;
   mediaByPath: Map<string, Uint8Array>;
   skippedNotes: string[];
 }> {
@@ -417,6 +529,11 @@ function streamUnzip(
   const slidesByPart = new Map<string, SlideAccum>();
   const slideRelsByPart = new Map<string, string>();
   const notesByPart = new Map<string, string>();
+  const mastersXml = new Map<string, string>();
+  const layoutsXml = new Map<string, string>();
+  const masterRels = new Map<string, string>();
+  const layoutRels = new Map<string, string>();
+  const themesXml = new Map<string, string>();
   const mediaByPath = new Map<string, Uint8Array>();
   const skippedNotes: string[] = [];
 
@@ -438,6 +555,11 @@ function streamUnzip(
             slidesByPart,
             slideRelsByPart,
             notesByPart,
+            mastersXml,
+            layoutsXml,
+            masterRels,
+            layoutRels,
+            themesXml,
             mediaByPath,
             skippedNotes,
           });
@@ -518,11 +640,32 @@ function streamUnzip(
         notesByPart.set(name, parseNotesSlide(textDecoder.decode(data)));
         return;
       }
+      // 母版 / 版式 / 主题：保留 XML 文本，主入口统一解析
+      if (/^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(name)) {
+        mastersXml.set(name, textDecoder.decode(data));
+        return;
+      }
+      if (/^ppt\/slideMasters\/_rels\/slideMaster\d+\.xml\.rels$/.test(name)) {
+        masterRels.set(name, textDecoder.decode(data));
+        return;
+      }
+      if (/^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(name)) {
+        layoutsXml.set(name, textDecoder.decode(data));
+        return;
+      }
+      if (/^ppt\/slideLayouts\/_rels\/slideLayout\d+\.xml\.rels$/.test(name)) {
+        layoutRels.set(name, textDecoder.decode(data));
+        return;
+      }
+      if (/^ppt\/theme\/theme\d+\.xml$/.test(name)) {
+        themesXml.set(name, textDecoder.decode(data));
+        return;
+      }
       if (/^ppt\/media\//.test(name)) {
         mediaByPath.set(name, data);
         return;
       }
-      // 其余条目（theme/embeddings/docProps/notesMaster/notesSlides rels 等）不保留
+      // 其余条目（embeddings/docProps/notesMaster/handoutMaster/notesSlides rels 等）不保留
     };
 
     try {
@@ -543,8 +686,20 @@ function streamUnzip(
 export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPresentation> {
   const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
 
-  const { presXml, presRels, slidesByPart, slideRelsByPart, notesByPart, mediaByPath, skippedNotes } =
-    await streamUnzip(u8);
+  const {
+    presXml,
+    presRels,
+    slidesByPart,
+    slideRelsByPart,
+    notesByPart,
+    mastersXml,
+    layoutsXml,
+    masterRels,
+    layoutRels,
+    themesXml,
+    mediaByPath,
+    skippedNotes,
+  } = await streamUnzip(u8);
 
   if (!presXml) throw new Error('pptx 缺少 ppt/presentation.xml，可能不是有效的演示文稿');
   const presObj = parseXml(presXml);
@@ -562,7 +717,8 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
 
   const sldIdLst = presObj?.presentation?.sldIdLst;
   const slideRefs = childArray(sldIdLst, 'sldId');
-  const notes: string[] = ['动画/切换/母版样式/SmartArt/图表 v1 降级忽略', ...skippedNotes];
+  // 母版/版式现已解析保留，降级说明中不再包含「母版样式」
+  const notes: string[] = ['动画/切换/SmartArt/图表 v1 降级忽略', ...skippedNotes];
 
   let orderedParts: string[];
   if (slideRefs.length) {
@@ -593,13 +749,20 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
   for (const partName of orderedParts) {
     const accum = slidesByPart.get(partName);
     if (!accum) continue;
-    // 本页 media 提取（rId 每页独立，键为 `${index}:${relId}`）
+    // 本页 media 提取（rId 每页独立，键为 `${index}:${relId}`）+ 版式关联
     const relsPath = partName.replace(/([^/]+)$/, '_rels/$1.rels');
     const relsXml = slideRelsByPart.get(relsPath);
+    let layoutPart: string | undefined;
     if (relsXml) {
       const rels = parseXml(relsXml);
       for (const rel of childArray(rels?.Relationships, 'Relationship')) {
         const type = getAttr(rel, '@_Type') ?? '';
+        // 版式关联：slide → slideLayout
+        if (type.endsWith('/slideLayout')) {
+          const target = getAttr(rel, '@_Target') ?? '';
+          if (target) layoutPart = resolvePartName(partName, target);
+          continue;
+        }
         if (!type.endsWith('/image')) continue;
         const id = getAttr(rel, '@_Id') ?? '';
         if (!id) continue;
@@ -610,9 +773,30 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
         if (bytes) media[`${index}:${id}`] = bytes;
       }
     }
-    slides.push({ partName, shapes: accum.shapes, transition: accum.transition });
+    const slide: JkSlide = { partName, shapes: accum.shapes, transition: accum.transition };
+    if (layoutPart) slide.layout = layoutPart;
+    slides.push(slide);
     index++;
   }
+
+  // 母版：名称 / 背景色 / 主题名（主题经 master rels → theme 部件取得）
+  const masters: JkSlideMaster[] = [...mastersXml.entries()]
+    .map(([partName, xml]) => {
+      const relsPath = partName.replace(/([^/]+)$/, '_rels/$1.rels');
+      const themePart = findRelTarget(masterRels.get(relsPath), partName, '/theme');
+      const themeName = themePart ? parseThemeName(themesXml.get(themePart)) : undefined;
+      return parseMaster(partName, xml, themeName);
+    })
+    .sort((a, b) => partIndex(a.partName) - partIndex(b.partName));
+
+  // 版式：名称 / 占位符类型 / 所属母版（经 layout rels → slideMaster 部件取得）
+  const layouts: JkSlideLayout[] = [...layoutsXml.entries()]
+    .map(([partName, xml]) => {
+      const relsPath = partName.replace(/([^/]+)$/, '_rels/$1.rels');
+      const masterPart = findRelTarget(layoutRels.get(relsPath), partName, '/slideMaster');
+      return parseLayout(partName, xml, masterPart);
+    })
+    .sort((a, b) => partIndex(a.partName) - partIndex(b.partName));
 
   // 备注回填：逐页读取 slide rels，找到指向 notesSlide 的关系，查 notesByPart
   for (let i = 0; i < slides.length; i++) {
@@ -644,6 +828,8 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
     slideWidth,
     slideHeight,
     media: Object.keys(media).length ? media : undefined,
+    masters: masters.length ? masters : undefined,
+    layouts: layouts.length ? layouts : undefined,
     fidelity: { level: 'L1', notes },
   };
 }

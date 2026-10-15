@@ -22,8 +22,45 @@ export interface JkPresentation {
    * 解析时从包内 media 提取回填；导出时据此写入 ppt/media/*。
    */
   media?: Record<string, Uint8Array>;
+  /** 幻灯片母版（对应 ppt/slideMasters/*，v1 仅承载最小信息） */
+  masters?: JkSlideMaster[];
+  /** 版式（对应 ppt/slideLayouts/*，v1 仅承载最小信息） */
+  layouts?: JkSlideLayout[];
   /** v1 保真报告（未建模特性记录于此） */
   fidelity?: PresentationFidelity;
+}
+
+/**
+ * 幻灯片母版（对应 ppt/slideMasters/slideMasterN.xml）。
+ *
+ * v1 刻意「最小承载」：不追求完整复刻 OOXML 母版（占位符/配色映射/图形树），
+ * 仅保留名称、主题名与背景色，用于显示、切换版式与无损 round-trip。
+ */
+export interface JkSlideMaster {
+  /** 部件名（如 "ppt/slideMasters/slideMaster1.xml"） */
+  partName: string;
+  /** 母版名（取自 cSld@name） */
+  name?: string;
+  /** 主题名（取自所属 theme 部件） */
+  themeName?: string;
+  /** 背景填充色 #RRGGBB（取自 cSld/bg/bgPr/solidFill，可选） */
+  bgColor?: string;
+}
+
+/**
+ * 版式（对应 ppt/slideLayouts/slideLayoutN.xml）。
+ *
+ * v1 仅承载名称、占位符类型清单与所属母版；实际形状布局仍以各页 slide 为准。
+ */
+export interface JkSlideLayout {
+  /** 部件名（如 "ppt/slideLayouts/slideLayout1.xml"） */
+  partName: string;
+  /** 版式名（取自 cSld@name） */
+  name?: string;
+  /** 所属母版 partName（取自版式 rels 的 slideMaster 关系） */
+  masterPartName?: string;
+  /** 占位符类型清单（title/body/pic…，仅记录） */
+  placeholders?: string[];
 }
 
 export interface PresentationFidelity {
@@ -37,7 +74,11 @@ export interface JkSlide {
   /** 部件名（如 "slide1"，对应 ppt/slides/slideN.xml） */
   partName?: string;
   shapes: JkShape[];
-  /** 版式名（来自 slideLayout，v1 仅记录） */
+  /**
+   * 本页所用版式（存版式 partName，如 "ppt/slideLayouts/slideLayout1.xml"）。
+   * 语义化前为「版式名」字符串，现统一承载 partName（仍为字符串，向后兼容），
+   * 经 `JkPresentation.layouts` 反查名称。切换版式仅改本字段，不动形状。
+   */
   layout?: string;
   /** 切换效果（v1 仅 none/fade；其余效果解析降级为 none） */
   transition?: 'none' | 'fade' | 'slide';

@@ -5,13 +5,16 @@
  * EMU 原值回写、字号 pt → sz 百分之一磅、旋转度 → rot ×60000、
  * 颜色 #RRGGBB → srgbClr、图片字节经图片签名嗅探扩展名写入 ppt/media/*。
  * 表格经 p:graphicFrame → a:tbl 写回原生表格（WPS/PowerPoint 可直接打开编辑）。
- * 动画/母版/主题 v1 不生成（保真报告记录降级）。
+ * 母版/版式：解析到 masters/layouts 时写回最小合法 part + 关系 + content-types，
+ * 支持最小模型的 round-trip；动画/主题细节 v1 不生成（保真报告记录降级）。
  */
 import JSZip from 'jszip';
 import type {
   JkAutoShape,
   JkPresentation,
   JkShape,
+  JkSlideLayout,
+  JkSlideMaster,
   JkTableCell,
   JkTableShape,
   JkTextShape,
@@ -265,6 +268,91 @@ function serializeNotesSlide(notes: string): string {
 </p:notes>`;
 }
 
+/* =========================================================================
+ * 母版 / 版式 / 主题序列化（最小合法部件，支撑最小模型 round-trip）
+ * ========================================================================= */
+
+/** 从部件名提取序号（slideLayout1.xml → 1；缺省回退 fallback） */
+function partNum(partName: string | undefined, fallback: number): number {
+  const m = partName ? /(\d+)\.xml$/.exec(partName) : null;
+  return m ? Number(m[1]) : fallback;
+}
+
+/** 主题部件（最小合法 a:theme；仅用于承载主题名，供解析回读） */
+function serializeTheme(themeName: string): string {
+  const name = escapeXmlAttr(themeName);
+  // 配色/字体/格式方案各给最小占位，WPS/PowerPoint 可读取名称与配色
+  const schemeClr = (tag: string, val: string) => `<a:${tag}><a:srgbClr val="${val}"/></a:${tag}>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="${name}">
+  <a:themeElements>
+    <a:clrScheme name="${name}">
+      <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+      ${schemeClr('dk2', '44546A')}${schemeClr('lt2', 'E7E6E6')}
+      ${schemeClr('accent1', '4472C4')}${schemeClr('accent2', 'ED7D31')}${schemeClr('accent3', 'A5A5A5')}
+      ${schemeClr('accent4', 'FFC000')}${schemeClr('accent5', '5B9BD5')}${schemeClr('accent6', '70AD47')}
+      ${schemeClr('hlink', '0563C1')}${schemeClr('folHlink', '954F72')}
+    </a:clrScheme>
+    <a:fontScheme name="${name}">
+      <a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
+      <a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name="${name}">
+      <a:fillStyleLst>${'<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'.repeat(3)}</a:fillStyleLst>
+      <a:lnStyleLst>${'<a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>'.repeat(3)}</a:lnStyleLst>
+      <a:effectStyleLst>${'<a:effectStyle><a:effectLst/></a:effectStyle>'.repeat(3)}</a:effectStyleLst>
+      <a:bgFillStyleLst>${'<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'.repeat(3)}</a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+</a:theme>`;
+}
+
+/** 幻灯片母版部件（最小合法 p:sldMaster；承载名称与背景色） */
+function serializeSlideMaster(master: JkSlideMaster): string {
+  const name = escapeXmlAttr(master.name ?? 'Office Theme');
+  const bg = master.bgColor
+    ? `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${escapeXmlAttr(
+        master.bgColor.replace(/^#/, ''),
+      )}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`
+    : '';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld name="${name}">
+    ${bg}
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+</p:sldMaster>`;
+}
+
+/** 版式部件（最小合法 p:sldLayout；承载名称与占位符类型） */
+function serializeSlideLayout(layout: JkSlideLayout): string {
+  const name = escapeXmlAttr(layout.name ?? 'Layout');
+  const phs = (layout.placeholders ?? [])
+    .map(
+      (t, i) =>
+        `<p:sp><p:nvSpPr>` +
+        `<p:cNvPr id="${i + 2}" name="${escapeXmlAttr(t)} Placeholder ${i + 1}"/>` +
+        `<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>` +
+        `<p:nvPr><p:ph type="${escapeXmlAttr(t)}" idx="${i + 1}"/></p:nvPr></p:nvSpPr>` +
+        `<p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>`,
+    )
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld name="${name}"><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+    ${phs}
+  </p:spTree></p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>`;
+}
+
 /** JkPresentation → pptx 字节流 */
 export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
   const zip = new JSZip();
@@ -283,6 +371,32 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
     presRidSeq++;
     notesPresRid[idx] = presRidSeq;
   }
+
+  // 母版 / 版式：仅当存在时写回最小部件（支撑最小模型 round-trip）
+  const masters = pres.masters ?? [];
+  const layouts = pres.layouts ?? [];
+  // partName → 部件序号（保留原始序号，缺省按出现顺序），去重
+  const masterIdxByPart = new Map<string, number>();
+  masters.forEach((m, i) => {
+    if (!masterIdxByPart.has(m.partName)) masterIdxByPart.set(m.partName, partNum(m.partName, i + 1));
+  });
+  const layoutIdxByPart = new Map<string, number>();
+  layouts.forEach((l, i) => {
+    if (!layoutIdxByPart.has(l.partName)) layoutIdxByPart.set(l.partName, partNum(l.partName, i + 1));
+  });
+  const masterParts = [...masterIdxByPart.entries()].map(([partName, idx]) => ({
+    idx,
+    master: masters.find((x) => x.partName === partName)!,
+  }));
+  const layoutParts = [...layoutIdxByPart.entries()].map(([partName, idx]) => ({
+    idx,
+    layout: layouts.find((x) => x.partName === partName)!,
+  }));
+  // presentation → slideMaster 关系（rId 续在备注之后）
+  const masterPresRel = masterParts.map(({ idx }) => {
+    presRidSeq++;
+    return { idx, rid: `rId${presRidSeq}` };
+  });
 
   // [Content_Types].xml
   zip.file(
@@ -307,6 +421,25 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
             `<Override PartName="/ppt/notesSlides/notesSlide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`,
         )
         .join('') +
+      masterParts
+        .map(
+          ({ idx }) =>
+            `<Override PartName="/ppt/slideMasters/slideMaster${idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>`,
+        )
+        .join('') +
+      layoutParts
+        .map(
+          ({ idx }) =>
+            `<Override PartName="/ppt/slideLayouts/slideLayout${idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>`,
+        )
+        .join('') +
+      masterParts
+        .filter(({ master }) => master.themeName)
+        .map(
+          ({ idx }) =>
+            `<Override PartName="/ppt/theme/theme${idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>`,
+        )
+        .join('') +
       `</Types>`,
   );
 
@@ -322,6 +455,11 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
     'ppt/presentation.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+      (masterPresRel.length
+        ? `<p:sldMasterIdLst>${masterPresRel
+            .map(({ idx, rid }) => `<p:sldMasterId id="${2147483648 + idx}" r:id="${rid}"/>`)
+            .join('')}</p:sldMasterIdLst>`
+        : '') +
       `<p:sldIdLst>${slides
         .map((_, i) => `<p:sldId id="${256 + i}" r:id="${slideRids[i]}"/>`)
         .join('')}</p:sldIdLst>` +
@@ -350,8 +488,42 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
             `<Relationship Id="rId${notesPresRid[i]}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="notesSlides/notesSlide${i + 1}.xml"/>`,
         )
         .join('') +
+      masterPresRel
+        .map(
+          ({ idx, rid }) =>
+            `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster${idx}.xml"/>`,
+        )
+        .join('') +
       `</Relationships>`,
   );
+
+  // 母版部件 + 主题部件 + 母版 rels（指向主题）
+  for (const { idx, master } of masterParts) {
+    zip.file(`ppt/slideMasters/slideMaster${idx}.xml`, serializeSlideMaster(master));
+    if (master.themeName) {
+      zip.file(`ppt/theme/theme${idx}.xml`, serializeTheme(master.themeName));
+      zip.file(
+        `ppt/slideMasters/_rels/slideMaster${idx}.xml.rels`,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme${idx}.xml"/></Relationships>`,
+      );
+    }
+  }
+
+  // 版式部件 + 版式 rels（指向所属母版）
+  for (const { idx, layout } of layoutParts) {
+    zip.file(`ppt/slideLayouts/slideLayout${idx}.xml`, serializeSlideLayout(layout));
+    const masterIdx = layout.masterPartName
+      ? masterIdxByPart.get(layout.masterPartName)
+      : undefined;
+    if (masterIdx !== undefined) {
+      zip.file(
+        `ppt/slideLayouts/_rels/slideLayout${idx}.xml.rels`,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster${masterIdx}.xml"/></Relationships>`,
+      );
+    }
+  }
 
   // 每页：slide XML + 图片收集 + 每页 rels + 备注页
   let mediaSeq = 0;
@@ -374,18 +546,25 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
       serializeSlide(slide.shapes ?? [], i, images, slide.transition),
     );
 
-    // 汇总本页 rels 关系（图片 + 备注）
+    // 汇总本页 rels 关系（图片 + 备注 + 版式）
     const rels: string[] = [];
     for (const im of images) {
       rels.push(
         `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
       );
     }
+    // 图片已用 rId2…rId(1+images.length)，后续关系从 rId(images.length+2) 起递增
+    let relSeq = images.length + 2;
     if (notesText) {
-      // 备注关系 rId：图片已用 rId2…，从本页现有最大 rId+1 起（即 rId(images.length+2)）
-      const noteRid = `rId${images.length + 2}`;
       rels.push(
-        `<Relationship Id="${noteRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`,
+        `<Relationship Id="rId${relSeq++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`,
+      );
+    }
+    // 版式关联：仅当本页 layout 指向已写出的版式部件
+    const slideLayoutIdx = slide.layout ? layoutIdxByPart.get(slide.layout) : undefined;
+    if (slideLayoutIdx !== undefined) {
+      rels.push(
+        `<Relationship Id="rId${relSeq++}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout${slideLayoutIdx}.xml"/>`,
       );
     }
     if (rels.length) {
