@@ -26,7 +26,8 @@ export type PdfToolboxMode =
   | 'insert'
   | 'replace'
   | 'toText'
-  | 'toImages';
+  | 'toImages'
+  | 'watermark';
 
 /** 文档缩放允许区间（WPS 常见 50%~200%） */
 export const WRITER_ZOOM_MIN = 0.5;

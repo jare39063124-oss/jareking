@@ -10,7 +10,7 @@
  * 关闭弹窗不重置，下次打开保留上次（或由 Ribbon 重新指定）。
  * 「添加水印」为内部独立面板（watermark state），不改动 uiStore。
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   addWatermark,
   deletePages,
@@ -90,6 +90,10 @@ export function PdfToolbox() {
   // 水印：独立于 uiStore 模式的内部面板（不改 uiStore，避免越界）。
   // 由「添加水印」入口按钮在工具箱内切换显隐。
   const [watermark, setWatermark] = useState(false);
+  // 由 Ribbon「PDF 工具 → 添加水印」入口（pdfMode='watermark'）打开水印面板
+  useEffect(() => {
+    if (mode === 'watermark') setWatermark(true);
+  }, [mode]);
   const [wmText, setWmText] = useState('CONFIDENTIAL');
   const [wmFontSize, setWmFontSize] = useState('48');
   const [wmOpacity, setWmOpacity] = useState('0.12');

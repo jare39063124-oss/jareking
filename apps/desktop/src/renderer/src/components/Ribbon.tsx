@@ -85,6 +85,7 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  Code2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useEffect } from 'react';
@@ -325,6 +326,10 @@ const RIBBON_TABS: RibbonTabDef[] = [
         name: '显示辅助',
         tools: [{ kind: 'button', id: 'gridlines', label: '网格线', icon: Grid2x2 }],
       },
+      {
+        name: '工具',
+        tools: [{ kind: 'button', id: 'macro', label: '宏', icon: Code2 }],
+      },
     ],
   },
   {
@@ -402,7 +407,7 @@ const RIBBON_TABS: RibbonTabDef[] = [
         tools: [
           { kind: 'button', id: 'pdf-encrypt', label: '加密PDF', icon: Lock },
           { kind: 'button', id: 'pdf-decrypt', label: '移除密码', icon: ShieldOff },
-          { kind: 'button', id: 'pdf-watermark', label: '添加水印', icon: Stamp },
+          { kind: 'button', id: 'pdf-watermark', label: '添加水印', icon: Stamp, pdfMode: 'watermark' },
           { kind: 'button', id: 'pdf-header-footer', label: '页眉页脚', icon: PanelsTopLeft },
           { kind: 'button', id: 'pdf-compress', label: '压缩PDF', icon: Minimize2 },
         ],
@@ -590,6 +595,7 @@ export function Ribbon() {
   const toggleRibbonCollapsed = useUiStore((state) => state.toggleRibbonCollapsed);
   const writerZoom = useUiStore((state) => state.writerZoom);
   const setWriterZoom = useUiStore((state) => state.setWriterZoom);
+  const setSettingsOpen = useUiStore((state) => state.setSettingsOpen);
 
   // 订阅命令总线修订号：编辑器事务/选区变化后重读控件取值与激活态
   const revision = useEditorRevision();
@@ -623,6 +629,10 @@ export function Ribbon() {
     }
     if (tool.id === 'zoom-out') {
       setWriterZoom(writerZoom - 0.1);
+      return;
+    }
+    if (tool.id === 'macro') {
+      setSettingsOpen(true);
       return;
     }
     if (tool.id === 'zoom-reset') {
