@@ -3,8 +3,12 @@
  *
  * 入口：Ribbon「PDF 工具」标签页（一级标签页，卖点显性化）+「文件」标签页的 PDF 工具组。
  * 能力：页面提取/删除、合并、旋转、插入页面、页面替换、图片转 PDF、
- *       PDF 转 TXT（文本提取）、PDF 转图片（逐页光栅化）、添加文字水印。
+ *       PDF 转 TXT（文本提取）、PDF 转图片（逐页光栅化）、添加水印（文字/位图）。
  * 页面操作经 @jareking/pdf 数据层（pdf-lib，本地离线）；文本/图片经 pdf.js。
+ *
+ * 水印字体策略：纯拉丁文字走矢量文本水印（addWatermark，内建 Helvetica，清晰不栅格化）；
+ * 含中文等非拉丁字符时，由本组件用 canvas 将文字绘制成透明 PNG，再走位图水印
+ * （addImageWatermark）——canvas 自动使用系统/Web 字体渲染 CJK，零 npm 依赖、零字体分发。
  *
  * 当前模式由 uiStore.pdfToolboxMode 决定：Ribbon 点哪个按钮就以哪个模式打开；
  * 关闭弹窗不重置，下次打开保留上次（或由 Ribbon 重新指定）。
@@ -12,6 +16,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
+  addImageWatermark,
   addWatermark,
   deletePages,
   extractPages,
@@ -22,7 +27,6 @@ import {
   rotatePages,
   pdfToText,
   type ImageInput,
-  type WatermarkOptions,
 } from '@jareking/pdf';
 import { pdfToImages } from '../lib/pdfRender';
 import { downloadBlob } from '../lib/download';
@@ -51,6 +55,78 @@ async function readBytes(file: File): Promise<Uint8Array> {
 }
 
 const stamp = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * 判定文本是否含「标准拉丁字体（WinAnsi）无法编码」的字符（中文/全角/emoji 等）。
+ *
+ * 口径与 @jareking/pdf 数据层 findNonLatinChars **保持一致**：
+ * - 可打印 ASCII（0x20-0x7E）与 Latin-1 补充（0xA0-0xFF）视为拉丁可编码；
+ * - 制表/换行/回车为空白控制符，忽略；
+ * - 其余字符（CJK 统一表意/全角标点/emoji 等）一律判定为非拉丁 → 需走 canvas 位图水印。
+ */
+function hasNonLatinChars(text: string): boolean {
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0x09 || cp === 0x0a || cp === 0x0d) continue;
+    if (cp >= 0x20 && cp <= 0x7e) continue;
+    if (cp >= 0xa0 && cp <= 0xff) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 用渲染进程 canvas 把（含中文的）水印文本绘制成**透明背景 PNG**。
+ *
+ * 为什么用 canvas：pdf-lib 嵌入 CJK 自定义字体强依赖 @pdf-lib/fontkit，而本项目
+ * 「不新增依赖、不随包分发字体」。canvas 会自动使用**系统/Web 字体**渲染 CJK，
+ * 天然零版权、零依赖；因此把中文渲染成位图再作为图片水印叠加，是零依赖下的正解。
+ *
+ * 依赖说明：字体族使用常见中文字体栈（Microsoft YaHei / SimSun / SimHei），
+ * **依赖本机已安装对应字体**，缺失时由 sans-serif 回退（Windows 平台默认具备）。
+ *
+ * @returns PNG 字节，供 addImageWatermark 嵌入。
+ */
+async function renderTextToPng(
+  text: string,
+  opts: { fontSize: number; color: string },
+): Promise<Uint8Array> {
+  if (typeof document === 'undefined') {
+    throw new Error('当前环境不支持 canvas，无法渲染中文水印');
+  }
+  // 字号上下限保护：避免 0 或异常巨大导致画布分配失败/尺寸离谱。
+  const size = Math.min(400, Math.max(8, Math.round(opts.fontSize)));
+  const pad = Math.ceil(size * 0.25);
+  // 常见中文字体栈（依赖本机字体，缺失则系统回退到 sans-serif）。
+  const font = `bold ${size}px "Microsoft YaHei", "SimSun", "SimHei", sans-serif`;
+
+  // 先在测量画布上量文字宽度，画布尺寸据此自适应（避免裁切/过多空白）。
+  const measure = document.createElement('canvas');
+  const mctx = measure.getContext('2d');
+  if (!mctx) throw new Error('当前环境不支持 canvas，无法渲染中文水印');
+  mctx.font = font;
+  const textWidth = Math.max(1, Math.ceil(mctx.measureText(text).width));
+  // 行高用 1.4*字号近似（兼顾中文字形上下留白与降部），保证完整容纳。
+  const textHeight = Math.ceil(size * 1.4);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = textWidth + pad * 2;
+  canvas.height = textHeight + pad * 2;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('当前环境不支持 canvas，无法渲染中文水印');
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 透明背景（不填底色）→ 叠加到 PDF 上只留字，不遮挡正文。
+  ctx.fillStyle = opts.color;
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), 'image/png'),
+  );
+  if (!blob) throw new Error('水印位图生成失败（canvas.toBlob 返回空）');
+  return new Uint8Array(await blob.arrayBuffer());
+}
 
 interface ImageResult {
   page: number;
@@ -116,9 +192,9 @@ export function PdfToolbox() {
   const needMulti = mode === 'merge' || mode === 'images';
   const needSource = mode === 'insert' || mode === 'replace';
 
-  // 水印文案含非拉丁字符（中文/emoji 等）——需可嵌入的中文字体；
-  // 仅作前端软提示（不阻断），真正的嵌入/校验在 @jareking/pdf 数据层完成。
-  const wmHasNonLatin = /[^\u0000-\u00ff]/.test(wmText);
+  // 水印文案是否含非拉丁字符（中文/全角/emoji 等）：决定走「矢量文本」还是「位图」路径。
+  // 口径与数据层一致，仅用于面板提示与路线选择。
+  const wmHasNonLatin = hasNonLatinChars(wmText);
 
   const reset = () => {
     setNote(null);
@@ -141,15 +217,35 @@ export function PdfToolbox() {
         const fs = Number(wmFontSize);
         const op = Number(wmOpacity);
         const rt = Number(wmRotate);
-        const opts: WatermarkOptions = {
-          text: wmText,
-          fontSize: Number.isFinite(fs) && fs > 0 ? fs : 48,
-          opacity: Number.isFinite(op) ? Math.min(1, Math.max(0, op)) : 0.12,
-          rotate: Number.isFinite(rt) ? rt : 45,
-          color: wmColor,
-          tile: wmTile,
-        };
-        const out = await addWatermark(await readBytes(target), opts);
+        const fontSize = Number.isFinite(fs) && fs > 0 ? fs : 48;
+        const opacity = Number.isFinite(op) ? Math.min(1, Math.max(0, op)) : 0.12;
+        const rotate = Number.isFinite(rt) ? rt : 45;
+        const pdfBytes = await readBytes(target);
+
+        let out: Uint8Array;
+        if (hasNonLatinChars(wmText)) {
+          // 中文等非拉丁：canvas 渲染成透明 PNG → 位图水印（零依赖、零字体分发）。
+          // 透传用户设置的透明度/角度/平铺；宽高由渲染层按字号自适配。
+          const imageBytes = await renderTextToPng(wmText, { fontSize, color: wmColor });
+          out = await addImageWatermark(pdfBytes, {
+            imageBytes,
+            mime: 'png',
+            opacity,
+            rotate,
+            tile: wmTile,
+          });
+        } else {
+          // 纯拉丁：沿用矢量文本水印（清晰、不栅格化、体积小）。
+          out = await addWatermark(pdfBytes, {
+            text: wmText,
+            fontSize,
+            opacity,
+            rotate,
+            color: wmColor,
+            tile: wmTile,
+          });
+        }
+
         const name = `${target.name.replace(/\.pdf$/i, '')}-已加水印.pdf`;
         downloadBlob(out, name, 'application/pdf');
         setImageResults([]);
@@ -341,7 +437,8 @@ export function PdfToolbox() {
             </div>
             {wmHasNonLatin && (
               <p className="pl-20 text-tiny text-muted">
-                提示：文字含中文等非拉丁字符，需可嵌入的中文字体；若当前环境缺少该字体，将给出明确错误而非输出乱码。
+                提示：中文等非拉丁文字将以「位图水印」方式渲染（由本机字体绘制，依赖系统已安装的中文字体）；
+                纯拉丁文字仍使用矢量文本水印。
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2">

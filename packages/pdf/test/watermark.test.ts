@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { addWatermark, loadPdf, pdfToText } from '../src/index';
+import { addImageWatermark, addWatermark, loadPdf, pdfToText } from '../src/index';
+
+/**
+ * 1×1 透明 PNG（68 字节，标准最小 PNG）。
+ * 用于图片水印单测——无需 DOM / canvas，可在 Node 环境完整覆盖数据层逻辑。
+ */
+const TINY_PNG_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+const TINY_PNG = new Uint8Array(Buffer.from(TINY_PNG_B64, 'base64'));
 
 /** 用 pdf-lib 造一个 2 页 A4 空 PDF（水印测试样本，纯 ASCII 文本以适配内建字体） */
 async function makeTwoPagePdf(): Promise<Uint8Array> {
@@ -113,5 +121,66 @@ describe('addWatermark（非拉丁 / 中文，Bug3 修复）', () => {
     expect(doc.getPageCount()).toBe(2);
     const txt = await pdfToText(out);
     expect(txt).toContain('SECRET');
+  });
+});
+
+/** 断言导出字节是合法 PDF（%PDF- 头） */
+function expectValidPdfHeader(bytes: Uint8Array): void {
+  const head = new TextDecoder().decode(bytes.slice(0, 5));
+  expect(head).toBe('%PDF-');
+}
+
+/**
+ * 图片水印（addImageWatermark）—— 中文等非拉丁文本的位图化水印数据层。
+ *
+ * 说明：本用例只在 Node 数据层验证「图片嵌入 + 叠加 + 页数守恒 + 输出合法」。
+ * 渲染层「中文 → canvas PNG」逻辑依赖 DOM，Node 无 canvas，不在单测覆盖范围，
+ * 由 GUI 冒烟 / 人工验证（见提交说明）。
+ */
+describe('addImageWatermark（PDF 图片水印）', () => {
+  it('居中：页数不变、输出合法 PDF、可再次加载并保存', async () => {
+    const src = await makeTwoPagePdf();
+    const out = await addImageWatermark(src, { imageBytes: TINY_PNG, mime: 'png' });
+
+    expectValidPdfHeader(out);
+
+    // 页数保持不变
+    const doc = await loadPdf(out);
+    expect(doc.getPageCount()).toBe(2);
+    // 可再次保存（说明绘图指令合法、无损坏）
+    const resaved = await doc.save();
+    expect(resaved.length).toBeGreaterThan(0);
+  });
+
+  it('平铺：整页网格重复，页数不变且输出合法', async () => {
+    const src = await makeTwoPagePdf();
+    const out = await addImageWatermark(src, { imageBytes: TINY_PNG, tile: true, rotate: 30 });
+
+    expectValidPdfHeader(out);
+    const doc = await loadPdf(out);
+    expect(doc.getPageCount()).toBe(2);
+    await doc.save();
+  });
+
+  it('自定义透明度 / 角度 / 宽度比例：正常产出且页数不变', async () => {
+    const src = await makeTwoPagePdf();
+    const out = await addImageWatermark(src, {
+      imageBytes: TINY_PNG,
+      opacity: 0.3,
+      rotate: 45,
+      widthRatio: 0.4,
+    });
+
+    expectValidPdfHeader(out);
+    const doc = await loadPdf(out);
+    expect(doc.getPageCount()).toBe(2);
+    await doc.save();
+  });
+
+  it('空图片字节：按约定抛错（输入校验）', async () => {
+    const src = await makeTwoPagePdf();
+    await expect(
+      addImageWatermark(src, { imageBytes: new Uint8Array(0) }),
+    ).rejects.toThrow();
   });
 });

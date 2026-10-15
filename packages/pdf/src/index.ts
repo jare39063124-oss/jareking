@@ -3,8 +3,9 @@
  * 「PDF页面工具箱 v2」的功能融合）。
  *
  * 覆盖（与工具箱对齐）：页面提取/删除、合并、旋转、插入页面、页面替换、
- * 图片转 PDF（A4 等比居中）。压缩（栅格化重建）与 Office 转 PDF 属
- * 渲染/外部引擎层，另行接入。
+ * 图片转 PDF（A4 等比居中）、文字水印（拉丁矢量）+ 图片水印
+ * （中文等非拉丁文本由渲染层 canvas 位图化后叠加）。压缩（栅格化重建）与
+ * Office 转 PDF 属渲染/外部引擎层，另行接入。
  *
  * 坐标约定：页码规格面向用户（从 1 开始），内部统一转 0 基索引。
  * 支持格式："1,3-5"（含 "last"/"-1" 表示末页）。
@@ -483,6 +484,104 @@ export async function addWatermark(pdfBytes: Uint8Array, opts: WatermarkOptions)
       const offX = (textWidth / 2) * cos - (fontSize / 2) * sin;
       const offY = (textWidth / 2) * sin + (fontSize / 2) * cos;
       page.drawText(text, { ...common, x: width / 2 - offX, y: height / 2 - offY });
+    }
+  }
+  return save(doc);
+}
+
+/* =========================================================================
+ * 图片水印（中文等非拉丁文本的位图化水印）
+ * -------------------------------------------------------------------------
+ * 为什么需要它：pdf-lib 嵌入 CJK 自定义字体强依赖 @pdf-lib/fontkit，而本项目
+ * 遵守「不新增运行时依赖、不随包分发字体文件」的硬约束 —— 故无法用矢量文本
+ * 渲染中文水印。改用**位图水印**路线：由渲染进程 canvas 把（含中文的）文本
+ * 绘制成**透明背景 PNG**（canvas 自动使用系统/Web 字体渲染 CJK，零版权、零依赖），
+ * 再作为图片叠加到 PDF 各页。
+ *
+ * 本函数是纯数据层算子：只负责把「给定的图片字节」按参数嵌入并叠加，
+ * 不含任何字体逻辑，Node / 浏览器环境均可运行、可单测。
+ * ========================================================================= */
+
+export interface ImageWatermarkOptions {
+  /** 图片字节（PNG/JPEG） */
+  imageBytes: Uint8Array;
+  /** 图片格式，默认 'png' */
+  mime?: 'png' | 'jpeg';
+  /** 透明度 0~1，默认 0.12 */
+  opacity?: number;
+  /** 旋转角度（度，默认 0） */
+  rotate?: number;
+  /** 平铺（true=网格重复覆盖整页，默认 false=每页居中一个） */
+  tile?: boolean;
+  /**
+   * 每页显示宽度占页面宽度的比例（默认 0.5，仅非平铺时生效）。
+   * 平铺模式改用图片自然尺寸（1px≈1pt，并限制单块不超过页宽的 35%）以保证网格密度合理。
+   */
+  widthRatio?: number;
+}
+
+/**
+ * 给 PDF 每页叠加**图片水印**（用于中文等非拉丁文字：由渲染层 canvas 预渲染成 PNG）。
+ *
+ * - `tile=false`（默认）：图片按 `widthRatio`（默认页宽的 0.5）等比缩放后居中显示单个；
+ * - `tile=true`：按网格平铺覆盖整页（向页面四周外扩一个图片尺度的边距，抵消旋转留白，
+ *   越界部分交由 PDF 渲染器自然裁剪，不会报错）。
+ *
+ * 坐标约定：pdf-lib 的 `drawImage` 以图片**左下角**为锚点，`rotate` 绕该锚点旋转。
+ * 居中放置时按「旋转后图片框中心对齐页面中心」反推锚点坐标。
+ */
+export async function addImageWatermark(
+  pdfBytes: Uint8Array,
+  opts: ImageWatermarkOptions,
+): Promise<Uint8Array> {
+  const bytes = opts.imageBytes;
+  if (!bytes || !bytes.length) throw new Error('水印图片字节为空');
+
+  const mime = opts.mime ?? 'png';
+  const opacity = Math.min(1, Math.max(0, opts.opacity ?? 0.12));
+  const rotate = Number.isFinite(opts.rotate) ? (opts.rotate as number) : 0;
+  const tile = opts.tile ?? false;
+  // 比例做上下限保护：过小不可见、过大溢出，均无意义。
+  const widthRatio = Math.min(1, Math.max(0.05, opts.widthRatio ?? 0.5));
+  const rad = (rotate * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+
+  const doc = await loadPdf(pdfBytes);
+  const img = mime === 'jpeg' ? await doc.embedJpg(bytes) : await doc.embedPng(bytes);
+  // 等比：以宽度为基准，高度按图片原始宽高比换算；防御图片宽为 0 的异常输入。
+  const aspect = img.width > 0 ? img.height / img.width : 1;
+
+  for (const page of doc.getPages()) {
+    const { width: pw, height: ph } = page.getSize();
+
+    if (tile) {
+      // 平铺：以图片自然尺寸（1px≈1pt）为基准，单块宽度上限为页宽的 35%，
+      // 保证网格密度合理且不越界。旋转绕左下角，靠外扩 margin 覆盖四角。
+      const w = Math.max(8, Math.min(img.width, pw * 0.35));
+      const h = Math.max(8, w * aspect);
+      const stepX = w * 1.5;
+      const stepY = h * 1.8;
+      const margin = Math.max(w, h) * 2;
+      for (let y = -margin; y < ph + margin; y += stepY) {
+        for (let x = -margin; x < pw + margin; x += stepX) {
+          page.drawImage(img, { x, y, width: w, height: h, opacity, rotate: degrees(rotate) });
+        }
+      }
+    } else {
+      // 居中单个：图片按 widthRatio 缩放，反推「旋转后中心对齐页面中心」的左下角锚点。
+      const w = pw * widthRatio;
+      const h = w * aspect;
+      const offX = (w / 2) * cos - (h / 2) * sin;
+      const offY = (w / 2) * sin + (h / 2) * cos;
+      page.drawImage(img, {
+        x: pw / 2 - offX,
+        y: ph / 2 - offY,
+        width: w,
+        height: h,
+        opacity,
+        rotate: degrees(rotate),
+      });
     }
   }
   return save(doc);
