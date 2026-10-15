@@ -129,3 +129,41 @@ describe('pptxParser（fflate 流式）round-trip', () => {
     await expect(parsePptx(bad)).rejects.toThrow(/presentation\.xml/);
   });
 });
+
+/* =========================================================================
+ * 演讲者备注（WPS 对齐批3续）：建模 + 导出→解析 round-trip
+ * ========================================================================= */
+describe('pptx 演讲者备注 round-trip', () => {
+  /** 构造两页：第 1 页带备注，第 2 页无备注 */
+  function buildPresWithNotes(): JkPresentation {
+    const base = buildPres();
+    const slides: JkSlide[] = [
+      { ...base.slides[0], notes: '演讲要点一\n第二行补充说明' },
+      { ...base.slides[1] }, // 无备注
+    ];
+    return { ...base, slides };
+  }
+
+  it('导出 → 解析：带备注页 notes 不丢，且含预期文本', async () => {
+    const pres = buildPresWithNotes();
+    const bytes = await exportPptx(pres);
+    const parsed = await parsePptx(bytes);
+
+    expect(parsed.slides).toHaveLength(2);
+    // 第 1 页备注保留
+    expect(parsed.slides[0].notes).toBeDefined();
+    expect(parsed.slides[0].notes).toContain('演讲要点一');
+    expect(parsed.slides[0].notes).toContain('第二行补充说明');
+    // 第 2 页无备注
+    expect(parsed.slides[1].notes === undefined || parsed.slides[1].notes === '').toBe(true);
+  });
+
+  it('无备注页导出后再解析，notes 为 undefined/空', async () => {
+    const pres = buildPres(); // 两页均无备注
+    const bytes = await exportPptx(pres);
+    const parsed = await parsePptx(bytes);
+    for (const s of parsed.slides) {
+      expect(s.notes === undefined || s.notes === '').toBe(true);
+    }
+  });
+});

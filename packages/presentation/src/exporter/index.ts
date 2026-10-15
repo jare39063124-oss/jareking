@@ -153,8 +153,26 @@ function serializeSlide(
     <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
     ${parts.join('')}
   </p:spTree></p:cSld>
-  ${transition === 'fade' ? '<p:transition><p:fade/></p:transition>' : transition === 'slide' ? '<p:transition><p:push dir="u"/></p:transition>' : ''}
+      ${transition === 'fade' ? '<p:transition><p:fade/></p:transition>' : transition === 'slide' ? '<p:transition><p:push dir="u"/></p:transition>' : ''}
 </p:sld>`;
+}
+
+/** 备注页（最小合法 notesSlide 结构，命名空间与 slide 一致） */
+function serializeNotesSlide(notes: string): string {
+  const paragraphs = notes
+    .split('\n')
+    .map((line) => `<a:p><a:r><a:t>${escapeXmlText(line)}</a:t></a:r></a:p>`)
+    .join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder 1"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>${paragraphs}</p:txBody></p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:notes>`;
 }
 
 /** JkPresentation → pptx 字节流 */
@@ -162,6 +180,19 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
   const zip = new JSZip();
   const slides = pres.slides ?? [];
   const media = pres.media ?? {};
+
+  // 备注页：仅含非空备注的页生成关联
+  const notesIdxWithText = slides
+    .map((s, i) => ({ notes: (s.notes ?? '').trim(), i }))
+    .filter((x) => x.notes.length > 0)
+    .map((x) => x.i);
+  // presentation 级 rId 序号：slide 已占用 rId1..rIdN，备注从 N+1 起递增
+  let presRidSeq = slides.length;
+  const notesPresRid: Record<number, number> = {};
+  for (const idx of notesIdxWithText) {
+    presRidSeq++;
+    notesPresRid[idx] = presRidSeq;
+  }
 
   // [Content_Types].xml
   zip.file(
@@ -178,6 +209,12 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
         .map(
           (_, i) =>
             `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`,
+        )
+        .join('') +
+      notesIdxWithText
+        .map(
+          (i) =>
+            `<Override PartName="/ppt/notesSlides/notesSlide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`,
         )
         .join('') +
       `</Types>`,
@@ -198,6 +235,11 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
       `<p:sldIdLst>${slides
         .map((_, i) => `<p:sldId id="${256 + i}" r:id="${slideRids[i]}"/>`)
         .join('')}</p:sldIdLst>` +
+      (notesIdxWithText.length
+        ? `<p:notesSldIdLst>${notesIdxWithText
+            .map((i) => `<p:notesSldId id="${512 + i}" r:id="rId${notesPresRid[i]}"/>`)
+            .join('')}</p:notesSldIdLst>`
+        : '') +
       `<p:sldSz cx="${Math.round(pres.slideWidth)}" cy="${Math.round(pres.slideHeight)}"/>` +
       `<p:notesSz cx="6858000" cy="9144000"/></p:presentation>`,
   );
@@ -212,12 +254,19 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
             `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`,
         )
         .join('') +
+      notesIdxWithText
+        .map(
+          (i) =>
+            `<Relationship Id="rId${notesPresRid[i]}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="notesSlides/notesSlide${i + 1}.xml"/>`,
+        )
+        .join('') +
       `</Relationships>`,
   );
 
-  // 每页：slide XML + 图片收集 + 每页 rels
+  // 每页：slide XML + 图片收集 + 每页 rels + 备注页
   let mediaSeq = 0;
   slides.forEach((slide, i) => {
+    const notesText = (slide.notes ?? '').trim();
     // 收集本页图片（按 shape 顺序分配 rId，从 rId2 起）
     const images: SlideImage[] = [];
     for (const s of slide.shapes ?? []) {
@@ -235,24 +284,44 @@ export async function exportPptx(pres: JkPresentation): Promise<Uint8Array> {
       serializeSlide(slide.shapes ?? [], i, images, slide.transition),
     );
 
-    if (images.length) {
+    // 汇总本页 rels 关系（图片 + 备注）
+    const rels: string[] = [];
+    for (const im of images) {
+      rels.push(
+        `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
+      );
+    }
+    if (notesText) {
+      // 备注关系 rId：图片已用 rId2…，从本页现有最大 rId+1 起（即 rId(images.length+2)）
+      const noteRid = `rId${images.length + 2}`;
+      rels.push(
+        `<Relationship Id="${noteRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`,
+      );
+    }
+    if (rels.length) {
       zip.file(
         `ppt/slides/_rels/slide${i + 1}.xml.rels`,
         `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-          images
-            .map(
-              (im) =>
-                `<Relationship Id="${im.relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${++mediaSeq}.${im.ext}"/>`,
-            )
-            .join('') +
+          rels.join('') +
           `</Relationships>`,
       );
-      // 图片字节（target 序号与 rels 中出现顺序一致）
-      let imgNo = mediaSeq - images.length;
-      for (const im of images) {
-        zip.file(`ppt/media/image${++imgNo}.${im.ext}`, im.bytes);
-      }
+    }
+
+    // 图片字节（target 序号与 rels 中出现顺序一致）
+    let imgNo = mediaSeq - images.length;
+    for (const im of images) {
+      zip.file(`ppt/media/image${++imgNo}.${im.ext}`, im.bytes);
+    }
+
+    // 备注页 XML + 空关系（notesSlide 不引用 notesMaster，v1 自包含即可）
+    if (notesText) {
+      zip.file(`ppt/notesSlides/notesSlide${i + 1}.xml`, serializeNotesSlide(notesText));
+      zip.file(
+        `ppt/notesSlides/_rels/notesSlide${i + 1}.xml.rels`,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`,
+      );
     }
   });
 

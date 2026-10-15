@@ -41,6 +41,8 @@ export interface JkSlide {
   layout?: string;
   /** 切换效果（v1 仅 none/fade；其余效果解析降级为 none） */
   transition?: 'none' | 'fade' | 'slide';
+  /** 演讲者备注（纯文本，段落以 \n 分隔；WPS/PowerPoint 备注栏内容，放映时不显示） */
+  notes?: string;
 }
 
 /* =========================================================================

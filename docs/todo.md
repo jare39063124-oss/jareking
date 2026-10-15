@@ -1,22 +1,18 @@
 # jareking 开发 Todolist
 
-> 配套文档：`spec.md`（产品规格）· 版本 v1.1 · 2026-10-12
-> 使用规则：开发前须通过 Spec 审批；任务完成后勾选并记录日期；接口契约优先于并行开发。
-> v1.1 变更：Windows 单平台；Presentation 升入 v1；商业化按个人开发者路径（第三方平台充值 + 离线许可证）；云同步转预留；新增品牌占位任务。
+> 配套文档：`spec.md`（产品规格）· 版本 v1.1 · 2026-10-12>   
+> 使用规则：开发前须通过 Spec 审批；任务完成后勾选并记录日期；接口契约优先于并行开发。>   
+> v1.1 变更：Windows 单平台；Presentation 升入 v1；商业化按个人开发者路径（第三方平台充值 + 离线许可证）；云同步转预留；新增品牌占位任务。>   
 > **2026-10-14 增补**：用户要求「WPS 全量功能」——差距显性化为 `docs/wps-parity.md` 对齐矩阵（P0/P1/P2 三档分批），批 1（查找替换/字数统计/字体库）已落地；字体版权调研与合规方案见 `docs/fonts.md`。
 
 ## WPS 对齐专项（2026-10-14 增设，矩阵与批次见 docs/wps-parity.md）
 
 - [x] **W-批1（2026-10-14）**：Writer 查找替换（Ctrl+F/H 自研，全部替换单事务可撤销，10 测）+ 字数统计状态栏（WPS 口径）+ 字体库合规三分组（docs/fonts.md：OFL 内置白名单/厂商免费商用/系统字体红线）
-- [x] **W-批2 首批（2026-10-14）**：Writer **插入页码**（PAGE 域，Word/WPS 打开重算）+ **插入目录**（扫描全文 heading 层级 → 目录标题 + 缩进大纲条目 + TOC 域，打开后可更新域得页码；tocBuilder 纯函数 4 测 + gui-smoke 断言）
-- [ ] **W-批2 续**：Writer 页眉页脚（深度项：需 sectPr header/footer parts 读写 + 布局重构，风险高排单独专项）+ 全模块导出 PDF 统一入口（融合 T5.3 打印管线）+ Sheet 单元格格式对话框
-- [ ] **W-批3**：Presentation 动画切换（T3.3）+ 表格 + 备注；Sheet 查找替换 + 图表（T2.5）
+- [ ] **W-批2**：Writer 页眉页脚 + [x] 页码插入 UI（域已建模，2026-10-14 批2首批已落地）+ [x] 目录自动生成（2026-10-14 批2首批已落地）+ 全模块导出 PDF 统一入口（融合 T5.3）+ Sheet 单元格格式对话框
+  - 2026-10-15 补：PDF 工具已升为功能区一级标签页（`PDF 工具`），其中 6 个页面操作 + 图片转 PDF 可用；转换/加密/水印/压缩/OCR 待排期（见 T5.1~T5.3）。
+- [ ] **W-批3**：[x] 动画切换 + 放映模式（T3.3）+ [x] PPT 演讲者备注（2026-10-15 已落地，模型/解析/导出/UI 全链路 + round-trip 实测）+ [x] Sheet 查找替换（2026-10-15 已落地，纯函数 + Univer 实时回写）+ 表格 + 图表（T2.5）
 - [ ] **W-批4**：批注/修订（Writer）、数据透视表（Sheet）、母版（演示）、JS 宏评估
 - [x] **字体合规**：调研完成（docs/fonts.md：红线=方正/汉仪/微软雅黑嵌入；内置白名单=OFL 清单）；批 1 已把 系统字体/开源 OFL/厂商免费商用 三组 23 款进字体下拉；批 2 待办=安装包内置思源黑体+霞鹜文楷（附 OFL.txt 与鸣谢页）；批 3 待办=字体管理器（扫描本机字体+授权提示）
-
-- [ ] **PDF↔Office 转换 + PDF 增强（2026-10-15 用户反馈登记）**：PDF转Word / PDF转Excel / PDF转PPT / PDF转图片 / PDF转TXT；Word转PDF / Excel转PDF / PPT转PDF；PDF 加密、移除密码、添加水印、页眉页脚、压缩PDF、全文搜索、批注、OCR 识别。
-  - 说明：PDF 工具已升级为功能区一级标签页（`PDF 工具`），其中**已实现** 6 个页面操作（合并/拆分/提取/删除/旋转/插入/替换）+ 图片转 PDF；上述转换与增强项点击给出「功能建设中」提示，需本机 Office/WPS COM 或自研转换管线 + pdf.js 渲染层（随 T5.1 阅读器 / T5.3 导出管线）排期。
-- [ ] **W-批2 补（2026-10-15 冒烟遗留登记）**：① `slide/SlideEditor.tsx:283`「编辑文字」仍用 `window.prompt` —— 原生弹窗会阻断 Electron CDP 自动化（与 Writer 公式/超链接同款问题，已约定一律改 Modal），随批 3 Presentation 一并改造；② `stores/editorCommands.ts`（命令总线，新增）尚无单测覆盖，补 `editorCommands.test.ts`（重点：同名命令注销语义、`notifyEditorChange` 微任务合并）；③ `pdf-open`（打开 PDF）作为阅读入口建议优先接入 T5.1 阅读器，而非停留在「功能建设中」。
 
 ## 阶段总览
 
@@ -35,6 +31,7 @@
 ## Phase 0 — 基础设施 + 品牌占位
 
 > **环境备忘（2026-10-12 验证通过）**：
+>
 > - pnpm 12：构建脚本白名单在 `pnpm-workspace.yaml` 的 `allowBuilds`（映射格式，非数组）；esbuild 的 postinstall 校验被沙箱阻止（node 自我 spawn EBUSY），已跳过校验（运行时用平台可选依赖的二进制，不受影响）
 > - Electron 二进制：GitHub 被墙，用 `ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"` 下载
 > - 沙箱默认 `ELECTRON_RUN_AS_NODE=1`：从工具里启动 Electron GUI 需 `env -u ELECTRON_RUN_AS_NODE`
@@ -77,7 +74,7 @@
   - 测试：`apps/desktop/src/renderer/src/writer/roundtrip.test.ts`（vitest + jsdom，2 条）覆盖「打开→保存」保存侧闭环：sample.docx → parseDocx → jkToHtml 结构正确 → htmlToJk → exportDocx → 再解析结构稳定；与 `packages/writer` 13/13 合计 15/15 绿
   - 局限（headless 沙箱）：GUI 渲染冒烟需在真实 Windows 机器 `env -u ELECTRON_RUN_AS_NODE pnpm dev` 人工确认；IME/选区跨格式为运行期行为，靠编辑器交互验证
 - [x] **T1.5** docx 导出：文档模型 → OOXML 序列化；保真 L2；图片/字体打包
-  - 完成（2026-10-13）：合法 docx(zip+命名空间+ContentTypes/rels)；单位换算与解析器精确互逆；__raw 兜底回插；13/13 vitest 通过（含解析→导出→再解析对称）
+  - 完成（2026-10-13）：合法 docx(zip+命名空间+ContentTypes/rels)；单位换算与解析器精确互逆；\_\_raw 兜底回插；13/13 vitest 通过（含解析→导出→再解析对称）
   - 局限：图片二进制 round-trip 待解析器侧补 media（T1.8 前）
 - [x] **T1.6** 工具栏与格式面板（核心子集）
   - 完成（2026-10-13）：在 T1.4 编辑器上扩展格式工具栏——字体族（SimSun/黑体/微软雅黑/楷体/仿宋/Times New Roman/Arial/Calibri/Cambria）、字号（8~72pt）、字体颜色（取色器）、超链接（插入/取消，window.prompt 输入 URL）、**插入图片**（本地文件 → data URL → TipTap Image，保存时由 htmlToJk 落盘为 media）；新增 TipTap 扩展 TextStyle/Color/FontFamily/Link/Image + 自研 FontSize
@@ -134,11 +131,13 @@
   - 完成（2026-10-13）：**Konva（react-konva 19.3，React 19 兼容）**；`apps/desktop/src/renderer/src/slide/SlideEditor.tsx`——左侧幻灯片列表（切换/新增/删页）+ 中央 Konva 舞台（EMU→px 等比缩放）+ 工具栏（文本框/矩形/椭圆/图片/复制/删除/打开/保存 .pptx）；编辑能力：单击选中、拖拽移动（px→EMU 回写）、双击改文字（沿用首 run 格式）、图片插入（dataURL 展示+字节入 media 落盘）
   - GUI 冒烟通过：演示标签 Konva canvas 渲染 + 幻灯片面板，0 控制台错误
   - **后续迭代**：主题母版、缩放变换手柄/多选、单元格表格编辑（v1 表格编辑占位）
-- [ ] **T3.3** 动画与切换（基础）、放映模式（F5）
+- [x] **T3.3** 动画与切换（基础）、放映模式（F5）
+  - 完成（2026-10-15）：滑动/淡入切换 + 形状逐个进入动画 + F5 放映覆盖层（`SlideshowOverlay`），GUI 冒烟 `slideAnimPlaying` 通过。
 - [x] **T3.4** pptx 导出（PptxGenJS + 自研序列化）；导出 PDF
   - 完成（2026-10-13）：**自研序列化**（无需 PptxGenJS）——`packages/presentation/src/exporter`：ContentTypes/根 rels/presentation.xml（sldIdLst+sldSz）/每页 slide XML（sp/pic/txBody 逆映射）/每页 rels+ppt/media 图片落盘（字节签名嗅探扩展名）；JkPresentation 新增 `media` 载体（键 `${slideIndex}:${relId}`，rId 每页独立会重号），解析器同步提取图片字节回填
   - round-trip 冒烟通过：文本（格式/对齐/项目符号/级别）/形状（geom/fill/旋转）/图片（字节保留）全保持；**导出 PDF 随 Phase 5**（T5.3）
 - [ ] **T3.5** **Phase 验收**：5 份真实 pptx 打开-编辑-保存；放映流畅
+
 
 ## Phase 4 — AI 助手
 
@@ -175,8 +174,8 @@
 
 ## Phase 5 — PDF
 
-> **2026-10-13 修订**：融合用户自研「PDF页面工具箱 v2」（PyInstaller + PyMuPDF，桌面 PDF页面工具箱(4).exe）的功能清单。
-> 数据层已落地：\`packages/pdf\`（pdf-lib）——页面提取/删除/合并/旋转/插入/替换/图片转PDF（A4 等比居中）+ 页码规格解析（"1,3-5,last"），真实 24 页 PDF 冒烟 10/10 通过。
+> **2026-10-13 修订**：融合用户自研「PDF页面工具箱 v2」（PyInstaller + PyMuPDF，桌面 PDF页面工具箱(4).exe）的功能清单。>   
+> 数据层已落地：\`packages/pdf\`（pdf-lib）——页面提取/删除/合并/旋转/插入/替换/图片转PDF（A4 等比居中）+ 页码规格解析（"1,3-5,last"），真实 24 页 PDF 冒烟 10/10 通过。>   
 > 压缩（栅格化重建，需 pdf.js 渲染层）与 Office 转 PDF（需本机 WPS/Office COM）属引擎层，随阅读器任务接入。
 
 - [ ] **T5.1** 阅读器：PDF.js 渲染、缩放翻页、文本选择复制、目录书签、全文搜索、连续/单页模式
@@ -211,14 +210,14 @@
 
 ## 预留/暂缓清单（v1 明确不做，架构已留口）
 
-| 项目 | 暂缓原因 | 启用条件 |
-|---|---|---|
-| 激励视频广告 | 个人无广告 SDK 接入资质 | 企业主体就绪 |
-| 平台托管 AI 额度 | 无服务器计量 | VPS + 服务端就绪 |
-| 云同步/多端 | 无云服务器与存储 | VPS + 对象存储就绪 |
-| 原生微信/支付宝支付 | 无商户号 | 个体工商户注册 |
-| macOS 版本 | 需求方决定放弃 | 战略需要时重启（渲染层跨平台设计保持） |
-| Apple IAP | 随 macOS 放弃 | 不再涉及 |
+| 项目         | 暂缓原因           | 启用条件                |
+| ---------- | -------------- | ------------------- |
+| 激励视频广告     | 个人无广告 SDK 接入资质 | 企业主体就绪              |
+| 平台托管 AI 额度 | 无服务器计量         | VPS + 服务端就绪         |
+| 云同步/多端     | 无云服务器与存储       | VPS + 对象存储就绪        |
+| 原生微信/支付宝支付 | 无商户号           | 个体工商户注册             |
+| macOS 版本   | 需求方决定放弃        | 战略需要时重启（渲染层跨平台设计保持） |
+| Apple IAP  | 随 macOS 放弃     | 不再涉及                |
 
 ---
 
@@ -249,6 +248,7 @@
 > 复检发现的高危项已逐步处理，分级与结果见 `docs/agent-guide.md` 第 6 节。此处登记**已落地**与**暂缓但不丢项**的清单，供后续迭代不遗漏。
 
 ### ✅ 已落地（本次）
+
 - **#47 Sheet 样式回写断裂 —— 根治**：`apps/desktop/src/renderer/src/sheet/univerAdapter.ts` 实现 `JkCellStyle ↔ IStyleData` 双向映射 + `StyleRegistry` 去重；`univerAdapter.test.ts` 7/7 通过。保存 Univer 编辑出的填充/字体/边框/对齐不再丢失。
 - **#48 Writer 域降级 —— 建模**：`packages/writer` 模型/解析/导出/编辑器链路全贯通 `field`（简单 `fldSimple` + 复杂 `fldChar`/`instrText` 状态机，含 `w:r` 内嵌套）；`test/field.test.ts` 3/3 通过。跨程序（Word/WPS）打开后页码/目录/公式按指令重算。
 - **#46 大文件稳定性 —— 安全降级缓解**：`lib/largeFile.ts` 统一阈值与文案；`WriterEditor`/`SlideEditor` 加 `LoadingOverlay`（解析不冻结 UI）+ 可关闭大文件横幅 + PPT 缩略图虚拟化（DOM 节点数恒定）。交互不卡死、不崩溃。
@@ -261,12 +261,15 @@
     - 结论：100MB 量级全链路秒级打开、0 控制台错误；残余冻结主要来自 fetch 读入/结构化克隆/Univer 创建（非解析）。**M3 流式 xlsx 读取器立项必要性降低**——若未来出现 500MB+ 场景再评估。
 
 ### ⏸ 暂缓（深层架构债，明确不丢项，排入 M3 性能专项前）
+
 - **真正流式 xlsx 解析**：exceljs 不支持流式读（`Workbook.xlsx.load` 全量装载）。#46-C 已落地的 Worker 隔离解决了「主线程冻结 + 崩溃隔离」，且 100MB+ 压测（107MB xlsx 解析 6.85s / 堆 228MB）表明当前量级体验良好——**M3 立项必要性降低**，仅在出现 500MB+ 真实场景时按数据再评估。
 
 ### 🔍 #46-A / #46-C 评估（2026-10-15 更新）
+
 - **#46-A —— 已落地（分块编辑，非节点虚拟化）**：原评估认为"真·节点虚拟化难度高、回归风险高"。实际落地采用分块编辑（完整文档留内存、编辑器只渲染 body 切片 + 分页条），同样达成"大文档不整篇挂载 DOM"目标，且普通文档零回归。真·节点级虚拟滚动仍不作为目标（性价比低）。
 - **#46-C —— 已落地（Worker + 流式，2026-10-15）**：原评估的「最小可行缓解」① Web Worker ② 流式 zip 均已实施。② 由 yauzl（Node-only，不可用于渲染进程/worker）改为 **fflate**（浏览器/worker 同构）。原评估「建议独立专项」按当前进度合并进本轮完成；真正流式 xlsx 读取器仍排 M3（见暂缓清单）。
 - 结论：#46（安全降级）、#46-A（大文档 DOM）、#46-B（图片双倍内存）、#46-C（解析冻结 + PPT 峰值）全部闭环；大文件专项仅剩「流式 xlsx 读取器」一项登记 M3。
 
 ### 复查澄清（非缺口，留痕避免重复排查）
+
 - **命名样式**：复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已完整贯通 Word 命名样式（Heading 1 等），并非真实缺口。

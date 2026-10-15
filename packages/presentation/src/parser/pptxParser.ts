@@ -233,14 +233,48 @@ function isNeededPart(name: string): boolean {
     name === 'ppt/_rels/presentation.xml.rels' ||
     /^ppt\/slides\/slide\d+\.xml$/.test(name) ||
     /^ppt\/slides\/_rels\/slide\d+\.xml\.rels$/.test(name) ||
+    /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name) ||
+    /^ppt\/notesSlides\/_rels\/notesSlide\d+\.xml\.rels$/.test(name) ||
     /^ppt\/media\//.test(name)
   );
+}
+
+/**
+ * 解析 notesSlide XML → 备注纯文本。
+ *
+ * notesSlide 结构（removeNSPrefix 后，标签不带 p:/a: 前缀）：
+ *   notes / cSld / spTree / sp / txBody / p / r / t
+ * 遍历所有 sp 下的 txBody，收集每个 p 内所有 r.t 文本；段落间以 \n 连接，
+ * 整体 .trim() 后返回（与正文同一 childArray 思路）。
+ */
+function parseNotesSlide(xml: string): string {
+  const obj = parseXml(xml);
+  const spTree = obj?.notes?.cSld?.spTree;
+  if (!spTree) return '';
+  const paragraphs: string[] = [];
+  for (const sp of childArray(spTree, 'sp')) {
+    const txBody = sp?.txBody;
+    if (!txBody) continue;
+    const text = childArray(txBody, 'p')
+      .map((p: any) =>
+        childArray(p, 'r')
+          .map((r: any) => {
+            const t = r?.t;
+            return typeof t === 'string' ? t : (t?.['#text'] ?? '');
+          })
+          .join(''),
+      )
+      .join('\n');
+    if (text) paragraphs.push(text);
+  }
+  return paragraphs.join('\n').trim();
 }
 
 /**
  * 流式解压 pptx 字节 → 收集必要部件。
  * - presXml / presRels：小，保留（决定幻灯片顺序）。
  * - slidesByPart：每页幻灯片 XML 解析为模型后**立即丢弃 XML 字符串**。
+ * - notesByPart：每页备注 XML 提取文本（键 ppt/notesSlides/notesSlideN.xml）。
  * - mediaByPath：保留显示必需的图片字节。
  * - 其余无关条目（theme/embeddings/docProps/notesMaster 等）直接丢弃，不占内存。
  */
@@ -251,6 +285,7 @@ function streamUnzip(
   presRels?: string;
   slidesByPart: Map<string, SlideAccum>;
   slideRelsByPart: Map<string, string>;
+  notesByPart: Map<string, string>;
   mediaByPath: Map<string, Uint8Array>;
   skippedNotes: string[];
 }> {
@@ -258,6 +293,7 @@ function streamUnzip(
   const presRelsRef: { value?: string } = {};
   const slidesByPart = new Map<string, SlideAccum>();
   const slideRelsByPart = new Map<string, string>();
+  const notesByPart = new Map<string, string>();
   const mediaByPath = new Map<string, Uint8Array>();
   const skippedNotes: string[] = [];
 
@@ -278,6 +314,7 @@ function streamUnzip(
             presRels: presRelsRef.value,
             slidesByPart,
             slideRelsByPart,
+            notesByPart,
             mediaByPath,
             skippedNotes,
           });
@@ -352,11 +389,17 @@ function streamUnzip(
         slideRelsByPart.set(name, textDecoder.decode(data));
         return;
       }
+      // 备注页：提取文本（键规整为 ppt/notesSlides/notesSlideN.xml）
+      const notesMatch = /^ppt\/notesSlides\/notesSlide(\d+)\.xml$/.exec(name);
+      if (notesMatch) {
+        notesByPart.set(name, parseNotesSlide(textDecoder.decode(data)));
+        return;
+      }
       if (/^ppt\/media\//.test(name)) {
         mediaByPath.set(name, data);
         return;
       }
-      // 其余条目（theme/embeddings/docProps/notesMaster 等）不保留
+      // 其余条目（theme/embeddings/docProps/notesMaster/notesSlides rels 等）不保留
     };
 
     try {
@@ -377,7 +420,7 @@ function streamUnzip(
 export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPresentation> {
   const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
 
-  const { presXml, presRels, slidesByPart, slideRelsByPart, mediaByPath, skippedNotes } =
+  const { presXml, presRels, slidesByPart, slideRelsByPart, notesByPart, mediaByPath, skippedNotes } =
     await streamUnzip(u8);
 
   if (!presXml) throw new Error('pptx 缺少 ppt/presentation.xml，可能不是有效的演示文稿');
@@ -446,6 +489,31 @@ export async function parsePptx(buffer: Uint8Array | ArrayBuffer): Promise<JkPre
     }
     slides.push({ partName, shapes: accum.shapes, transition: accum.transition });
     index++;
+  }
+
+  // 备注回填：逐页读取 slide rels，找到指向 notesSlide 的关系，查 notesByPart
+  for (let i = 0; i < slides.length; i++) {
+    const slide = slides[i];
+    if (!slide.partName) continue;
+    const relsPath = slide.partName.replace(/([^/]+)$/, '_rels/$1.rels');
+    const relsXml = slideRelsByPart.get(relsPath);
+    if (!relsXml) continue;
+    const rels = parseXml(relsXml);
+    const target = (() => {
+      for (const rel of childArray(rels?.Relationships, 'Relationship')) {
+        const type = getAttr(rel, '@_Type') ?? '';
+        if (!type.endsWith('/notesSlide')) continue;
+        let t = getAttr(rel, '@_Target') ?? '';
+        // Target 相对 ppt/slides/ 目录，形如 ../notesSlides/notesSlide1.xml
+        while (t.startsWith('../')) t = t.slice(3);
+        if (!t.startsWith('ppt/')) t = `ppt/${t}`;
+        return t;
+      }
+      return undefined;
+    })();
+    if (!target) continue;
+    const noteText = notesByPart.get(target);
+    if (noteText) slides[i] = { ...slide, notes: noteText };
   }
 
   return {

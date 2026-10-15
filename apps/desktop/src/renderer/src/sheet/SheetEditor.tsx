@@ -26,7 +26,7 @@ import '@univerjs/preset-sheets-core/lib/index.css';
 import { exportXlsx, sheetToCsv, type JkWorkbook } from '@jareking/sheet';
 import type { FUniver } from '@univerjs/core';
 import { createAiAdapter, createSheetPlanner, type SheetPlanned } from '@jareking/ai';
-import { Download, FileSpreadsheet, FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
+import { Download, FileSpreadsheet, FolderOpen, RefreshCw, Search, Sparkles } from 'lucide-react';
 
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -36,6 +36,17 @@ import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
 import { parseInWorker } from '../lib/parseClient';
 import { takePendingOpen } from '../stores/pendingOpenStore';
+import {
+  exportXlsx,
+  sheetToCsv,
+  findCells,
+  replaceCells,
+  toA1,
+  cellValueStr,
+  type JkWorkbook,
+  type FindResult,
+  type FindOpts,
+} from '@jareking/sheet';
 
 /** 首载演示工作簿（体现 值/公式/合并/列宽 四类能力） */
 function demoWorkbook(): JkWorkbook {
@@ -108,6 +119,15 @@ export function SheetEditor() {
   const [aiInstruction, setAiInstruction] = useState('');
   // Enter 处理器读 ref 而非 state：避免 React 批处理导致读到旧值
   const aiInstructionRef = useRef('');
+
+  // 查找替换（WPS 对齐批3续）UI 状态
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [replaceQuery, setReplaceQuery] = useState('');
+  const [matchCase, setMatchCase] = useState(false);
+  const [wholeCell, setWholeCell] = useState(false);
+  const [findResults, setFindResults] = useState<FindResult[]>([]);
+
   const configs = useAiStore((s) => s.configs);
   const aiLoaded = useAiStore((s) => s.loaded);
   const loadAiConfigs = useAiStore((s) => s.load);
@@ -377,6 +397,64 @@ export function SheetEditor() {
     void createWb(apiRef.current!, demoWorkbook());
   };
 
+  /** 查找全部：实时快照 → JkWorkbook → findCells（结果含 A1 定位信息） */
+  const onFindAll = () => {
+    const api = apiRef.current;
+    if (!api) return;
+    const workbook = api.getActiveWorkbook();
+    if (!workbook) return;
+    // 取实时快照（FWorkbook.save()），转回 JkWorkbook 后在其上查找
+    const snapshot = (workbook as unknown as { save: () => Record<string, unknown> }).save();
+    const jk = univerSnapshotToJk(snapshot as Record<string, never>);
+    const opts: FindOpts = { matchCase, wholeCell };
+    setFindResults(findCells(jk, findQuery, opts));
+  };
+
+  /** 点击结果项：选中该单元格（FRange.activate 实测可用；可选链兜底） */
+  const onResultClick = (r: FindResult) => {
+    const api = apiRef.current;
+    if (!api) return;
+    const fwb = api.getActiveWorkbook();
+    if (!fwb) return;
+    // 按下标取工作表（univerSnapshotToJk 与 getSheets 顺序一致）；回退按名称匹配
+    const sheet = fwb.getSheets()[r.sheetIndex] ?? fwb.getSheetByName(r.sheetName) ?? null;
+    sheet?.getRange(r.row, r.col, 1, 1).activate?.();
+  };
+
+  /** 全部替换：replaceCells（不可变）→ 逐格回写 Univer 实时实例 → toast */
+  const onReplaceAll = () => {
+    const api = apiRef.current;
+    if (!api) return;
+    const fwb = api.getActiveWorkbook();
+    if (!fwb) return;
+    const snapshot = (fwb as unknown as { save: () => Record<string, unknown> }).save();
+    const jk = univerSnapshotToJk(snapshot as Record<string, never>);
+    const opts: FindOpts = { matchCase, wholeCell };
+    const { wb, count } = replaceCells(jk, findQuery, replaceQuery, opts);
+    // 对照原快照，仅回写发生变化的纯 value 单元格（公式单元格 replaceCells 已跳过）
+    for (let si = 0; si < wb.sheets.length; si++) {
+      const newSheet = wb.sheets[si];
+      const oldSheet = jk.sheets[si];
+      const univerSheet =
+        fwb.getSheets()[si] ?? fwb.getSheetByName(newSheet.name) ?? null;
+      if (!univerSheet) continue;
+      for (const [key, cell] of Object.entries(newSheet.cells)) {
+        if (cell.formula) continue; // 公式单元格跳过，避免破坏公式结构
+        const oldCell = oldSheet.cells[key];
+        const oldVal = oldCell && !oldCell.formula ? cellValueStr(oldCell.value) : undefined;
+        const newVal = cellValueStr(cell.value);
+        if (newVal !== oldVal) {
+          const [r, c] = key.split(',').map(Number);
+          // 实测可用 API：FWorksheet.getRange(row, col, 1, 1).setValue(...)
+          univerSheet.getRange(r, c, 1, 1).setValue(newVal);
+        }
+      }
+    }
+    toast.success(`已替换 ${count} 处`);
+    // 刷新查找结果，反映替换后状态
+    if (findQuery) onFindAll();
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col">
       {/* 顶栏：文件操作（编辑能力由 Univer 自带工具栏提供） */}
@@ -392,6 +470,9 @@ export function SheetEditor() {
         </Button>
         <Button variant="ghost" size="sm" icon={<RefreshCw size={13} />} onClick={onReset}>
           重置示例
+        </Button>
+        <Button variant="ghost" size="sm" icon={<Search size={13} />} onClick={() => setFindOpen(true)}>
+          查找替换
         </Button>
         <span className="mx-1 h-5 w-px bg-border" />
         <Sparkles size={14} className="shrink-0 text-accent" aria-hidden="true" />
@@ -452,6 +533,85 @@ export function SheetEditor() {
         className="hidden"
         onChange={onFileChange}
       />
+
+      {/* 查找替换（WPS 对齐批3续）：严禁 window.prompt/alert，使用 Modal */}
+      <Modal
+        open={findOpen}
+        onClose={() => setFindOpen(false)}
+        title="查找替换"
+        footer={<Button variant="ghost" size="sm" onClick={() => setFindOpen(false)}>关闭</Button>}
+      >
+        <div className="flex flex-col gap-3 p-1">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">查找内容</span>
+            <Input
+              aria-label="查找内容"
+              className="w-full"
+              value={findQuery}
+              onChange={(e) => setFindQuery(e.target.value)}
+              placeholder="输入要查找的文本"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-tiny text-muted">替换为</span>
+            <Input
+              aria-label="替换为"
+              className="w-full"
+              value={replaceQuery}
+              onChange={(e) => setReplaceQuery(e.target.value)}
+              placeholder="替换为（留空表示删除匹配内容）"
+            />
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-1.5 text-tiny text-fg">
+              <input
+                type="checkbox"
+                checked={matchCase}
+                onChange={(e) => setMatchCase(e.target.checked)}
+              />
+              区分大小写
+            </label>
+            <label className="flex items-center gap-1.5 text-tiny text-fg">
+              <input
+                type="checkbox"
+                checked={wholeCell}
+                onChange={(e) => setWholeCell(e.target.checked)}
+              />
+              全字匹配
+            </label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={onFindAll}>
+              查找全部
+            </Button>
+            <Button variant="primary" size="sm" onClick={onReplaceAll}>
+              全部替换
+            </Button>
+          </div>
+          {findResults.length > 0 && (
+            <div className="max-h-48 overflow-auto rounded border border-border">
+              <div className="px-2 py-1 text-tiny text-muted">共 {findResults.length} 处</div>
+              {findResults.map((r, idx) => (
+                <button
+                  key={`${r.sheetIndex}-${r.row}-${r.col}-${idx}`}
+                  type="button"
+                  className="flex w-full items-center gap-2 px-2 py-1 text-left text-tiny hover:bg-hover"
+                  onClick={() => onResultClick(r)}
+                  title="点击定位到该单元格"
+                >
+                  <span className="shrink-0 font-medium text-accent">
+                    {r.sheetName}!{toA1(r.row, r.col)}
+                  </span>
+                  <span className="truncate text-muted">{r.value}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {findQuery && findResults.length === 0 && (
+            <p className="text-tiny text-muted">未找到匹配项。</p>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

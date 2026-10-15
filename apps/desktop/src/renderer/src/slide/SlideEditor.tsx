@@ -226,6 +226,12 @@ export function SlideEditor() {
   const [chartLabels, setChartLabels] = useState('Q1,Q2,Q3,Q4');
   const [chartSeries, setChartSeries] = useState('营收|120,158,203,241');
 
+  // 演讲者备注面板折叠态 + 文字编辑弹窗状态（WPS 对齐批3续）
+  const [notesOpen, setNotesOpen] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+
   useEffect(() => {
     if (!aiLoaded) void loadAiConfigs();
   }, [aiLoaded, loadAiConfigs]);
@@ -267,6 +273,15 @@ export function SlideEditor() {
     });
   };
 
+  /** 更新当前页演讲者备注（不可变；WPS 对齐批3续） */
+  const updateNotes = (text: string) => {
+    setPres((prev) => {
+      const slides = [...prev.slides];
+      slides[slideIdx] = { ...slides[slideIdx], notes: text };
+      return { ...prev, slides };
+    });
+  };
+
   const onSelect = (id: string | null) => setSelectedId(id);
 
   const onDragEnd = (id: string, x: number, y: number) => {
@@ -280,13 +295,23 @@ export function SlideEditor() {
   const onEditText = (id: string) => {
     const shape = slide?.shapes.find((s) => s.id === id);
     if (!shape || shape.type === 'image') return;
-    const next = window.prompt('编辑文字（换行分段）：', paragraphsToText(shape));
-    if (next === null) return;
+    // CDP 阻断遗留修复：弃用 window.prompt（会阻断 Electron CDP 自动化），
+    // 改用 Modal + Textarea（与现有 Modal 用法一致）
+    setEditId(id);
+    setEditText(paragraphsToText(shape));
+    setEditOpen(true);
+  };
+
+  /** 弹窗「应用」：将临时文本写回形状段落 */
+  const applyEditText = () => {
+    if (editId === null) return;
+    const id = editId;
+    const text = editText;
     updateShapes((shapes) =>
-      shapes.map((s) =>
-        s.id === id ? ({ ...s, paragraphs: textToParagraphs(next, s) } as JkShape) : s,
-      ),
+      shapes.map((s) => (s.id === id ? ({ ...s, paragraphs: textToParagraphs(text, s) } as JkShape) : s)),
     );
+    setEditOpen(false);
+    setEditId(null);
   };
 
   const addShape = (kind: 'text' | 'rect' | 'ellipse') => {
@@ -863,6 +888,28 @@ export function SlideEditor() {
               </Layer>
             </Stage>
           </div>
+
+          {/* 演讲者备注面板（WPS 对齐批3续）：可折叠，放映时不显示，仅编辑态可见 */}
+          <div className="flex shrink-0 flex-col border-t border-border bg-surface">
+            <button
+              type="button"
+              className="flex h-7 items-center justify-between px-3 text-tiny text-muted hover:bg-hover"
+              onClick={() => setNotesOpen((v) => !v)}
+              title={notesOpen ? '折叠备注面板' : '展开备注面板'}
+            >
+              <span className="font-medium text-fg">演讲者备注</span>
+              <span aria-hidden="true">{notesOpen ? '▾' : '▸'}</span>
+            </button>
+            {notesOpen && (
+              <textarea
+                className="mx-3 mb-2 rounded border border-border bg-surface p-2 text-tiny text-fg outline-none focus-visible:border-accent"
+                style={{ height: 120 }}
+                value={slide?.notes ?? ''}
+                onChange={(e) => updateNotes(e.target.value)}
+                placeholder="在此输入演讲者备注（放映时不显示）"
+              />
+            )}
+          </div>
         </div>
       </div>
 
@@ -930,6 +977,34 @@ export function SlideEditor() {
           <p className="text-tiny leading-relaxed text-muted">
             图表以图片形式插入当前页，可拖动调整位置与大小，并随 .pptx 一并保存。
           </p>
+        </div>
+      </Modal>
+
+      {/* 文字编辑弹窗（替代旧的 window.prompt，避免阻断 Electron CDP 自动化） */}
+      <Modal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        title="编辑文字"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setEditOpen(false)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" onClick={applyEditText}>
+              应用
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-2 p-1">
+          <textarea
+            className="w-full rounded border border-border bg-surface p-2 text-body text-fg outline-none focus-visible:border-accent"
+            rows={6}
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            placeholder="换行分段"
+          />
+          <p className="text-tiny leading-relaxed text-muted">多行文本以换行分段。</p>
         </div>
       </Modal>
 
