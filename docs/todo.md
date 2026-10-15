@@ -178,6 +178,7 @@
 > 数据层已落地：\`packages/pdf\`（pdf-lib）——页面提取/删除/合并/旋转/插入/替换/图片转PDF（A4 等比居中）+ 页码规格解析（"1,3-5,last"），真实 24 页 PDF 冒烟 10/10 通过。>   
 > 压缩（栅格化重建，需 pdf.js 渲染层）与 Office 转 PDF（需本机 WPS/Office COM）属引擎层，随阅读器任务接入。
 > **2026-10-15 补（WPS 对齐批）**：PDF 工具箱「转换」组补 2 项真实功能——**PDF 转 TXT**（pdfjs 文本提取，纯函数 `pdfToText`，4 测 Node 通过）、**PDF 转图片**（pdfjs 渲染 canvas→PNG，渲染进程，结果区缩略图预览 + 逐张/全部下载）。PDF↔Office 双向、加密、水印、压缩、OCR 仍待 T5 引擎层。
+> **2026-10-15 补（Office→PDF 落地）**：功能区「PDF 工具」的「Office 转 PDF」组三按钮（Word/Excel/PPT → PDF）由 `toastNotImplemented` 空壳改为**真驱动本机引擎**——主进程 `services/officeConvert.ts` 用 `child_process.spawn` 调 `powershell.exe` 执行由 `shared/officePdfScript.ts`（纯函数，**8 条单测**）生成的脚本：ProgID 按 `Word/Excel/PowerPoint.Application` 优先、WPS `KWPS/KET(et)/KWPP(wpp)` 备选，只读打开原件 → 导出 PDF → `Quit()` → 释放 COM，临时 `.ps1` 用后即删，含 120s 超时强杀。纯本地、零成本、零服务端（贴合 jareking v1 约束）。**真实 COM 转换需在本机已装 Microsoft Office/WPS 的 Windows 上验收**（无头/沙箱环境无法实测，故以脚本生成器纯函数单测作为硬验证）；**WPS 个人版 COM 支持可能有限，Office 优先**。**PDF→Office、加密、水印、压缩、OCR 仍待排期**（T5.1~T5.3）。
 
 - [ ] **T5.1** 阅读器：PDF.js 渲染、缩放翻页、文本选择复制、目录书签、全文搜索、连续/单页模式
 - [ ] **T5.2** 编辑器（门控）：pdf-lib 页面增删/合并/拆分/旋转/提取、注释、基础文本编辑

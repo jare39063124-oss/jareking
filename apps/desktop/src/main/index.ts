@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { initAutoUpdater, checkForUpdates } from './updater.js';
 import { initServices, type AppServices } from './services/bootstrap.js';
 import type { AiConfigSaveInput } from './services/aiConfigService.js';
+import { convertOfficeToPdf } from './services/officeConvert.js';
+import type { OfficeKind } from '../shared/officePdfScript.js';
 import { IPC } from '../ipc/channels.js';
 
 // 注意：__dirname 由 electron-vite 在打包时注入（ESM 环境下可用），无需手动声明
@@ -156,6 +158,19 @@ function registerIpcHandlers(): void {
     await shell.openExternal(payload.url);
     return true;
   });
+
+  // Office 转 PDF（Word/Excel/PPT → PDF）：用本机 WPS/Office 的 COM 组件转换，纯本地零服务端。
+  // 渲染层经文件选择拿到路径后调用；outputPath 缺省则与输入同目录换 .pdf。
+  ipcMain.handle(
+    IPC.PDF_OFFICE_TO_PDF,
+    async (
+      _event,
+      payload?: { kind?: OfficeKind; inputPath?: string; outputPath?: string },
+    ) => {
+      if (!payload?.inputPath || !payload?.kind) throw new Error('缺少 inputPath 或 kind');
+      return convertOfficeToPdf(payload.kind, payload.inputPath, payload.outputPath);
+    },
+  );
 
   // AI 配置：列表 / 保存（含密钥加密）/ 删除 / 明文 Key 解析（单次调用注入）
   ipcMain.handle(IPC.AI_CONFIG_LIST, () => ai.list());

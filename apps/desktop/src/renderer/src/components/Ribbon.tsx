@@ -86,7 +86,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { useEffect } from 'react';
 import { Tabs } from './Tabs';
-import { toastNotImplemented } from '../stores/toastStore';
+import { toast, toastNotImplemented } from '../stores/toastStore';
 import {
   useUiStore,
   type PdfToolboxMode,
@@ -100,6 +100,8 @@ import {
   type EditorCommandState,
 } from '../stores/editorCommands';
 import { FONT_GROUPS, FONT_SIZES } from '../writer/fonts';
+// OfficeKind 与主进程共用同一类型（单一事实源 shared/officePdfScript.ts）
+import type { OfficeKind } from '../../../shared/officePdfScript';
 
 /**
  * 工具项类型：
@@ -107,7 +109,15 @@ import { FONT_GROUPS, FONT_SIZES } from '../writer/fonts';
  *  - fontFamily / fontSize / color：取值型控件（供「字体」组第一排使用）
  */
 type RibbonTool =
-  | { kind: 'button'; id: string; label: string; icon: LucideIcon; pdfMode?: PdfToolboxMode }
+  | {
+      kind: 'button';
+      id: string;
+      label: string;
+      icon: LucideIcon;
+      pdfMode?: PdfToolboxMode;
+      /** 「Office 转 PDF」按钮：点选本机文件后用 WPS/Office COM 转为 PDF */
+      officeKind?: OfficeKind;
+    }
   | { kind: 'fontFamily'; id: 'font-family'; label: '字体' }
   | { kind: 'fontSize'; id: 'font-size'; label: '字号' }
   | { kind: 'color'; id: 'font-color'; label: '字体颜色' };
@@ -343,9 +353,15 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: 'Office 转 PDF',
         tools: [
-          { kind: 'button', id: 'word-to-pdf', label: 'Word转PDF', icon: FileOutput },
-          { kind: 'button', id: 'excel-to-pdf', label: 'Excel转PDF', icon: FileSpreadsheet },
-          { kind: 'button', id: 'ppt-to-pdf', label: 'PPT转PDF', icon: Presentation },
+          { kind: 'button', id: 'word-to-pdf', label: 'Word转PDF', icon: FileOutput, officeKind: 'word' },
+          {
+            kind: 'button',
+            id: 'excel-to-pdf',
+            label: 'Excel转PDF',
+            icon: FileSpreadsheet,
+            officeKind: 'excel',
+          },
+          { kind: 'button', id: 'ppt-to-pdf', label: 'PPT转PDF', icon: Presentation, officeKind: 'ppt' },
           { kind: 'button', id: 'pdf-images', label: '图片转PDF', icon: FileImage, pdfMode: 'images' },
         ],
       },
@@ -491,6 +507,59 @@ function ToolButton({
   );
 }
 
+/** 「Office 转 PDF」文件选择器的扩展名过滤（按文档大类） */
+const OFFICE_ACCEPT: Record<OfficeKind, string> = {
+  word: '.doc,.docx,.docm',
+  excel: '.xls,.xlsx,.xlsm,.csv',
+  ppt: '.ppt,.pptx,.pptm',
+};
+
+/**
+ * 选择本机 Office 文件并触发「Office → PDF」转换。
+ *
+ * 用动态创建的 `<input type="file">` 取文件磁盘路径，**绝不使用 window.prompt /
+ * window.alert**（原生弹窗会阻断 Electron CDP 自动化）。拿到路径后经 IPC 交给主进程，
+ * 由本机 WPS/Office 的 COM 组件完成转换。
+ */
+async function pickOfficeFileAndConvert(kind: OfficeKind): Promise<void> {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = OFFICE_ACCEPT[kind];
+  input.style.display = 'none';
+
+  // 用户选中文件 → change；取消对话框 → cancel（Chromium 原生支持），二者都会收敛 Promise
+  const filePicked = new Promise<File | null>((resolve) => {
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null), { once: true });
+    input.addEventListener('cancel', () => resolve(null), { once: true });
+  });
+
+  document.body.appendChild(input);
+  input.click();
+
+  try {
+    const file = await filePicked;
+    if (!file) return; // 用户取消选择
+    // 取真实磁盘路径：Electron 32+ 已移除 File.path，改用 preload 暴露的
+    // webUtils.getPathForFile；对旧版 Electron 回退到 File.path 以保持兼容。
+    const filePath =
+      window.jareking.getPathForFile?.(file) ?? (file as File & { path?: string }).path;
+    if (!filePath) {
+      toast.warning('未能读取文件路径，请在桌面端中选择本地文件');
+      return;
+    }
+
+    const res = await window.jareking.invoke<{ outputPath: string }>(
+      window.jareking.IPC.PDF_OFFICE_TO_PDF,
+      { kind, inputPath: filePath },
+    );
+    toast.success(`已转换为 PDF：${res.outputPath}`);
+  } catch (err) {
+    toast.warning(`转换失败：${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    input.remove();
+  }
+}
+
 /** Ribbon 工具栏：菜单标签行（可切换 + 双击折叠）+ 当前标签下的工具组 */
 export function Ribbon() {
   const setPdfToolboxOpen = useUiStore((state) => state.setPdfToolboxOpen);
@@ -545,6 +614,11 @@ export function Ribbon() {
     if (tool.pdfMode) {
       setPdfToolboxMode(tool.pdfMode);
       setPdfToolboxOpen(true);
+      return;
+    }
+    // Office 转 PDF（Word/Excel/PPT → PDF）：选择本机文件 → 主进程用 WPS/Office COM 转换
+    if (tool.officeKind) {
+      void pickOfficeFileAndConvert(tool.officeKind);
       return;
     }
     toastNotImplemented(tool.label);

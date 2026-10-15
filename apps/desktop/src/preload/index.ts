@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC } from '../ipc/channels.js';
 
 export { IPC };
@@ -16,6 +16,12 @@ export interface JarekingApi {
   invoke: <T>(channel: string, payload?: unknown) => Promise<T>;
   /** IPC 通道常量表 */
   IPC: typeof IPC;
+  /**
+   * 取 File 对象对应的本机磁盘路径。
+   * Electron 32+ 已移除非标准的 `File.path`，官方迁移方案即 `webUtils.getPathForFile`；
+   * 此处由 preload 代理暴露（渲染进程在 contextIsolation 下无法直接访问 electron 模块）。
+   */
+  getPathForFile: (file: File) => string;
 }
 
 const api: JarekingApi = {
@@ -24,6 +30,7 @@ const api: JarekingApi = {
   invoke: <T>(channel: string, payload?: unknown): Promise<T> =>
     ipcRenderer.invoke(channel, payload) as Promise<T>,
   IPC,
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld('jareking', api);

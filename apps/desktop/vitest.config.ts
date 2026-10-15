@@ -16,6 +16,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
-    include: ['src/renderer/src/**/*.test.ts'],
+    // 渲染层纯逻辑测试 + 主/渲染共用的 shared 纯函数测试（如 officePdfScript）
+    include: ['src/renderer/src/**/*.test.ts', 'src/shared/**/*.test.ts'],
   },
 });
