@@ -23,6 +23,7 @@ import { JkField } from './jkField';
 import { JkImage } from './jkImage';
 import { JkFormula } from './jkFormula';
 import { JkCommentMark } from './jkComment';
+import { JkRevisionMark } from './jkRevision';
 
 /**
  * 表格底纹（单元格/表头/行/表格四级）保真：默认 table 扩展不保留 background-color，
@@ -79,6 +80,9 @@ export const writerExtensions: Extensions = [
   JkField,
   JkFormula,
   JkCommentMark,
+  // 修订（track changes）：数据承载 mark，主编辑器与页眉页脚共用；
+  // 实时记录插件（JkTrackChanges）只挂主编辑器，见 WriterEditor。
+  JkRevisionMark,
 ];
 
 export { TableCellWithBg, TableHeaderWithBg, TableRowWithBg, TableWithBg };

@@ -10,7 +10,7 @@
  *  - 健壮性：所有解析/导出用 try/catch + toast，失败不白屏
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor } from "@tiptap/react";
 import { setActiveEditor } from "./editorRef";
 import { FloatingAiBar } from "./FloatingAiBar";
@@ -29,7 +29,7 @@ import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Link from '@tiptap/extension-link';
 import { exportDocx, parseDocx } from '@jareking/writer';
-import type { Block, JkComment, JkDocument } from '@jareking/writer';
+import type { Block, Inline, JkComment, JkDocument, Run } from '@jareking/writer';
 import {
   applyChunkEdits,
   collectImageRelIds,
@@ -48,6 +48,7 @@ import { toast } from '../stores/toastStore';
 import { htmlToJk } from './htmlToJk';
 import { jkToHtml, extToMime } from './jkToHtml';
 import { writerExtensions } from './writerExtensions';
+import { JkTrackChanges } from './jkRevision';
 import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
 import { downloadBlob } from '../lib/download';
@@ -101,6 +102,54 @@ function formatCommentTime(iso?: string): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * 按「接受 / 拒绝」改写一组行内元素上的修订（纯函数，返回新数组）。
+ *
+ * - 接受（accept）：插入修订 → 清除 revision 标记（内容保留）；删除修订 → 丢弃该 run。
+ * - 拒绝（reject）：删除修订 → 清除 revision 标记（还原文本）；插入修订 → 丢弃该 run。
+ *
+ * 无修订的 run 原样保留；超链接内的 runs 递归处理。用于「接受/拒绝所有修订」。
+ */
+function rewriteInlineList(runs: Inline[], mode: 'accept' | 'reject'): Inline[] {
+  const kept: Inline[] = [];
+  for (const inl of runs) {
+    if (inl.type === 'run') {
+      const rev = (inl as Run).revision;
+      if (!rev) {
+        kept.push(inl);
+        continue;
+      }
+      const isInsert = rev.kind === 'insert';
+      const keep = mode === 'accept' ? isInsert : !isInsert;
+      if (keep) {
+        // 接受插入 / 拒绝删除：清除修订标记（保留文本）
+        const { revision, ...rest } = inl as Run;
+        void revision;
+        kept.push(rest as Inline);
+      }
+      // 否则丢弃该 run（接受删除 / 拒绝插入）
+    } else if (inl.type === 'hyperlink') {
+      kept.push({ ...inl, runs: rewriteInlineList(inl.runs, mode) });
+    } else {
+      kept.push(inl);
+    }
+  }
+  return kept;
+}
+
+/** 递归改写块级元素（含段落、嵌套表格）上的修订；直接修改传入的 blocks */
+function rewriteRevisions(blocks: Block[], mode: 'accept' | 'reject'): void {
+  for (const b of blocks) {
+    if (b.type === 'paragraph') {
+      b.runs = rewriteInlineList(b.runs, mode);
+    } else if (b.type === 'table') {
+      for (const row of b.rows) {
+        for (const cell of row.cells) rewriteRevisions(cell.blocks, mode);
+      }
+    }
+  }
+}
+
 export function WriterEditor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -148,9 +197,27 @@ export function WriterEditor() {
   // 表格底纹（单元格/表头/行/表格四级）保真逻辑与统一扩展集合见 ./writerExtensions。
   // 主编辑器与「页眉页脚」Modal 共用 writerExtensions，避免重复声明。
 
+  // —— 修订（track changes）——
+  // revisionMode：修订模式开关（关闭时不产生任何实时修订，普通编辑路径不受影响）。
+  // 用 ref 镜像供插件 options.enabled 实时读取（避免闭包捕获初始值）。
+  const [revisionMode, setRevisionMode] = useState(false);
+  const revisionModeRef = useRef(false);
+  // 主编辑器扩展 = 共享扩展 + 修订插件（插件只挂主编辑器；页眉页脚不挂）
+  const editorExtensions = useMemo(
+    () =>
+      [
+        ...writerExtensions,
+        JkTrackChanges.configure({
+          enabled: () => revisionModeRef.current,
+          author: () => '我',
+        }),
+      ],
+    [],
+  );
+
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: writerExtensions,
+    extensions: editorExtensions,
     content: '',
     editorProps: {
       attributes: { class: 'jk-prose focus:outline-none' },
@@ -401,6 +468,19 @@ export function WriterEditor() {
     }
   };
 
+  /** 从编辑器取回当前模型（非分块模式的真源）：HTML → JkDocument，并注入页眉页脚与批注 */
+  const collectModelFromEditor = (): JkDocument => {
+    const html = editor!.getHTML();
+    const mediaBytes = new Map<string, Uint8Array>();
+    for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
+    const jk = htmlToJk(html, mediaBytes);
+    if (!jk.sections || jk.sections.length === 0) jk.sections = [{ type: 'section' }];
+    jk.sections[0].header = hfRef.current.header;
+    jk.sections[0].footer = hfRef.current.footer;
+    jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
+    return jk;
+  };
+
   const onSave = async () => {
     if (!editor) return;
     try {
@@ -410,11 +490,8 @@ export function WriterEditor() {
         flushCurrentChunk();
         jk = fullDocRef.current;
       } else {
-        // 凭注册表字节还原 Blob URL 图片（#46-B），新插入的 data URL 图片由 htmlToJk 解码
-        const html = editor.getHTML();
-        const mediaBytes = new Map<string, Uint8Array>();
-        for (const [, e] of mediaRegistryRef.current!.entries()) mediaBytes.set(e.relId, e.bytes);
-        jk = htmlToJk(html, mediaBytes);
+        // 非分块模式：编辑器即真源，取回模型（含 Blob URL 图片字节还原，#46-B）
+        jk = collectModelFromEditor();
       }
       // 注入页眉/页脚（两路保存都注入）：确保非分块模式也能保留页眉页脚，
       // 并顺带修复非分块模式丢失 sections 的潜在问题（仅动 header/footer，不改 sections 其它字段）。
@@ -436,6 +513,36 @@ export function WriterEditor() {
       toast.warning('导出失败：文档包含暂不支持的内容');
     }
   };
+
+  /**
+   * 接受 / 拒绝所有修订：真实改写文档模型并刷新编辑器。
+   * - accept：删除所有删除修订、清除插入修订标记；
+   * - reject：移除所有插入修订、清除删除修订标记并还原文本。
+   * 分块模式先写回当前切片；非分块模式从编辑器取回最新模型，避免丢失未保存编辑。
+   */
+  const applyRevisions = (mode: 'accept' | 'reject') => {
+    let doc: JkDocument | null = null;
+    if (chunkModeRef.current && fullDocRef.current) {
+      flushCurrentChunk();
+      doc = fullDocRef.current;
+    } else if (editor) {
+      doc = collectModelFromEditor();
+      fullDocRef.current = doc;
+    }
+    if (!doc) {
+      toast.warning('当前没有可处理的文档');
+      return;
+    }
+    rewriteRevisions(doc.body, mode);
+    loadDocument(doc);
+    toast.success(mode === 'accept' ? '已接受所有修订' : '已拒绝所有修订');
+  };
+
+  // 命令总线里的接受/拒绝命令要读到最新闭包（命令只在 editor 变化时注册），用 ref 同步
+  const applyRevisionsRef = useRef<(mode: 'accept' | 'reject') => void>(() => {});
+  useEffect(() => {
+    applyRevisionsRef.current = applyRevisions;
+  });
 
   // 保存命令要读到最新闭包（命令只在 editor 变化时注册），用 ref 同步
   const saveRef = useRef<() => void>(() => {});
@@ -737,6 +844,26 @@ export function WriterEditor() {
           setCommentOpen(true);
         },
       },
+      // —— 审阅：修订（track changes）——
+      'track-changes': {
+        run: () => {
+          // 切换修订模式：开启后新输入标记为插入、删除内容保留为删除标记（见 jkRevision 插件）
+          const next = !revisionModeRef.current;
+          revisionModeRef.current = next;
+          setRevisionMode(next);
+          notifyEditorChange();
+          toast.success(next ? '已开启修订模式' : '已关闭修订模式');
+        },
+        state: () => ({ active: revisionModeRef.current, disabled: false }),
+      },
+      'accept-revisions': {
+        // 接受所有修订：删除所有删除修订、清除插入修订标记
+        run: () => applyRevisionsRef.current('accept'),
+      },
+      'reject-revisions': {
+        // 拒绝所有修订：移除插入修订、清除删除修订标记并还原文本
+        run: () => applyRevisionsRef.current('reject'),
+      },
       // —— 编辑 / 文件 ——
       undo: {
         run: () => editor.chain().focus().undo().run(),
@@ -826,6 +953,16 @@ export function WriterEditor() {
           >
             ×
           </button>
+        </div>
+      )}
+
+      {/* 修订模式提示条：开启时给出清晰反馈（关闭时完全不出现） */}
+      {revisionMode && (
+        <div className="flex items-center gap-2 border-b border-border bg-accent/10 px-3 py-1 text-tiny text-fg">
+          <span className="font-medium text-accent">修订模式已开启</span>
+          <span className="text-muted">
+            新输入将标记为插入，删除内容保留为删除标记；用「审阅 → 接受/拒绝所有修订」处理。
+          </span>
         </div>
       )}
 

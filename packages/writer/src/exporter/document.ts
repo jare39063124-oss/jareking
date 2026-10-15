@@ -37,6 +37,8 @@ import { escapeXmlAttr, escapeXmlText, rawNodeToParts } from './xml.js';
 /** 序列化上下文（图片 docPr id 自增等） */
 interface Ctx {
   imageId: number;
+  /** 修订标记 id 自增（w:ins/w:del 的 w:id 为必填，按文档顺序分配） */
+  revisionId: number;
 }
 
 /* =========================================================================
@@ -143,14 +145,25 @@ function wrapRPr(rPr?: RunProperties): string {
  * 2. 行内元素（Run / Hyperlink / Image / Break / FootnoteRef）
  * ========================================================================= */
 
-function serializeRun(r: Run): string {
+function serializeRun(r: Run, ctx: Ctx): string {
   const rPr = wrapRPr(r.rPr);
-  const t = `<w:t xml:space="preserve">${escapeXmlText(r.text ?? '')}</w:t>`;
-  return `<w:r>${rPr}${t}</w:r>`;
+  const rev = r.revision;
+  // 删除修订的文本必须用 <w:delText>（OOXML 约定），插入/普通 run 用 <w:t>
+  const textTag = rev?.kind === 'delete' ? 'w:delText' : 'w:t';
+  const t = `<${textTag} xml:space="preserve">${escapeXmlText(r.text ?? '')}</${textTag}>`;
+  const run = `<w:r>${rPr}${t}</w:r>`;
+  if (!rev) return run;
+  // 修订：<w:ins>/<w:del> 包裹该 run（w:id 必填，w:author 必填，w:date 可空）
+  ctx.revisionId += 1;
+  const attrs: string[] = [`w:id="${ctx.revisionId}"`];
+  attrs.push(`w:author="${escapeXmlAttr(rev.author ?? '')}"`);
+  if (rev.date) attrs.push(`w:date="${escapeXmlAttr(rev.date)}"`);
+  const wrapper = rev.kind === 'insert' ? 'w:ins' : 'w:del';
+  return `<${wrapper} ${attrs.join(' ')}>${run}</${wrapper}>`;
 }
 
-function serializeHyperlink(h: Hyperlink): string {
-  const inner = h.runs.map((r) => serializeInline(r)).join('');
+function serializeHyperlink(h: Hyperlink, ctx: Ctx): string {
+  const inner = h.runs.map((r) => serializeInline(r, ctx)).join('');
   if (h.relId) return `<w:hyperlink r:id="${escapeXmlAttr(h.relId)}">${inner}</w:hyperlink>`;
   if (h.anchor) return `<w:hyperlink w:anchor="${escapeXmlAttr(h.anchor)}">${inner}</w:hyperlink>`;
   return `<w:hyperlink>${inner}</w:hyperlink>`;
@@ -190,12 +203,12 @@ function serializeBreak(b: Extract<Inline, { type: 'break' }>): string {
   return '<w:br/>';
 }
 
-function serializeInline(inline: Inline, ctx: Ctx = { imageId: 0 }): string {
+function serializeInline(inline: Inline, ctx: Ctx = { imageId: 0, revisionId: 0 }): string {
   switch (inline.type) {
     case 'run':
-      return serializeRun(inline);
+      return serializeRun(inline, ctx);
     case 'hyperlink':
-      return serializeHyperlink(inline);
+      return serializeHyperlink(inline, ctx);
     case 'image':
       return serializeImage(inline, ctx);
     case 'break':
@@ -529,7 +542,7 @@ function serializeBody(doc: JkDocument, ctx: Ctx): string {
 
 /** 生成完整 word/document.xml 字符串（含标准命名空间声明） */
 export function serializeDocumentXml(doc: JkDocument): string {
-  const ctx: Ctx = { imageId: 0 };
+  const ctx: Ctx = { imageId: 0, revisionId: 0 };
   const body = serializeBody(doc, ctx);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
@@ -551,7 +564,7 @@ const HF_M = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
 
 /** 把 Block[] 渲染为 <w:p>/<w:tbl> 序列（复用 serializeBlock，与 body 同构） */
 function serializeHfInner(blocks: Block[]): string {
-  const ctx: Ctx = { imageId: 0 };
+  const ctx: Ctx = { imageId: 0, revisionId: 0 };
   return (blocks ?? []).map((b) => serializeBlock(b, ctx)).join('');
 }
 

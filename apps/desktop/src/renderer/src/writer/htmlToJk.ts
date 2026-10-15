@@ -28,6 +28,7 @@ import type {
   Relationship,
   Run,
   RunProperties,
+  RunRevision,
   Table as JkTable,
   TableCell as JkTableCell,
   TableRow as JkTableRow,
@@ -231,6 +232,28 @@ function collectInlines(
     el.childNodes.forEach((c) => collectInlines(c, childRPr, out, ctx, commentRanges));
     const end = out.length;
     if (commentRanges && id && end > start) commentRanges.push({ id, start, end });
+    return;
+  }
+
+  // 修订 span（data-jk-rev）：给其覆盖的 run 打上插入/删除修订标记。
+  // 注意：递归时传「父级 rPr」而非 childRPr——避免把修订自身的显示样式
+  // （red/blue color）误读为字符颜色（deriveRPr 会解析 span 的 color）。
+  if (tag === 'span' && el.getAttribute('data-jk-rev')) {
+    const kind: RunRevision['kind'] =
+      el.getAttribute('data-jk-rev') === 'delete' ? 'delete' : 'insert';
+    const author = el.getAttribute('data-jk-rev-author') || undefined;
+    const date = el.getAttribute('data-jk-rev-date') || undefined;
+    const start = out.length;
+    el.childNodes.forEach((c) => collectInlines(c, rPr, out, ctx, commentRanges));
+    for (let i = start; i < out.length; i++) {
+      const node = out[i];
+      if (node.type === 'run') {
+        const revision: RunRevision = { kind };
+        if (author) revision.author = author;
+        if (date) revision.date = date;
+        (node as Run).revision = revision;
+      }
+    }
     return;
   }
 

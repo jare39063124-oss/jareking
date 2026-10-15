@@ -18,6 +18,7 @@ import {
   Bold,
   BookOpen,
   Bookmark,
+  Check,
   ChevronDown,
   ChevronUp,
   ClipboardPaste,
@@ -81,6 +82,7 @@ import {
   Type,
   Underline,
   Undo2,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -326,6 +328,14 @@ const RIBBON_TABS: RibbonTabDef[] = [
         tools: [
           { kind: 'button', id: 'spell', label: '拼写检查', icon: SquarePen },
           { kind: 'button', id: 'comment', label: '新建批注', icon: MessageSquarePlus },
+        ],
+      },
+      {
+        name: '修订',
+        tools: [
+          { kind: 'button', id: 'track-changes', label: '修订', icon: Replace },
+          { kind: 'button', id: 'accept-revisions', label: '接受所有修订', icon: Check },
+          { kind: 'button', id: 'reject-revisions', label: '拒绝所有修订', icon: X },
         ],
       },
       {

@@ -65,6 +65,24 @@ export interface JkDocument extends ModelExtra {
    * 二者通过批注 id 关联（与 commentRangeStart/End 的 w:id 一致）。
    */
   comments?: JkComment[];
+  /**
+   * 文档内出现过的修订作者汇总（便于 UI 展示「谁在何时改过」，可选字段）。
+   * 由解析器扫描正文 run 的 `revision` 汇总去重（同一作者取最近一次修订时间）。
+   */
+  revisions?: RevisionAuthor[];
+}
+
+/**
+ * 修订作者汇总项（对应 `JkDocument.revisions` 元素）。
+ *
+ * 说明：修订本身以行内 `Run.revision` 承载（插入/删除逐 run 记录），
+ * 本类型仅用于「文档级作者清单」展示，不参与 OOXML 落盘。
+ */
+export interface RevisionAuthor {
+  /** 修订作者（对应 w:author） */
+  author: string;
+  /** 该作者最近一次修订时间（ISO 字符串，对应 w:date） */
+  date: string;
 }
 
 /**
@@ -189,6 +207,30 @@ export interface Run extends InlineBase {
   text: string;
   /** 字符属性（Word: w:rPr）—— 字体/字号/粗体/斜体/下划线/颜色/删除线/上下标 */
   rPr?: RunProperties;
+  /**
+   * 修订标记（track changes）。
+   * - `insert`：该 run 为「插入」内容（OOXML 中被 `<w:ins>` 包裹，文本用 `<w:t>`）；
+   * - `delete`：该 run 为「删除」内容（OOXML 中被 `<w:del>` 包裹，文本用 `<w:delText>`）。
+   * 无此字段即普通（未修订）run，解析/导出均按原有路径处理。
+   */
+  revision?: RunRevision;
+}
+
+/**
+ * 修订标记（track changes）。
+ *
+ * 采用「挂在 Run 上」而非新增行内类型，理由：一字一 run 的粒度与 OOXML
+ * `<w:ins>`/`<w:del>` 直接对应，避免引入新的可判别联合分支导致四端
+ * （model/parser/exporter/renderer）大面积收窄改动；`kind`/`author`/`date`
+ * 与 `<w:ins|w:del>` 的 `w:author`/`w:date` 一一对应。
+ */
+export interface RunRevision {
+  /** 修订类型：insert=插入的文本，delete=删除的文本 */
+  kind: 'insert' | 'delete';
+  /** 修订作者（对应 w:ins/w:del 的 w:author） */
+  author?: string;
+  /** 修订时间（ISO 字符串，对应 w:ins/w:del 的 w:date） */
+  date?: string;
 }
 
 /** 超链接（对应 w:hyperlink）：通过 rId 指向外部 URL 或文档内书签锚点 */

@@ -47,8 +47,10 @@ import type {
   ParagraphProperties,
   Relationship,
   RelationshipType,
+  RevisionAuthor,
   Run,
   RunProperties,
+  RunRevision,
   Section,
   SectionBreak,
   SectionRef,
@@ -692,6 +694,38 @@ function parseRun(r: any): Run {
   return { type: 'run', text, rPr, data: { __raw: r } };
 }
 
+/**
+ * 解析修订 run（位于 `<w:ins>` / `<w:del>` 内）。
+ * - insert：文本取 `<w:t>`（与普通 run 一致）；
+ * - delete：文本取 `<w:delText>`（OOXML 约定：删除内容用 delText 而非 t），
+ *   兼容极端情况下仍写 `<w:t>` 的实现，做 fallback。
+ * 修订元数据（kind/author/date）来自包裹元素。
+ */
+function parseRevisedRun(r: any, kind: 'insert' | 'delete', author?: string, date?: string): Inline {
+  // 图片等非文本行内元素：仍按普通解析（修订一般只作用于文本，保持图片可读）
+  if (findAttrDeep(r, '@_embed') !== undefined) return parseImage(r);
+  const rPr = parseRunProperties(r.rPr);
+  const text =
+    kind === 'delete' ? childText(r, 'delText') || childText(r, 't') : childText(r, 't');
+  const revision: RunRevision = { kind };
+  if (author !== undefined) revision.author = author;
+  if (date !== undefined) revision.date = date;
+  return { type: 'run', text, rPr, revision, data: { __raw: r } };
+}
+
+/** 解析 `<w:ins>` / `<w:del>` 包裹的 run 序列（其内 run 一律视为修订内容） */
+function parseRevisionContainer(node: any, kind: 'insert' | 'delete'): Inline[] {
+  const out: Inline[] = [];
+  const author = getAttr(node, '@_author');
+  const date = getAttr(node, '@_date');
+  for (const rr of ensureArray(node.r)) {
+    // 批注引用 run 不计入模型 runs（与普通路径口径一致）
+    if (isCommentReferenceRun(rr)) continue;
+    out.push(parseRevisedRun(rr, kind, author, date));
+  }
+  return out;
+}
+
 function parseHyperlink(h: any): Hyperlink {
   const relId = getAttr(h, '@_id');
   const anchor = getAttr(h, '@_anchor');
@@ -811,6 +845,11 @@ function parseContainerInlines(
           continue;
         }
         inlines.push(parseRunOrImage(item));
+        continue;
+      }
+      if (tag === 'ins' || tag === 'del') {
+        // 修订（track changes）：<w:ins> 内为插入内容，<w:del> 内为删除内容（文本用 w:delText）
+        inlines.push(...parseRevisionContainer(item, tag === 'ins' ? 'insert' : 'delete'));
         continue;
       }
       if (tag === 'hyperlink') inlines.push(parseHyperlink(item));
@@ -1232,6 +1271,39 @@ function parseSections(
  * ========================================================================= */
 
 /**
+ * 扫描正文（含嵌套表格与超链接内 run）收集修订作者清单。
+ * 去重：同一作者取「较晚」的修订时间（ISO 字符串可直接字典序比较）。
+ * 供 `JkDocument.revisions` 展示使用；无修订返回空数组。
+ */
+function collectRevisionAuthors(body: Block[]): RevisionAuthor[] {
+  const map = new Map<string, string>();
+  const walkInlines = (inlines: Inline[]): void => {
+    for (const inl of inlines) {
+      if (inl.type === 'run') {
+        const rev = inl.revision;
+        if (rev?.author) {
+          const prev = map.get(rev.author);
+          const date = rev.date ?? '';
+          if (prev === undefined || date > prev) map.set(rev.author, date);
+        }
+      } else if (inl.type === 'hyperlink') {
+        walkInlines(inl.runs);
+      }
+    }
+  };
+  const walkBlocks = (blocks: Block[]): void => {
+    for (const b of blocks) {
+      if (b.type === 'paragraph') walkInlines(b.runs);
+      else if (b.type === 'table') {
+        for (const row of b.rows) for (const cell of row.cells) walkBlocks(cell.blocks);
+      }
+    }
+  };
+  walkBlocks(body);
+  return [...map.entries()].map(([author, date]) => ({ author, date }));
+}
+
+/**
  * 解析 .docx 字节流为 JkDocument。
  * @param buffer .docx 文件内容（Uint8Array / ArrayBuffer / Node Buffer）
  */
@@ -1310,6 +1382,10 @@ export async function parseDocx(buffer: Uint8Array): Promise<JkDocument> {
   };
 
   if (comments.length) doc.comments = comments;
+
+  // 汇总修订作者（可选字段，便于 UI 展示）
+  const revisionAuthors = collectRevisionAuthors(body);
+  if (revisionAuthors.length) doc.revisions = revisionAuthors;
 
   if (unparsedBlocks.length) {
     doc.data = { ...doc.data, __unparsedBlocks: unparsedBlocks };

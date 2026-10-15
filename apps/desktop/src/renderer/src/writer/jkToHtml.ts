@@ -25,6 +25,7 @@ import type {
   ParagraphProperties,
   Run,
   RunProperties,
+  RunRevision,
   Table as JkTable,
   TableShading,
 } from '@jareking/writer';
@@ -151,6 +152,19 @@ function wrapFormat(text: string, rPr?: RunProperties): string {
   return out;
 }
 
+/**
+ * 修订包裹：把已格式化的 run HTML 用 `<span data-jk-rev>` 包起来。
+ * htmlToJk 据此还原 `Run.revision`（插入=insert / 删除=delete），
+ * 编辑器 mark（jkRevision）依赖此结构渲染修订样式。
+ */
+function wrapRevision(html: string, rev?: RunRevision): string {
+  if (!rev) return html;
+  const kind = rev.kind === 'delete' ? 'delete' : 'insert';
+  const author = rev.author ? ` data-jk-rev-author="${escapeHtml(rev.author)}"` : '';
+  const date = rev.date ? ` data-jk-rev-date="${escapeHtml(rev.date)}"` : '';
+  return `<span data-jk-rev="${kind}"${author}${date}>${html}</span>`;
+}
+
 /** 渲染单个行内元素（Run / Hyperlink / Image / Break / FootnoteRef） */
 function renderInline(
   inline: Inline,
@@ -160,7 +174,7 @@ function renderInline(
   switch (inline.type) {
     case 'run': {
       const r = inline as Run;
-      return wrapFormat(escapeHtml(r.text ?? ''), r.rPr);
+      return wrapRevision(wrapFormat(escapeHtml(r.text ?? ''), r.rPr), r.revision);
     }
     case 'hyperlink': {
       const h = inline as Hyperlink;
