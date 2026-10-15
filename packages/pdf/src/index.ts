@@ -9,7 +9,7 @@
  * 坐标约定：页码规格面向用户（从 1 开始），内部统一转 0 基索引。
  * 支持格式："1,3-5"（含 "last"/"-1" 表示末页）。
  */
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
 
 /* =========================================================================
  * 页码规格解析
@@ -248,6 +248,96 @@ export async function imagesToPdf(images: ImageInput[]): Promise<Uint8Array> {
 export async function getPdfInfo(pdfBytes: Uint8Array): Promise<{ pageCount: number; title?: string }> {
   const doc = await loadPdf(pdfBytes);
   return { pageCount: doc.getPageCount(), title: doc.getTitle() ?? undefined };
+}
+
+/* =========================================================================
+ * 文字水印
+ * -------------------------------------------------------------------------
+ * 基于 pdf-lib 的 page.drawText，在每页叠加文字水印（居中单个 或 整页平铺）。
+ * 使用 pdf-lib 内建标准字体 Helvetica（无需外部字体文件），与本包其它写文本
+ * 能力一致（如需中文水印需嵌入中文字体，另行扩展）。
+ * ========================================================================= */
+
+export interface WatermarkOptions {
+  /** 水印文字 */
+  text: string;
+  /** 字号（pt，默认 48） */
+  fontSize?: number;
+  /** 透明度 0~1（默认 0.12） */
+  opacity?: number;
+  /** 旋转角度（度，默认 45，常见对角水印） */
+  rotate?: number;
+  /** 颜色 #RRGGBB（默认 #808080） */
+  color?: string;
+  /** 平铺（true=整页重复矩阵，默认 false=页面居中单个） */
+  tile?: boolean;
+}
+
+/** 解析 #RRGGBB / #RGB 颜色为 pdf-lib 的 rgb()；非法输入回退到中灰 */
+function parseHexColor(hex: string): ReturnType<typeof rgb> {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return rgb(0.5, 0.5, 0.5);
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  return rgb(r, g, b);
+}
+
+/**
+ * 给 PDF 每页叠加文字水印。
+ *
+ * - `tile=false`（默认）：水印文字旋转后在页面居中显示单个；
+ * - `tile=true`：在整页按网格重复平铺（并向页面四周外扩一个文字尺度的边距，
+ *   保证旋转后仍覆盖页面四角）。
+ *
+ * 坐标约定：pdf-lib 的 `drawText` 以文字基线左端为锚点，`rotate` 绕锚点旋转。
+ */
+export async function addWatermark(pdfBytes: Uint8Array, opts: WatermarkOptions): Promise<Uint8Array> {
+  const text = typeof opts.text === 'string' ? opts.text : '';
+  // 约定：空文字视为调用错误，直接抛错（而非产出一份「无变化」的副本），
+  // 便于调用方 / UI 及早发现输入缺失。
+  if (!text.trim()) throw new Error('水印文字不能为空');
+
+  const fontSize = opts.fontSize && opts.fontSize > 0 ? opts.fontSize : 48;
+  const opacity = Math.min(1, Math.max(0, opts.opacity ?? 0.12));
+  const rotate = opts.rotate ?? 45;
+  const color = parseHexColor(opts.color ?? '#808080');
+  const tile = opts.tile ?? false;
+
+  const doc = await loadPdf(pdfBytes);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const rad = (rotate * Math.PI) / 180;
+
+  for (const page of doc.getPages()) {
+    const { width, height } = page.getSize();
+    const textWidth = font.widthOfTextAtSize(text, fontSize);
+    const common = { size: fontSize, font, color, opacity, rotate: degrees(rotate) };
+
+    if (tile) {
+      // 平铺：水平步长 = 文字宽 + 2 倍字号间隔；垂直步长 ≈ 4 倍字号。
+      // 向四周外扩 margin，抵消旋转造成的边缘留白。
+      const stepX = textWidth + fontSize * 2;
+      const stepY = fontSize * 4;
+      const margin = Math.max(textWidth, fontSize) * 1.5;
+      for (let y = -margin; y < height + margin; y += stepY) {
+        for (let x = -margin; x < width + margin; x += stepX) {
+          page.drawText(text, { ...common, x, y });
+        }
+      }
+    } else {
+      // 居中：把「旋转后文字框的中心」对齐到页面中心。
+      // 旋转前，锚点（基线左端）到文字框中心的偏移约为 (w/2, size/2)；
+      // 绕锚点旋转 θ 后该偏移变为 (offX, offY)，反推锚点即可。
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const offX = (textWidth / 2) * cos - (fontSize / 2) * sin;
+      const offY = (textWidth / 2) * sin + (fontSize / 2) * cos;
+      page.drawText(text, { ...common, x: width / 2 - offX, y: height / 2 - offY });
+    }
+  }
+  return save(doc);
 }
 
 /* =========================================================================

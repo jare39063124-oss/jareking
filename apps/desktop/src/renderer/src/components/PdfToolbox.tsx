@@ -3,14 +3,16 @@
  *
  * 入口：Ribbon「PDF 工具」标签页（一级标签页，卖点显性化）+「文件」标签页的 PDF 工具组。
  * 能力：页面提取/删除、合并、旋转、插入页面、页面替换、图片转 PDF、
- *       PDF 转 TXT（文本提取）、PDF 转图片（逐页光栅化）。
+ *       PDF 转 TXT（文本提取）、PDF 转图片（逐页光栅化）、添加文字水印。
  * 页面操作经 @jareking/pdf 数据层（pdf-lib，本地离线）；文本/图片经 pdf.js。
  *
  * 当前模式由 uiStore.pdfToolboxMode 决定：Ribbon 点哪个按钮就以哪个模式打开；
  * 关闭弹窗不重置，下次打开保留上次（或由 Ribbon 重新指定）。
+ * 「添加水印」为内部独立面板（watermark state），不改动 uiStore。
  */
 import { useRef, useState } from 'react';
 import {
+  addWatermark,
   deletePages,
   extractPages,
   imagesToPdf,
@@ -20,6 +22,7 @@ import {
   rotatePages,
   pdfToText,
   type ImageInput,
+  type WatermarkOptions,
 } from '@jareking/pdf';
 import { pdfToImages } from '../lib/pdfRender';
 import { downloadBlob } from '../lib/download';
@@ -84,11 +87,22 @@ export function PdfToolbox() {
   const [insertAfter, setInsertAfter] = useState('1');
   const [replaceTargetSpec, setReplaceTargetSpec] = useState('1');
 
+  // 水印：独立于 uiStore 模式的内部面板（不改 uiStore，避免越界）。
+  // 由「添加水印」入口按钮在工具箱内切换显隐。
+  const [watermark, setWatermark] = useState(false);
+  const [wmText, setWmText] = useState('CONFIDENTIAL');
+  const [wmFontSize, setWmFontSize] = useState('48');
+  const [wmOpacity, setWmOpacity] = useState('0.12');
+  const [wmRotate, setWmRotate] = useState('45');
+  const [wmColor, setWmColor] = useState('#808080');
+  const [wmTile, setWmTile] = useState(false);
+
   const targetInput = useRef<HTMLInputElement>(null);
   const multiInput = useRef<HTMLInputElement>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
 
   const needSingle =
+    watermark ||
     mode === 'extract' ||
     mode === 'rotate' ||
     mode === 'insert' ||
@@ -112,6 +126,29 @@ export function PdfToolbox() {
     setNote(null);
     revokeImages(imageResults);
     try {
+      // 水印：独立内部面板（不依赖 uiStore 模式），处理完直接下载返回
+      if (watermark) {
+        if (!target) throw new Error('请选择 PDF 文件');
+        if (!wmText.trim()) throw new Error('请输入水印文字');
+        const fs = Number(wmFontSize);
+        const op = Number(wmOpacity);
+        const rt = Number(wmRotate);
+        const opts: WatermarkOptions = {
+          text: wmText,
+          fontSize: Number.isFinite(fs) && fs > 0 ? fs : 48,
+          opacity: Number.isFinite(op) ? Math.min(1, Math.max(0, op)) : 0.12,
+          rotate: Number.isFinite(rt) ? rt : 45,
+          color: wmColor,
+          tile: wmTile,
+        };
+        const out = await addWatermark(await readBytes(target), opts);
+        const name = `${target.name.replace(/\.pdf$/i, '')}-已加水印.pdf`;
+        downloadBlob(out, name, 'application/pdf');
+        setImageResults([]);
+        setNote(`✅ 已导出「${name}」`);
+        toast.success(`PDF 加水印完成：${name}`);
+        return;
+      }
       let out: Uint8Array;
       let name = `jareking-pdf-${stamp()}.pdf`;
       if (mode === 'extract') {
@@ -209,8 +246,10 @@ export function PdfToolbox() {
 
   const canRun =
     !busy &&
-    ((needSingle && !!target && (!needSource || !!source)) ||
-      (needMulti && (mode === 'merge' ? items.length >= 2 : items.length >= 1)));
+    (watermark
+      ? !!target && wmText.trim().length > 0
+      : (needSingle && !!target && (!needSource || !!source)) ||
+        (needMulti && (mode === 'merge' ? items.length >= 2 : items.length >= 1)));
 
   return (
     <Modal open={open} onClose={() => setOpen(false)} title="PDF 工具箱" width={680}>
@@ -223,10 +262,11 @@ export function PdfToolbox() {
               type="button"
               onClick={() => {
                 setMode(m.value);
+                setWatermark(false);
                 reset();
               }}
               className={`rounded-full border px-3 py-1 text-tiny transition-colors ${
-                mode === m.value
+                !watermark && mode === m.value
                   ? 'border-accent bg-accent/10 text-accent'
                   : 'border-border text-muted hover:bg-hover hover:text-fg'
               }`}
@@ -234,11 +274,28 @@ export function PdfToolbox() {
               {m.label}
             </button>
           ))}
+          {/* 水印入口：内部面板，不改 uiStore 模式 */}
+          <button
+            type="button"
+            onClick={() => {
+              setWatermark((v) => !v);
+              reset();
+            }}
+            className={`rounded-full border px-3 py-1 text-tiny transition-colors ${
+              watermark
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-border text-muted hover:bg-hover hover:text-fg'
+            }`}
+          >
+            添加水印
+          </button>
         </div>
 
-        <p className="text-tiny text-muted">
-          本地离线处理，文件不上传。页码规格支持 <code>1,3-5</code>、<code>last</code>（末页）。
-        </p>
+        {!watermark && (
+          <p className="text-tiny text-muted">
+            本地离线处理，文件不上传。页码规格支持 <code>1,3-5</code>、<code>last</code>（末页）。
+          </p>
+        )}
 
         {/* 目标文件（单文件模式） */}
         {needSingle && (
@@ -262,8 +319,66 @@ export function PdfToolbox() {
           </div>
         )}
 
+        {/* 水印面板（内部，独立于 uiStore 模式） */}
+        {watermark && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <span className="w-20 shrink-0 text-body text-fg">水印文字</span>
+              <input
+                className="h-7 min-w-0 flex-1 rounded border border-border bg-surface px-2 text-body text-fg outline-none"
+                value={wmText}
+                onChange={(e) => setWmText(e.target.value)}
+                placeholder="如 机密 / CONFIDENTIAL"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-20 shrink-0 text-body text-fg">字号</span>
+              <input
+                className="h-7 w-16 rounded border border-border bg-surface px-2 text-body text-fg outline-none"
+                value={wmFontSize}
+                onChange={(e) => setWmFontSize(e.target.value)}
+                placeholder="48"
+              />
+              <span className="text-body text-fg">透明度</span>
+              <input
+                className="h-7 w-16 rounded border border-border bg-surface px-2 text-body text-fg outline-none"
+                value={wmOpacity}
+                onChange={(e) => setWmOpacity(e.target.value)}
+                placeholder="0~1"
+              />
+              <span className="text-body text-fg">角度</span>
+              <input
+                className="h-7 w-16 rounded border border-border bg-surface px-2 text-body text-fg outline-none"
+                value={wmRotate}
+                onChange={(e) => setWmRotate(e.target.value)}
+                placeholder="45"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="w-20 shrink-0 text-body text-fg">颜色</span>
+              <input
+                type="color"
+                className="h-7 w-10 cursor-pointer rounded border border-border bg-surface"
+                value={wmColor}
+                onChange={(e) => setWmColor(e.target.value)}
+              />
+              <input
+                className="h-7 w-24 rounded border border-border bg-surface px-2 text-body text-fg outline-none"
+                value={wmColor}
+                onChange={(e) => setWmColor(e.target.value)}
+                placeholder="#808080"
+              />
+              <label className="ml-2 flex items-center gap-1.5 text-body text-fg">
+                <input type="checkbox" checked={wmTile} onChange={(e) => setWmTile(e.target.checked)} />
+                整页平铺
+              </label>
+              <span className="text-tiny text-muted">默认居中单个（对角 45°）</span>
+            </div>
+          </div>
+        )}
+
         {/* 提取/删除 */}
-        {mode === 'extract' && (
+        {!watermark && mode === 'extract' && (
           <div className="flex items-center gap-2">
             <span className="w-20 shrink-0 text-body text-fg">页码</span>
             <input
@@ -277,7 +392,7 @@ export function PdfToolbox() {
         )}
 
         {/* 旋转 */}
-        {mode === 'rotate' && (
+        {!watermark && mode === 'rotate' && (
           <div className="flex flex-wrap items-center gap-2">
             <span className="w-20 shrink-0 text-body text-fg">旋转</span>
             <Select
@@ -301,7 +416,7 @@ export function PdfToolbox() {
         )}
 
         {/* 插入/替换：来源文件 + 位置 */}
-        {needSource && (
+        {!watermark && needSource && (
           <>
             <div className="flex items-center gap-2">
               <span className="w-20 shrink-0 text-body text-fg">来源 PDF</span>
@@ -368,7 +483,7 @@ export function PdfToolbox() {
         )}
 
         {/* 多文件（合并/图片） */}
-        {needMulti && (
+        {!watermark && needMulti && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <span className="w-20 shrink-0 text-body text-fg">文件列表</span>
@@ -431,7 +546,7 @@ export function PdfToolbox() {
         )}
 
         {/* PDF 转图片：渲染结果预览 */}
-        {mode === 'toImages' && imageResults.length > 0 && (
+        {!watermark && mode === 'toImages' && imageResults.length > 0 && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <span className="text-tiny text-muted">已渲染 {imageResults.length} 页</span>
