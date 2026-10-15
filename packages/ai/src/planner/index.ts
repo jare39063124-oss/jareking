@@ -3,7 +3,7 @@
  *
  * 内部完成 prompt 构建 → LLM 调用 → 容错解析 + zod 校验。
  */
-import type { AiPlan } from '@jareking/core';
+import type { AiPlan, DocModule } from '@jareking/core';
 import type { AiAdapter, ChatMessage } from '../adapter.js';
 import {
   buildWriterPlannerPrompt,
@@ -31,7 +31,12 @@ export type { PresentationOp } from './presentationOps.js';
 export { parsePresentationPlan, buildPresentationPlannerPrompt } from './presentationOps.js';
 export { FORMAT_TEMPLATES, getTemplate, TEMPLATE_IDS, type FormatTemplate } from './templates.js';
 
-export type PlannerModule = 'writer' | 'sheet' | 'presentation';
+/**
+ * AI 可规划的模块（writer / sheet / slide）。
+ * **单一来源**：对齐 `@jareking/core` 的 `DocModule`（演示模块为 `'slide'`，非 `'presentation'`），
+ * 去掉 `pdf`（AI 暂不规划 PDF）。历史遗留的 `'presentation'` 命名已统一为 `'slide'`。
+ */
+export type PlannerModule = Exclude<DocModule, 'pdf'>;
 
 export interface AiPlannerDeps {
   adapter: AiAdapter;

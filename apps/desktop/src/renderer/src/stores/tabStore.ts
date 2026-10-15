@@ -1,9 +1,14 @@
 import { create } from 'zustand';
 import { BookOpen, FileText, Presentation, Table } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import type { DocModule } from '@jareking/core';
 
-/** 文档模块类型（对应产品规格 4.2~4.5：Writer / Sheet / Presentation / PDF） */
-export type DocModule = 'writer' | 'sheet' | 'slide' | 'pdf';
+/**
+ * 文档模块类型（对应产品规格 4.2~4.5：Writer / Sheet / Presentation / PDF）。
+ * **单一来源**：复用 `@jareking/core` 契约（`contracts/document.ts`），勿在本文件重复定义——
+ * 历史上这里与 core 各存一份，是多模型协作下命名漂移的高危点。
+ */
+export type { DocModule };
 
 /** 模块元信息：图标、显示名、新建默认标题 */
 export interface ModuleMeta {
