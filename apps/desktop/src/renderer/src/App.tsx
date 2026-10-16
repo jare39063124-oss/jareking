@@ -2,6 +2,7 @@ import { AIPanel } from './components/AIPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { PdfToolbox } from './components/PdfToolbox';
 import { EditorArea } from './components/EditorArea';
+import { RecoveryCenter } from './components/RecoveryCenter';
 import { Ribbon } from './components/Ribbon';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
@@ -40,6 +41,7 @@ export default function App() {
       <CommandPalette />
       <SettingsPanel />
       <PdfToolbox />
+      <RecoveryCenter />
       <ToastViewport />
     </div>
   );

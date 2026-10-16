@@ -52,6 +52,8 @@ interface UiState {
   pdfToolboxOpen: boolean;
   /** PDF 工具箱当前模式（打开时由入口按钮决定，关闭不重置） */
   pdfToolboxMode: PdfToolboxMode;
+  /** 文档备份中心（崩溃恢复）模态是否打开 */
+  recoveryCenterOpen: boolean;
   /** Ribbon 当前激活的菜单标签 */
   activeRibbonTab: RibbonTabId;
   /** 功能区（工具组行）是否折叠——折叠后仅保留菜单标签行，给文档更多显示空间 */
@@ -68,6 +70,7 @@ interface UiState {
   setCommandPaletteOpen: (open: boolean) => void;
   setPdfToolboxOpen: (open: boolean) => void;
   setPdfToolboxMode: (mode: PdfToolboxMode) => void;
+  setRecoveryCenterOpen: (open: boolean) => void;
   setActiveRibbonTab: (tab: RibbonTabId) => void;
   setRibbonCollapsed: (collapsed: boolean) => void;
   toggleRibbonCollapsed: () => void;
@@ -87,6 +90,7 @@ export const useUiStore = create<UiState>()((set) => ({
   commandPaletteOpen: false,
   pdfToolboxOpen: false,
   pdfToolboxMode: 'extract',
+  recoveryCenterOpen: false,
   activeRibbonTab: 'home',
   ribbonCollapsed: false,
   aiPanelWidth: 320,
@@ -110,6 +114,7 @@ export const useUiStore = create<UiState>()((set) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setPdfToolboxOpen: (open) => set({ pdfToolboxOpen: open }),
   setPdfToolboxMode: (mode) => set({ pdfToolboxMode: mode }),
+  setRecoveryCenterOpen: (open) => set({ recoveryCenterOpen: open }),
   setActiveRibbonTab: (tab) => set({ activeRibbonTab: tab }),
   setRibbonCollapsed: (collapsed) => set({ ribbonCollapsed: collapsed }),
   toggleRibbonCollapsed: () => set((state) => ({ ribbonCollapsed: !state.ribbonCollapsed })),

@@ -48,6 +48,13 @@ import { Modal } from '../components/Modal';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 import { parseInWorker } from '../lib/parseClient';
 import { downloadBlob } from '../lib/download';
+import {
+  discardAutosave,
+  flushAutosave,
+  makeBackupTitle,
+  makeDocumentId,
+  scheduleAutosave,
+} from '../lib/autosave';
 import { takePendingOpen } from '../stores/pendingOpenStore';
 import { largeFileHint } from '../lib/largeFile';
 import { useAiStore } from '../stores/aiStore';
@@ -315,6 +322,45 @@ export function SlideEditor() {
   const stageRef = useRef<Konva.Stage>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
+
+  // 崩溃恢复：当前演示文稿身份（documentId / 标题）与「最新 pres」镜像（供序列化闭包读取）
+  const slideDocIdRef = useRef<string>(makeDocumentId('slide'));
+  const slideTitleRef = useRef<string>(makeBackupTitle('slide'));
+  const presRef = useRef<JkPresentation>(pres);
+  presRef.current = pres;
+
+  /** 序列化当前演示文稿为 .pptx 字节（自动保存与「保存」共用同一导出路径） */
+  const serializePptxBytes = (): Promise<Uint8Array> => exportPptx(presRef.current);
+
+  /** 设定当前演示文稿身份（打开文件 → 路径/文件名；内置示例保持未命名身份） */
+  const assignSlideIdentity = (filePath?: string | null, title?: string) => {
+    slideDocIdRef.current = makeDocumentId('slide', filePath);
+    slideTitleRef.current = title ?? makeBackupTitle('slide', filePath);
+  };
+
+  // 崩溃恢复：内容变化即调度自动保存。首次挂载的示例文稿不产生备份（避免噪音）——
+  // 只在用户实际改动（pres 变更）后调度；serialize 经 presRef 读取最新内容。
+  const firstPresRef = useRef(true);
+  useEffect(() => {
+    if (firstPresRef.current) {
+      firstPresRef.current = false;
+      return;
+    }
+    scheduleAutosave({
+      documentId: slideDocIdRef.current,
+      module: 'slide',
+      title: slideTitleRef.current,
+      serialize: serializePptxBytes,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pres]);
+
+  // 崩溃恢复：卸载（关闭标签）前把未落盘的演示文稿快照 flush 落盘
+  useEffect(() => {
+    return () => {
+      void flushAutosave(slideDocIdRef.current);
+    };
+  }, []);
   const [playing, setPlaying] = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [thumbScrollTop, setThumbScrollTop] = useState(0);
@@ -855,6 +901,7 @@ export function SlideEditor() {
           return;
         }
         const loaded = await parseInWorker('pptx', new Uint8Array(bytes));
+        assignSlideIdentity(p.path, p.name);
         setPres({ ...loaded, slides: loaded.slides.map(withIds) });
         setSlideIdx(0);
         toast.success(`已打开 ${p.name}`);
@@ -906,6 +953,17 @@ export function SlideEditor() {
         imageCount: () =>
           pres.slides.flatMap((s) => s.shapes).filter((sh) => sh.type === 'image').length,
         mediaCount: () => Object.keys(pres.media ?? {}).length,
+        // 崩溃恢复冒烟：立即调度并落盘当前演示文稿备份，返回落盘字节长度
+        autosaveNow: async () => {
+          scheduleAutosave({
+            documentId: slideDocIdRef.current,
+            module: 'slide',
+            title: slideTitleRef.current,
+            serialize: serializePptxBytes,
+          });
+          const bytes = await flushAutosave(slideDocIdRef.current);
+          return bytes?.length ?? 0;
+        },
         insertChart: () => addChartRunRef.current(),
         renderChartTest: () =>
           renderChartToPng('bar', ['A', 'B'], [{ name: 'x', values: [1, 2] }], 't')?.length ?? -1,
@@ -977,6 +1035,10 @@ export function SlideEditor() {
       await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
       const loaded = await parseInWorker('pptx', buf);
+      // 崩溃恢复：以文件真实路径生成稳定身份（取不到路径时回落文件名）
+      const filePath =
+        window.jareking.getPathForFile?.(file) ?? (file as File & { path?: string }).path;
+      assignSlideIdentity(filePath, file.name);
       setPres({ ...loaded, slides: loaded.slides.map(withIds) });
       setSlideIdx(0);
       setSelectedId(null);
@@ -1002,6 +1064,8 @@ export function SlideEditor() {
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       );
       toast.success('已导出「导出.pptx」');
+      // 崩溃恢复：保存成功即清除该演示文稿的备份
+      void discardAutosave(slideDocIdRef.current);
     } catch {
       toast.warning('导出失败');
     }

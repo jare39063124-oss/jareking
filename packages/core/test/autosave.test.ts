@@ -1,5 +1,5 @@
 /** 自动保存测试：saveSnapshot → markRecovering → listPendingRecovery → clearRecovering */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AutosaveManager } from '../src/library/autosaveManager.js';
@@ -105,5 +105,144 @@ describe('AutosaveManager', () => {
     // 表中仍记录原始 documentId
     const rows = ctx.db.all('SELECT document_id FROM autosaves');
     expect(rows[0]!['document_id']).toBe('../evil/id');
+  });
+});
+
+describe('AutosaveManager 文件字节备份（崩溃恢复中心）', () => {
+  let ctx: TestDb;
+  let manager: AutosaveManager;
+
+  beforeEach(async () => {
+    ctx = await createTestDb();
+    manager = new AutosaveManager(ctx.db, ctx.autosaveDir);
+  });
+
+  afterEach(() => {
+    ctx.cleanup();
+  });
+
+  it('saveBackup 写 <safeId>.<ext> 并登记 module/title/size_bytes', () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    const backup = manager.saveBackup('doc-1', { module: 'writer', title: '报告.docx' }, bytes);
+
+    // 扩展名由模块映射（writer → docx）
+    expect(backup.snapshotPath).toBe(join(ctx.autosaveDir, 'doc-1.docx'));
+    expect(existsSync(backup.snapshotPath)).toBe(true);
+    expect(backup.sizeBytes).toBe(5);
+    expect(backup.pending).toBe(false);
+
+    // 文件内容与传入字节一致
+    expect(new Uint8Array(readFileSync(backup.snapshotPath))).toEqual(bytes);
+
+    const rows = ctx.db.all('SELECT module, title, size_bytes, recovering FROM autosaves');
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]!['module'])).toBe('writer');
+    expect(String(rows[0]!['title'])).toBe('报告.docx');
+    expect(Number(rows[0]!['size_bytes'])).toBe(5);
+    expect(Number(rows[0]!['recovering'])).toBe(0);
+  });
+
+  it('saveBackup 的 documentId 含异常字符时文件名安全（无路径逃逸）', () => {
+    const backup = manager.saveBackup('../evil/id', { module: 'sheet', title: 'x' }, new Uint8Array([9]));
+    expect(backup.snapshotPath.startsWith(ctx.autosaveDir)).toBe(true);
+    expect(existsSync(backup.snapshotPath)).toBe(true);
+  });
+
+  it('listBackups 仅返回 module 非空行，按 saved_at 倒序，pending 反映 recovering', async () => {
+    // 遗留 JSON 快照（module 为空）不应出现在 listBackups
+    manager.saveSnapshot('legacy-1', { v: 1 });
+    manager.saveBackup('doc-1', { module: 'writer', title: 'A' }, new Uint8Array([1]));
+    await sleep(2);
+    manager.saveBackup('doc-2', { module: 'slide', title: 'B' }, new Uint8Array([1, 2]));
+
+    const list = manager.listBackups();
+    expect(list).toHaveLength(2);
+    // saved_at 倒序：后保存的 doc-2 在前
+    expect(list.map((b) => b.documentId)).toEqual(['doc-2', 'doc-1']);
+    expect(list.every((b) => b.pending === false)).toBe(true);
+
+    manager.beginSession();
+    const afterBegin = manager.listBackups();
+    expect(afterBegin.every((b) => b.pending === true)).toBe(true);
+  });
+
+  it('beginSession 把所有行置 recovering=1 并返回条数', () => {
+    expect(manager.beginSession()).toBe(0);
+
+    manager.saveBackup('doc-1', { module: 'writer', title: 'A' }, new Uint8Array([1]));
+    manager.saveBackup('doc-2', { module: 'sheet', title: 'B' }, new Uint8Array([1]));
+
+    expect(manager.beginSession()).toBe(2);
+    expect(manager.listPendingRecovery()).toHaveLength(2);
+  });
+
+  it('resolveBackup 物化字节到目标目录并清除 recovering；文件缺失返回 null', () => {
+    const bytes = new Uint8Array([10, 20, 30]);
+    manager.saveBackup('doc-1', { module: 'writer', title: '报告.docx' }, bytes);
+    manager.beginSession();
+    expect(manager.listBackups()[0]!.pending).toBe(true);
+
+    const targetDir = join(ctx.dir, 'recovered');
+    const resolved = manager.resolveBackup('doc-1', targetDir);
+    expect(resolved).not.toBeNull();
+    // 标题中的扩展名被剥离，避免 .docx.docx
+    expect(resolved!.name).toBe('报告.docx');
+    expect(resolved!.module).toBe('writer');
+    expect(resolved!.path).toBe(join(targetDir, '报告.docx'));
+    expect(existsSync(resolved!.path)).toBe(true);
+    expect(new Uint8Array(readFileSync(resolved!.path))).toEqual(bytes);
+
+    // 恢复后该文档不再待恢复
+    expect(manager.listBackups()[0]!.pending).toBe(false);
+
+    // 文件缺失：删除快照后返回 null（不抛）
+    rmSync(manager.listBackups()[0]!.snapshotPath, { force: true });
+    expect(manager.resolveBackup('doc-1', targetDir)).toBeNull();
+    // 不存在的 documentId 也返回 null
+    expect(manager.resolveBackup('missing', targetDir)).toBeNull();
+  });
+
+  it('resolveBackup 的标题含路径分隔符时文件名被清洗', () => {
+    manager.saveBackup('doc-1', { module: 'slide', title: '../evil/演示.pptx' }, new Uint8Array([1]));
+    const targetDir = join(ctx.dir, 'recovered');
+    const resolved = manager.resolveBackup('doc-1', targetDir);
+    expect(resolved).not.toBeNull();
+    // 清洗后不含路径分隔符，且落在 targetDir 内
+    expect(resolved!.name.includes('/')).toBe(false);
+    expect(resolved!.name.includes('\\')).toBe(false);
+    expect(resolved!.path.startsWith(targetDir)).toBe(true);
+  });
+
+  it('discardBackup 删除文件与行；文件缺失也删行', () => {
+    const backup = manager.saveBackup('doc-1', { module: 'writer', title: 'A' }, new Uint8Array([1]));
+    expect(manager.discardBackup('doc-1')).toBe(true);
+    expect(existsSync(backup.snapshotPath)).toBe(false);
+    expect(manager.listBackups()).toHaveLength(0);
+
+    // 文件已被删：再次丢弃（行已无）返回 false
+    expect(manager.discardBackup('doc-1')).toBe(false);
+
+    // 文件缺失但行仍在 → 仍删行
+    manager.saveBackup('doc-2', { module: 'writer', title: 'B' }, new Uint8Array([1]));
+    const snap2 = manager.listBackups()[0]!.snapshotPath;
+    rmSync(snap2, { force: true });
+    expect(manager.discardBackup('doc-2')).toBe(true);
+    expect(manager.listBackups()).toHaveLength(0);
+  });
+
+  it('保存同一文档的字节备份：覆盖文件并更新元信息', async () => {
+    manager.saveBackup('doc-1', { module: 'writer', title: '旧' }, new Uint8Array([1]));
+    await sleep(2);
+    manager.beginSession();
+    expect(manager.listBackups()[0]!.pending).toBe(true);
+
+    const second = manager.saveBackup('doc-1', { module: 'writer', title: '新' }, new Uint8Array([1, 2, 3]));
+    const list = manager.listBackups();
+    expect(list).toHaveLength(1);
+    expect(list[0]!.title).toBe('新');
+    expect(list[0]!.sizeBytes).toBe(3);
+    // 再次保存后复位为「无需恢复」
+    expect(list[0]!.pending).toBe(false);
+    expect(new Uint8Array(readFileSync(second.snapshotPath))).toEqual(new Uint8Array([1, 2, 3]));
   });
 });

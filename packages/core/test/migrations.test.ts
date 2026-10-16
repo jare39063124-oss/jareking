@@ -47,8 +47,8 @@ describe('migrations', () => {
     ctx.db.migrate();
     ctx.db.migrate();
 
-    expect(version).toBe(2);
-    expect(ctx.db.currentVersion()).toBe(2);
+    expect(version).toBe(3);
+    expect(ctx.db.currentVersion()).toBe(3);
 
     const tablesAfter = ctx.db
       .all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -59,6 +59,7 @@ describe('migrations', () => {
     expect(migrationsBefore).toEqual([
       { version: 1, name: 'initial-schema' },
       { version: 2, name: 'ai-usage' },
+      { version: 3, name: 'autosave-backup-meta' },
     ]);
   });
 
@@ -121,6 +122,10 @@ describe('migrations', () => {
       { name: 'saved_at', type: 'INTEGER', notnull: 1, pk: 0 },
       { name: 'snapshot_path', type: 'TEXT', notnull: 1, pk: 0 },
       { name: 'recovering', type: 'INTEGER', notnull: 1, pk: 0 },
+      // v3：崩溃恢复入口显性化新增的元信息列
+      { name: 'module', type: 'TEXT', notnull: 0, pk: 0 },
+      { name: 'title', type: 'TEXT', notnull: 0, pk: 0 },
+      { name: 'size_bytes', type: 'INTEGER', notnull: 1, pk: 0 },
     ]);
 
     expect(columns('settings')).toEqual([
@@ -150,7 +155,7 @@ describe('migrations', () => {
 
     const reopened = await Database.open(ctx.dbPath);
     try {
-      expect(reopened.currentVersion()).toBe(2);
+      expect(reopened.currentVersion()).toBe(3);
       expect(reopened.all("SELECT value FROM settings WHERE key = 'theme'")).toEqual([
         { value: 'light' },
       ]);

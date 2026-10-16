@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Tree } from './Tree';
 import type { TreeNode } from './Tree';
 import { MODULE_META, selectActiveTab, useTabStore, type DocModule } from '../stores/tabStore';
+import { useRecoveryStore } from '../stores/recoveryStore';
 import { toast } from '../stores/toastStore';
 import { setPendingOpen } from '../stores/pendingOpenStore';
 import { PdfReader } from '../pdf/PdfReader';
@@ -156,12 +157,25 @@ export function EditorArea() {
 /** 空状态：新建文档引导 + 云文件（占位） */
 function EmptyState() {
   const openTab = useTabStore((state) => state.openTab);
+  const recoveryItems = useRecoveryStore((state) => state.items);
+  const openRecoveryCenter = useRecoveryStore((state) => state.openCenter);
   const modules = Object.keys(MODULE_META) as DocModule[];
 
   return (
     <div className="flex min-h-0 flex-1">
       {/* 左：新建文档引导 */}
       <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
+        {/* 崩溃恢复提示条：仅在检测到未保存备份时出现，否则不渲染任何多余元素 */}
+        {recoveryItems.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => openRecoveryCenter()}
+            className="flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-4 py-2 text-ui text-accent transition-colors hover:bg-accent/20"
+          >
+            <History size={16} aria-hidden="true" />
+            检测到 {recoveryItems.length} 份未保存的文档备份 · 点击恢复
+          </button>
+        ) : null}
         <div className="flex flex-col items-center gap-2 text-center">
           <span className="text-display font-semibold text-fg">新建文档</span>
           <p className="text-body text-muted">选择模块开始创作，或按 Ctrl+Shift+P 打开命令面板</p>

@@ -74,6 +74,13 @@ import { JkTrackChanges } from './jkRevision';
 import { MediaRegistry } from './mediaRegistry';
 import { largeFileHint } from '../lib/largeFile';
 import { downloadBlob } from '../lib/download';
+import {
+  discardAutosave,
+  flushAutosave,
+  makeBackupTitle,
+  makeDocumentId,
+  scheduleAutosave,
+} from '../lib/autosave';
 import { buildPrintDocument } from '../lib/printHtml';
 import { exportHtmlToPdf } from '../lib/pdfExport';
 import { FONT_SIZES } from '../lib/fonts';
@@ -257,6 +264,19 @@ export function WriterEditor() {
   const [docLoading, setDocLoading] = useState(false);
   const [largeHint, setLargeHint] = useState<string | null>(null);
 
+  // 崩溃恢复：当前文档身份（documentId / 标题）。打开文件用路径生成稳定 id，
+  // 内置示例用「未命名」身份；编辑时按防抖落盘文件字节备份。
+  const docIdRef = useRef<string>(makeDocumentId('writer'));
+  const docTitleRef = useRef<string>(makeBackupTitle('writer'));
+  // 自动保存调度器（经 ref 间接持有，保证 useEditor 的 onUpdate 闭包读到最新实现）
+  const scheduleAutosaveRef = useRef<() => void>(() => {});
+
+  /** 设定当前文档身份（打开文件 → 路径/文件名；内置示例保持未命名身份） */
+  const assignIdentity = (filePath?: string | null, title?: string) => {
+    docIdRef.current = makeDocumentId('writer', filePath);
+    docTitleRef.current = title ?? makeBackupTitle('writer', filePath);
+  };
+
   // 文档区缩放（Ribbon「视图」/ 状态栏共享）
   const writerZoom = useUiStore((state) => state.writerZoom);
 
@@ -366,6 +386,11 @@ export function WriterEditor() {
     // 事务 / 选区变化 → 通知命令总线，Ribbon 的激活态与控件取值实时刷新
     onTransaction: () => notifyEditorChange(),
     onSelectionUpdate: () => notifyEditorChange(),
+    // 文档内容变化（非程序化 setContent）→ 通知命令总线并调度自动保存（防抖落盘）
+    onUpdate: () => {
+      notifyEditorChange();
+      scheduleAutosaveRef.current();
+    },
   });
   // AI 面板经 editorRef 取当前编辑器执行 ops（T4.3）
   useEffect(() => {
@@ -536,6 +561,7 @@ export function WriterEditor() {
         }
         const jk = await parseDocx(new Uint8Array(bytes));
         if (cancelled) return;
+        assignIdentity(p.path, p.name);
         loadDocument(jk);
         toast.success(`已打开 ${p.name}`);
       } catch (err) {
@@ -548,6 +574,15 @@ export function WriterEditor() {
       cancelled = true;
     };
   }, [editor]);
+
+  // 崩溃恢复：卸载（关闭标签）前，把未落盘的自动保存快照 flush 落盘。
+  // 注意：本 effect 必须声明在下方「销毁编辑器」effect 之前——React 按声明顺序执行
+  // 卸载清理，保证 flush 时编辑器实例仍然可用（serialize 能取到最新模型）。
+  useEffect(() => {
+    return () => {
+      void flushAutosave(docIdRef.current);
+    };
+  }, []);
 
   // 卸载时销毁编辑器并释放 Blob URL
   useEffect(() => {
@@ -595,6 +630,12 @@ export function WriterEditor() {
         // 导出 PDF 探针（QA 冒烟）：走与 onExportPdf 相同的 HTML 构建路径，但不下载，
         // 直接返回可跨 CDP 序列化的 { size, head }（head 期望为 '%PDF-'）
         pdfProbe: () => pdfProbeRef.current(),
+        // 崩溃恢复冒烟：立即调度并落盘当前文档备份，返回落盘字节长度
+        autosaveNow: async () => {
+          scheduleAutosaveRef.current();
+          const bytes = await flushAutosave(docIdRef.current);
+          return bytes?.length ?? 0;
+        },
       };
     }
     return () => {
@@ -614,6 +655,10 @@ export function WriterEditor() {
       await new Promise((r) => setTimeout(r, 0));
       const buf = new Uint8Array(await file.arrayBuffer());
       const jk = await parseDocx(buf);
+      // 崩溃恢复：以文件真实路径生成稳定身份（取不到路径时回落文件名）
+      const filePath =
+        window.jareking.getPathForFile?.(file) ?? (file as File & { path?: string }).path;
+      assignIdentity(filePath, file.name);
       loadDocument(jk);
       setLargeHint(largeFileHint(file.size, 'word'));
       toast.success(`已打开 ${file.name}`);
@@ -646,40 +691,52 @@ export function WriterEditor() {
     return jk;
   };
 
+  /**
+   * 序列化当前文档为 .docx 字节（自动保存与「保存」共用同一条导出路径）。
+   * 分块模式先写回当前切片取整文；非分块模式从编辑器取回最新模型。
+   */
+  const serializeDocxBytes = async (): Promise<Uint8Array> => {
+    let jk: JkDocument;
+    if (chunkModeRef.current && fullDocRef.current) {
+      // #46-A：先把当前切片写回整文，再导出完整文档（保存无损）
+      flushCurrentChunk();
+      jk = fullDocRef.current;
+    } else {
+      // 非分块模式：编辑器即真源，取回模型（含 Blob URL 图片字节还原，#46-B）
+      jk = collectModelFromEditor();
+    }
+    // 注入页眉/页脚 / 批注 / 脚注尾注 / 分栏 / 样式（两路保存都注入，与 onSave 同源）
+    if (!jk.sections || jk.sections.length === 0) jk.sections = [{ type: 'section' }];
+    jk.sections[0].header = hfRef.current.header;
+    jk.sections[0].footer = hfRef.current.footer;
+    jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
+    applyNotesAndColumns(jk);
+    jk.styleDefs = styleDefsRef.current;
+    return exportDocx(jk);
+  };
+
+  /** 调度一次自动保存（防抖）；序列化失败在调度器内被捕获，不冒泡到 UI */
+  const scheduleAutosaveNow = () => {
+    scheduleAutosave({
+      documentId: docIdRef.current,
+      module: 'writer',
+      title: docTitleRef.current,
+      serialize: serializeDocxBytes,
+    });
+  };
+
   const onSave = async () => {
     if (!editor) return;
     try {
-      let jk: JkDocument;
-      if (chunkModeRef.current && fullDocRef.current) {
-        // #46-A：先把当前切片写回整文，再导出完整文档（保存无损）
-        flushCurrentChunk();
-        jk = fullDocRef.current;
-      } else {
-        // 非分块模式：编辑器即真源，取回模型（含 Blob URL 图片字节还原，#46-B）
-        jk = collectModelFromEditor();
-      }
-      // 注入页眉/页脚（两路保存都注入）：确保非分块模式也能保留页眉页脚，
-      // 并顺带修复非分块模式丢失 sections 的潜在问题（仅动 header/footer，不改 sections 其它字段）。
-      if (!jk.sections || jk.sections.length === 0) {
-        jk.sections = [{ type: 'section' }];
-      }
-      jk.sections[0].header = hfRef.current.header;
-      jk.sections[0].footer = hfRef.current.footer;
-      // 注入批注（两路保存都注入）：正文锚点由 htmlToJk/jkToHtml 往返，批注正文来自 ref
-      jk.comments = commentsRef.current.length ? commentsRef.current : undefined;
-      // 注入脚注/尾注与分栏设置（两路保存都注入）
-      applyNotesAndColumns(jk);
-      // 注入样式定义表（两路保存都注入）：确保新建/修改/删除的样式能落盘。
-      // 说明：非分块模式的模型由 htmlToJk 从 HTML 重建（styleDefs 为空），
-      // 故此处以 styleDefsRef 覆盖；分块模式二者本就同引用，覆盖无副作用。
-      jk.styleDefs = styleDefsRef.current;
-      const buf = await exportDocx(jk);
+      const buf = await serializeDocxBytes();
       downloadBlob(
         buf,
         '导出.docx',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       );
       toast.success('已导出「导出.docx」');
+      // 崩溃恢复：保存成功即清除该文档的备份（本会话不再提示恢复）
+      void discardAutosave(docIdRef.current);
     } catch {
       toast.warning('导出失败：文档包含暂不支持的内容');
     }
@@ -750,6 +807,11 @@ export function WriterEditor() {
   const saveRef = useRef<() => void>(() => {});
   useEffect(() => {
     saveRef.current = () => void onSave();
+  });
+
+  // 自动保存调度器要读到最新闭包（onUpdate 只在首次渲染时绑定），用 ref 同步
+  useEffect(() => {
+    scheduleAutosaveRef.current = scheduleAutosaveNow;
   });
 
   // 导出 PDF 命令要读到最新闭包（命令只在 editor 变化时注册），用 ref 同步

@@ -89,6 +89,39 @@ function registerIpcHandlers(): void {
     library.autosave.listPendingRecovery(),
   );
 
+  // 崩溃恢复中心：保存「文件字节备份」（编辑器防抖调用；bytes 为 docx/xlsx/pptx 字节）
+  ipcMain.handle(
+    IPC.DOC_BACKUP_SAVE,
+    (
+      _event,
+      payload?: { documentId?: string; module?: string; title?: string; bytes?: Uint8Array },
+    ) => {
+      if (!payload?.documentId || !payload.module) return null;
+      const bytes = payload.bytes instanceof Uint8Array ? payload.bytes : new Uint8Array(0);
+      return library.autosave.saveBackup(
+        payload.documentId,
+        { module: payload.module, title: payload.title ?? '' },
+        bytes,
+      );
+    },
+  );
+
+  // 崩溃恢复中心：列出全部「文件字节备份」（按保存时间倒序）
+  ipcMain.handle(IPC.DOC_BACKUP_LIST, () => library.autosave.listBackups());
+
+  // 崩溃恢复中心：恢复单条备份（物化到 userData/autosaves/recovered，走渲染层待打开机制直达打开）
+  ipcMain.handle(IPC.DOC_BACKUP_RECOVER, (_event, payload?: { documentId?: string }) => {
+    if (!payload?.documentId) return null;
+    const recoveredDir = join(app.getPath('userData'), 'autosaves', 'recovered');
+    return library.autosave.resolveBackup(payload.documentId, recoveredDir);
+  });
+
+  // 崩溃恢复中心：丢弃单条备份（删快照文件 + 库记录）
+  ipcMain.handle(IPC.DOC_BACKUP_DISCARD, (_event, payload?: { documentId?: string }) => {
+    if (!payload?.documentId) return false;
+    return library.autosave.discardBackup(payload.documentId);
+  });
+
   // 数据库：白名单操作（settings 读写）；其余 op 抛错
   ipcMain.handle(IPC.DB_QUERY, (_event, payload?: { op: string; params?: unknown[] }) => {
     const op = payload?.op;
@@ -283,6 +316,8 @@ if (!app.requestSingleInstanceLock()) {
     // 持久层服务接入：初始化数据库 / 账户 / 文档库（幂等单例），并引导本地账户与注册礼
     services = await initServices();
     services.account.bootstrapAccount();
+    // 崩溃恢复：进程启动即把库中所有快照标记为待恢复（语义：凡存在快照即上次会话遗留的未保存文档）
+    services.library.autosave.beginSession();
     registerIpcHandlers();
 
     createWindow();

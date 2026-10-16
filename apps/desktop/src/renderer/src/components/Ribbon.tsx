@@ -42,6 +42,7 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  History,
   Image as ImageIcon,
   Italic,
   Layout,
@@ -93,6 +94,7 @@ import { Tabs } from './Tabs';
 import { toast, toastNotImplemented } from '../stores/toastStore';
 import { setPendingOpen } from '../stores/pendingOpenStore';
 import { useTabStore } from '../stores/tabStore';
+import { useRecoveryStore } from '../stores/recoveryStore';
 import {
   useUiStore,
   type PdfToolboxMode,
@@ -171,6 +173,10 @@ const RIBBON_TABS: RibbonTabDef[] = [
       {
         name: 'PDF 工具',
         tools: [{ kind: 'button', id: 'pdf-toolbox', label: 'PDF 工具箱', icon: FileCog, pdfMode: 'extract' }],
+      },
+      {
+        name: '备份与恢复',
+        tools: [{ kind: 'button', id: 'recovery-center', label: '文档恢复', icon: History }],
       },
     ],
   },
@@ -664,6 +670,11 @@ export function Ribbon() {
 
   /** 工具点击：命令总线 → PDF 工具箱 → 缩放 → 占位提示 */
   const handleToolClick = (tool: Extract<RibbonTool, { kind: 'button' }>) => {
+    // 文档恢复（文件 → 备份与恢复）：打开「文档备份中心」（崩溃恢复显性入口）
+    if (tool.id === 'recovery-center') {
+      useRecoveryStore.getState().openCenter();
+      return;
+    }
     // 打开 PDF（PDF 工具 → 阅读与批注）：选文件 → 设「待打开」→ 新建 pdf 标签。
     // 采用「pendingOpen + openTab」既有机制（与首页「最近使用」同源），PdfReader 挂载时消费，
     // 从而避开「事件早于组件挂载」的竞态。

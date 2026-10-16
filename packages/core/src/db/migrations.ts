@@ -83,4 +83,19 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    // v3：崩溃恢复入口显性化——autosaves 增加「模块 / 标题 / 字节数」元信息，
+    // 使渲染层「文档备份中心」能展示待恢复的「文件字节备份」完整信息。
+    // 注意：仅追加列（sql.js / SQLite 支持 ALTER TABLE ADD COLUMN），
+    // v1 的 CREATE TABLE 定义保持不变（已应用的迁移不可修改）。
+    version: 3,
+    name: 'autosave-backup-meta',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE autosaves ADD COLUMN module TEXT;
+        ALTER TABLE autosaves ADD COLUMN title TEXT;
+        ALTER TABLE autosaves ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0;
+      `);
+    },
+  },
 ];

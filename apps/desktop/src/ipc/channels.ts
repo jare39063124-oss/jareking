@@ -13,6 +13,11 @@ export const IPC = {
   DOC_REVEAL: 'doc:reveal',
   DOC_AUTOSAVE_SAVE: 'doc:autosave:save',
   DOC_AUTOSAVE_PENDING: 'doc:autosave:pending',
+  // 崩溃恢复入口显性化（文档备份中心）：文件字节备份的存/列/恢复/丢弃
+  DOC_BACKUP_SAVE: 'doc:autosave:save-backup',
+  DOC_BACKUP_LIST: 'doc:autosave:list',
+  DOC_BACKUP_RECOVER: 'doc:autosave:recover',
+  DOC_BACKUP_DISCARD: 'doc:autosave:discard',
   UPDATER_CHECK: 'updater:check',
   AI_CONFIG_LIST: 'ai:config:list',
   AI_CONFIG_SAVE: 'ai:config:save',

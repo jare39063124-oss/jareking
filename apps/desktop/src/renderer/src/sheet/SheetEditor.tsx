@@ -37,6 +37,13 @@ import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
 import { parseInWorker } from '../lib/parseClient';
 import { downloadBlob, downloadDataUrl } from '../lib/download';
+import {
+  discardAutosave,
+  flushAutosave,
+  makeBackupTitle,
+  makeDocumentId,
+  scheduleAutosave,
+} from '../lib/autosave';
 import { renderChartToPng, type ChartType } from '../lib/chartRenderer';
 import { buildChartData } from './chartData';
 import { workbookToPrintBody } from './sheetToHtml';
@@ -241,6 +248,11 @@ export function SheetEditor() {
   const [ready, setReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const aiInputRef = useRef<HTMLInputElement>(null);
+
+  // 崩溃恢复：当前工作簿身份（documentId / 标题）与自动保存调度器（经 ref 持有最新闭包）
+  const sheetDocIdRef = useRef<string>(makeDocumentId('sheet'));
+  const sheetTitleRef = useRef<string>(makeBackupTitle('sheet'));
+  const scheduleSheetAutosaveRef = useRef<() => void>(() => {});
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
   /** 可回退：AI 执行前的整簿快照（JkWorkbook），撤销时经 createWb 重建 */
@@ -349,6 +361,21 @@ export function SheetEditor() {
     if (!aiLoaded) void loadAiConfigs();
   }, [aiLoaded, loadAiConfigs]);
 
+  /** 设定当前工作簿身份（打开文件 → 路径/文件名；内置示例保持未命名身份） */
+  const assignSheetIdentity = (filePath?: string | null, title?: string) => {
+    sheetDocIdRef.current = makeDocumentId('sheet', filePath);
+    sheetTitleRef.current = title ?? makeBackupTitle('sheet', filePath);
+  };
+
+  // 崩溃恢复：卸载（关闭标签）前把未落盘的工作簿快照 flush 落盘。
+  // 必须声明在下方「初始化 Univer」effect 之前——React 按声明顺序执行卸载清理，
+  // 保证 flush 时 Univer 实例仍可用（serialize 能取到最新工作簿）。
+  useEffect(() => {
+    return () => {
+      void flushAutosave(sheetDocIdRef.current);
+    };
+  }, []);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el || apiRef.current) return;
@@ -412,6 +439,10 @@ export function SheetEditor() {
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
       const wb = await parseInWorker('xlsx', buf);
+      // 崩溃恢复：以文件真实路径生成稳定身份（取不到路径时回落文件名）
+      const filePath =
+        window.jareking.getPathForFile?.(file) ?? (file as File & { path?: string }).path;
+      assignSheetIdentity(filePath, file.name);
       await createWb(apiRef.current!, wb);
       toast.success(`已打开 ${file.name}`);
     } catch (err) {
@@ -464,6 +495,7 @@ export function SheetEditor() {
         `${plan.explanation || '已执行'} · ✅${result.applied.length}${result.skipped.length ? ` · ⚠️跳过${result.skipped.length}` : ''}`,
       );
       toast.success(`AI 已执行 ${result.applied.length} 个操作（可撤销）`);
+      scheduleSheetAutosaveRef.current();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setAiNote(`失败：${msg}`);
@@ -493,6 +525,7 @@ export function SheetEditor() {
         const wb = await parseInWorker('xlsx', new Uint8Array(bytes));
         const api = apiRef.current;
         if (!api) return;
+        assignSheetIdentity(p.path, p.name);
         await createWb(api, wb);
         toast.success(`已打开 ${p.name}`);
       } catch (err) {
@@ -554,6 +587,12 @@ export function SheetEditor() {
         // 暴露原始对象供探针深度内省（仅 jk-debug 模式）
         fws: () => apiRef.current?.getActiveWorkbook()?.getActiveSheet(),
         funiver: () => apiRef.current,
+        // 崩溃恢复冒烟：立即调度并落盘当前工作簿备份，返回落盘字节长度
+        autosaveNow: async () => {
+          scheduleSheetAutosaveRef.current();
+          const bytes = await flushAutosave(sheetDocIdRef.current);
+          return bytes?.length ?? 0;
+        },
         // 导出 PDF 探针（QA 冒烟）：与 onExportPdf 同路径构建 HTML，不下载，直接返回可断言字段。
         //  - 不传参：完全保留历史行为（打印效果不变），返回 { size, head } 并追加可断言字段；
         //  - 传 JSON 字符串：用解析出的打印设置构建 HTML（含打印区域/重复行/纸张/方向）。
@@ -659,6 +698,51 @@ export function SheetEditor() {
     return univerSnapshotToJk(snapshot as Record<string, never>);
   };
 
+  /** 序列化当前工作簿为 .xlsx 字节（自动保存与「保存」共用同一导出路径） */
+  const serializeXlsxBytes = async (): Promise<Uint8Array> => {
+    const jk = currentJkWorkbook();
+    if (!jk) throw new Error('no active workbook');
+    return exportXlsx(jk);
+  };
+
+  /**
+   * 调度一次自动保存（防抖）。Univer 1.0.4 facade 未暴露命令订阅，
+   * 故由「事件启发式」监听编辑器交互（见下方 effect）与显式写入点共同触发。
+   */
+  const scheduleSheetAutosave = () => {
+    if (!apiRef.current) return;
+    scheduleAutosave({
+      documentId: sheetDocIdRef.current,
+      module: 'sheet',
+      title: sheetTitleRef.current,
+      serialize: serializeXlsxBytes,
+    });
+  };
+  scheduleSheetAutosaveRef.current = scheduleSheetAutosave;
+
+  // 崩溃恢复：Univer 容器上的「事件启发式」——捕获阶段的编辑类事件触发自动保存。
+  // keydown（可打印字符 / Backspace / Delete / Enter）、paste、cut、pointerup（选择/拖拽/输入提交）。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !ready) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Enter') {
+        scheduleSheetAutosaveRef.current();
+      }
+    };
+    const onChangeLike = () => scheduleSheetAutosaveRef.current();
+    el.addEventListener('keydown', onKeyDown, true);
+    el.addEventListener('paste', onChangeLike, true);
+    el.addEventListener('cut', onChangeLike, true);
+    el.addEventListener('pointerup', onChangeLike, true);
+    return () => {
+      el.removeEventListener('keydown', onKeyDown, true);
+      el.removeEventListener('paste', onChangeLike, true);
+      el.removeEventListener('cut', onChangeLike, true);
+      el.removeEventListener('pointerup', onChangeLike, true);
+    };
+  }, [ready]);
+
   const onSave = async () => {
     try {
       const jk = currentJkWorkbook();
@@ -670,6 +754,8 @@ export function SheetEditor() {
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
       toast.success('已导出「导出.xlsx」');
+      // 崩溃恢复：保存成功即清除该工作簿的备份
+      void discardAutosave(sheetDocIdRef.current);
     } catch {
       toast.warning('导出失败：当前工作簿无法序列化');
     }
@@ -797,6 +883,7 @@ export function SheetEditor() {
       }
     }
     toast.success(`已替换 ${count} 处`);
+    scheduleSheetAutosaveRef.current();
     // 刷新查找结果，反映替换后状态
     if (findQuery) onFindAll();
   };
@@ -951,6 +1038,7 @@ export function SheetEditor() {
     }
 
     toast.success('已应用单元格格式');
+    scheduleSheetAutosaveRef.current();
   };
 
   /** 打开对话框时的统一入口：预填选区样式、重置边框选项与颜色、再打开 */
@@ -1187,6 +1275,7 @@ export function SheetEditor() {
       newSheet.activate();
       toast.success(`已生成数据透视表「${name}」`);
       setPivotOpen(false);
+      scheduleSheetAutosaveRef.current();
     } catch (err) {
       // 退化路径：建表失败 → 写入当前表源区域右侧空区，避免覆盖源数据
       try {
@@ -1198,6 +1287,7 @@ export function SheetEditor() {
           `已生成数据透视表（写入当前表右侧 ${colToLetters(startCol)}${startRow + 1} 起）`,
         );
         setPivotOpen(false);
+        scheduleSheetAutosaveRef.current();
       } catch (err2) {
         setPivotError(`生成失败：${err2 instanceof Error ? err2.message : String(err2)}`);
         console.warn('[数据透视表] 写入失败:', err, err2);
@@ -1317,6 +1407,7 @@ export function SheetEditor() {
     }
     toast.success('分列完成');
     setSplitOpen(false);
+    scheduleSheetAutosaveRef.current();
   };
 
   /** 切换「删除重复项」的关键列勾选，并同步列字母文本 */
@@ -1401,6 +1492,7 @@ export function SheetEditor() {
       toast.success(`已删除 ${removed} 行重复项`);
     }
     setDupOpen(false);
+    scheduleSheetAutosaveRef.current();
   };
 
   /* =========================================================================
@@ -1567,6 +1659,7 @@ export function SheetEditor() {
               setAiCanUndo(false);
               setAiNote('已撤销本次 AI 操作');
               toast.success('已撤销本次 AI 操作');
+              scheduleSheetAutosaveRef.current();
             }}
           >
             ↩ 撤销
