@@ -37,6 +37,11 @@
   - **踩坑（血泪，勿重犯）**：① 不要用 effect 卸载兜底做结算——`main.tsx` 挂 `<StrictMode>`，dev 下 effect 双调用会**一进排练就误结算**（P1，已由 QA 的 StrictMode 双 invoke 探针抓出）；② `setState` updater 内不要做副作用；③ 排练记录里的「未访问」不能用 `0` 表示（会被判成「刻意点击换片」而**静默删除**用户既有的自动换片时间）。
   - **验收**：`scripts/rehearse-smoke.mjs`（真实 Electron 全流程：排练浮层 → Esc → 确认 Modal → 保留写回 → advanceTimings 全部 ≥500 → 清除计时归零 → consoleErrors 0）；单测 rehearse 19（工程师）/ rehearseTiming 10（工程师）/ QA 反证轮补充（rehearse.test / rehearseTiming.test / rehearseStrictMode.qa.test / rehearseTiming.qa.test）；typecheck / build / test 全绿。
   - 已知限制：不做「排练计时」的逐页停留曲线/多轮平均；放映倒计时为 UI 近似（不改 OOXML 语义）；解析侧 `advTm="3000.7"` 原样读回小数（导出取整，往返收敛）。
+- [x] **W-批7（2026-10-16）**：**文档备份中心（崩溃恢复显性入口）**——对标 WPS「文档备份/恢复」
+  - **持久层** `packages/core/src/library/autosaveManager.ts` 增强：字节级快照（`userData/backup/`）+ 清理策略；`ai_usage` 之后新增 **DB v3 迁移**。
+  - **渲染层**：`lib/autosave.ts`（自动保存调度：各编辑器接入，节流 + 脏标记）+ `stores/recoveryStore.ts` + `components/RecoveryCenter.tsx`（列出待恢复备份：模块图标/标题/时间/大小 → **恢复**（物化为临时真实文件，走 `pendingOpen` + `openTab` 直达打开）/ **忽略单条 / 全部忽略**）。
+  - **启动自检**：`checkOnStartup` 执行一次，**列表为空绝不自动弹窗**；恢复入口在功能区/首页显性化。
+  - 验收：core autosave 测试 + `autosave.qa.test.ts`（QA 反证）；**core 87 测 / desktop 250 测**；typecheck / build / test 全绿。（本批次由无人值守推进产出，主理人复核后收编）
 - [x] **字体合规**：调研完成（docs/fonts.md：红线=方正/汉仪/微软雅黑嵌入；内置白名单=OFL 清单）；批 1 已把 系统字体/开源 OFL/厂商免费商用 三组 23 款进字体下拉；批 2 待办=安装包内置思源黑体+霞鹜文楷（附 OFL.txt 与鸣谢页）；批 3 待办=字体管理器（扫描本机字体+授权提示）
 
 ### 待确认 / 待排期（不擅自决定，留痕待产品决策）
