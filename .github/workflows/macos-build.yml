@@ -58,11 +58,16 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      # @jareking/core 的类型声明由它自己的构建产物 dist/ 提供（package.json 的 types 指向 dist），
-      # 而全新检出的仓库没有 dist —— 不先构建它，ai / writer / desktop 会集体报 TS2307
-      # "Cannot find module '@jareking/core'"。根 package.json 的 typecheck 脚本同样是先 build core。
-      - name: 预构建 @jareking/core（提供类型声明）
-        run: pnpm --filter @jareking/core build
+      # ── 为什么「先编译，后检查」而不反过来 ──────────────────────────────
+      # 各 workspace 包的 package.json 都把类型入口指向自己构建产物 `types: ./dist/index.d.ts`，
+      # 全新检出的仓库没有 dist —— 先跑 typecheck 会集体报 TS2307
+      #   Cannot find module '@jareking/core' / '@jareking/writer' / '@jareking/pdf' ...
+      # 本机开发时 dist 早就存在，所以这个坑只在 CI 首跑暴露（2026-10-17 连踩两次）。
+      # 顺序固定为：编译（产出全部 dist + desktop out）→ 类型检查 → 单元测试 → 打包。
+      - name: 编译（各包 dist + main/preload/renderer）
+        env:
+          CODEBUDDY_SAFE_DELETE_ENABLED: '0'
+        run: pnpm build
 
       # 门禁范围说明（2026-10-17）：
       #   只跑 **@jareking/desktop 及其依赖图**（core / ai / writer / sheet / pdf / presentation），
@@ -75,11 +80,6 @@ jobs:
 
       - name: 单元测试（desktop 及其依赖图）
         run: pnpm --filter @jareking/desktop... test
-
-      - name: 编译（main / preload / renderer）
-        env:
-          CODEBUDDY_SAFE_DELETE_ENABLED: '0'
-        run: pnpm build
 
       # ── 打包：签名版 / 未签名版二选一 ──────────────────────────────────
       - name: 打包 dmg + zip（签名 + 公证）
