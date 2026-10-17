@@ -61,6 +61,7 @@
 - **Phase 6** 商业化（P0，个人路径）
 - **Phase 7** 本地账户 + 云同步预留（P0/P2）
 - **Phase 8** 体验与发布（P0）
+- **CS 系列** 云共享与权限 / 共享文件版本管理（`docs/prd-cloud-sharing.md`，v1 零服务端 → v1.5 局域网 → v2 云端）
 
 ---
 
@@ -331,3 +332,54 @@
 ### 复查澄清（非缺口，留痕避免重复排查）
 
 - **命名样式**：复查确认 `model/document.ts` 的 `styleId`/`StyleDef`/`serializeStyles` 与 parser/exporter 已完整贯通 Word 命名样式（Heading 1 等），并非真实缺口。
+
+---
+
+## CS 系列 — 云共享与权限 + 共享文件版本管理（2026-10-17 立项）
+
+> 配套：`docs/prd-cloud-sharing.md`（v0.3，**权限契约已冻结**）· `docs/tasks-cs-p0.md`（工程卡，含可断言验收）· `docs/research-wps-gui-ip.md`（视觉合规）
+> 分期口径：**能否在零服务端下交付** 是首要判据 —— v1 全部 `CS-P0` 项不依赖服务端。
+
+### CS-P0（v1，零服务端，可立即开工）
+
+- [ ] **CS-P0-1** 本地版本历史：显式保存即版本（内容寻址快照 + 同内容去重）；**自动保存 = 草稿不产生版本**（Q4=A）；保留 30 天 / 100 版且命名版本豁免；索引原子写、损坏可降级
+- [ ] **CS-P0-2** 版本对比 diff：Writer 段落/词级（含 move 不误计入增删）、Sheet 单元格级（值/公式/样式/结构性变更四类区分）、PPT 页/形状级；对称性与纯度可测。**依赖 CS-P0-1**
+- [ ] **CS-P0-3** 版本恢复：**append-only**（生成新版本、绝不删历史）；已清理版本明确报错；用 `Modal` 二次确认（禁 `window.confirm`）。**依赖 CS-P0-1**
+- [ ] **CS-P0-4** 保留策略：默认 30 天 / 100 版；命名版本（tag）永不清理；清理时面板灰显说明
+- [ ] **CS-P0-5** 本机文件锁 `.jklock`：打开检测 + 只读降级 + 心跳租约（默认 30 min）
+- [ ] **CS-P0-6** 外部改动检测：打开前/保存前内容哈希校验；冲突三选（重载 / 另存副本 / 覆盖，覆盖需二次确认）；**任何路径绝不静默覆盖**
+- [ ] **CS-P0-7** 权限契约 + 纯函数：`packages/core/src/contracts/sharing.ts`（`ShareRole` / `ShareRoleLevel` / `ShareCapability` / `ShareSubject` / `ShareGrant` / `ShareDeny` / `SharePolicyCap` / `ShareNode` / `ShareVia` + `RoleCaps` 表 + `resolvePermissions` / `resolveAccess` / `buildChain`）；**PRD §4.4 用例 25 条全绿**，其中 4 条越权硬断言必须过（用例 **4** deny 不可逆 / **9** 上限回弹 / **10** 禁项回弹 / **15** 跨层不可逆）
+- [ ] **CS-P0-8** 共享 UI 骨架：共享对话框展示「本机用户 = 所有者」；无网络能力项**置灰 + 说明**（不出空壳按钮）
+
+### CS-P1（v1.5，局域网 / 共享文件夹，仍非服务端）
+
+- [ ] **CS-P1-1** 共享文件夹识别 + 成员名册（UNC / 映射盘；机器名 + 账户标识，免登录）
+- [ ] **CS-P1-2** 侧车版本库 `.jkversion`（跨机可见；侧车丢失 → 开新链，主文件不丢）
+- [ ] **CS-P1-3** 跨机文件锁 + 心跳租约（30 min）
+- [ ] **CS-P1-4** 邀请文件 `.jkinvite`（文件指纹 + 角色 + 有效期 + HMAC；篡改 / 过期拒绝导入）
+- [ ] **CS-P1-5** 成员 / 角色管理页（本地版，与 PRD §8.3 布局一致）
+- [ ] **CS-P1-6** 范围级锁试做（段落 / 单元格 / 幻灯片；不支持时退化文件级）
+- [ ] **CS-P1-7** 本地「链接」（局域网路径 + 密码 + 有效期，本质是邀请文件）
+
+### CS-P2（v2，云服务；前置：个体工商户 + VPS + 对象存储 + 域名）
+
+- [ ] **CS-P2-1** 云空间（容量 / 配额 / 回收站）+ 上传下载
+- [ ] **CS-P2-2** 账号系统（注册登录、组织 / 团队 / 成员）
+- [ ] **CS-P2-3** 云端 ACL + 服务端 effective permission 求解（**复用 CS-P0-7 契约**，不得另写一套）
+- [ ] **CS-P2-4** 链接共享（访问范围 / 密码 / 有效期 / 水印 / 撤回 / 审计）
+- [ ] **CS-P2-5** 云端版本链 + 多人并行「待合并修改」+ 3-way merge 冲突面板
+- [ ] **CS-P2-6** 审计日志（共享 / 下载 / 改权 / 删除）
+- [ ] **CS-P2-7** 移动端 / Web 只读 + 评论端
+- [ ] **CS-P2-8** 组织策略中心（缺省配置覆盖 / 外部共享白名单 / 强制水印）
+- [ ] **CS-P2-9** （评估）实时协同 CRDT/OT —— **建议单列 v2.5 或不做**（待 Q3 拍板）
+
+### CS 系列待拍板（阻塞排期，**不阻塞 CS-P0 开工**）
+
+- Q1 云服务时机 / Q2 v2 存储选型 / Q3 是否做实时协同 / Q6 外部软件共存是否硬锁 / Q7 是否兼容 MS Office 协作格式 / Q8 v1 版本存放位置 / Q9 命名版本配额 / Q10 移动端与 Web 范围 / Q11 链接通路是否允许下载
+- **已拍板（2026-10-17）**：Q5 = **A（deny 不可逆）**；`allowSet(maxRole)` = **档位上限**；`detachedFromParent` = **只断 grants**（祖先 denies 与 policyCap 仍生效）；`policyCap` = **effective**（三级 min 已算好，禁存 raw）
+
+### CS 系列门禁补充
+
+- [ ] CS-P0-1/2/3 合并前后跑 `pnpm typecheck` + `pnpm test`；**改 `Modal` / UI 接线后必须跑 `scripts/gui-smoke.mjs`**（AGENTS 1.8）
+- [ ] CS-P0-7 与 CS-P2-5 需跑 `scripts/sharing-merge-scan.mjs`（QA 提供）；**合并产物必须过 `node scripts/adversarial-audit.mjs`**（AGENTS 1.9）
+- [ ] **视觉合规**：对标 WPS 仅限**功能与交互范式**；图标/插画/字体/配色必须自有或开源授权，**禁止从其他软件提取**（AGENTS 铁律 1.10，详见 `docs/research-wps-gui-ip.md`）
