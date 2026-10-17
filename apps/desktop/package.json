@@ -3,16 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "jareking — 兼容 Word/Excel/PPT/PDF 的办公套件（Windows + macOS），内置可自配 API 的 AI 助手",
+  "author": "jareking",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "package": "electron-builder --win --x64",
-    "package:win": "electron-builder --win --x64",
-    "package:mac": "electron-builder --mac --x64 --arm64",
-    "package:mac:x64": "electron-builder --mac --x64",
-    "package:mac:arm64": "electron-builder --mac --arm64",
+    "package": "electron-builder --win --x64 --publish never",
+    "package:win": "electron-builder --win --x64 --publish never",
+    "package:mac": "electron-builder --mac --x64 --arm64 --publish never",
+    "package:mac:x64": "electron-builder --mac --x64 --publish never",
+    "package:mac:arm64": "electron-builder --mac --arm64 --publish never",
     "test": "vitest run"
   },
   "dependencies": {
