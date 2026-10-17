@@ -26,12 +26,13 @@ jareking/
 │   │   └── updater.ts           # electron-updater（仅 packaged 模式生效）
 │   ├── src/renderer/src/
 │   │   ├── App.tsx              # 顶层布局：TabBar + Ribbon + EditorArea + AIPanel + StatusBar
-│   │   ├── components/          # 通用组件 + 业务组件（Ribbon/AIPanel/SettingsPanel/Modal…）
-│   │   ├── stores/              # zustand：uiStore / aiStore / tabStore / toastStore
-│   │   ├── lib/                 # 渲染层公共能力：largeFile / parseClient / pdfRender / chartRenderer / fonts / download
-│   │   ├── writer/              # WriterEditor + jkToHtml / htmlToJk 转换 + opsExecutor
-│   │   ├── sheet/               # SheetEditor + univerAdapter（Univer ↔ JkWorkbook）+ chartData
-│   │   └── slide/               # SlideEditor（Konva）+ addChart（图表绘制见 lib/chartRenderer）
+│   │   ├── components/          # 通用组件 + 业务组件（Ribbon/AIPanel/SettingsPanel/RecoveryCenter/PdfToolbox/MacroSection/Modal…）
+│   │   ├── stores/              # zustand：uiStore / aiStore / aiChatStore / aiMeteringStore / tabStore / toastStore / pendingOpenStore / recoveryStore / macroStore
+│   │   ├── lib/                 # 渲染层公共能力：largeFile / parseClient / parse.worker / pdfRender / pdfExport / printHtml / chartRenderer / fonts / download / autosave / macro{Protocol,Api,Worker,Runner,Host}
+│   │   ├── writer/              # WriterEditor + jkToHtml / htmlToJk + opsExecutor + jkComment/jkRevision/jkParagraphStyle/jkFormula/jkField/jkImage
+│   │   ├── sheet/               # SheetEditor + univerAdapter + chartData + sheetToHtml（打印）+ 打印设置
+│   │   ├── slide/               # SlideEditor（Konva）+ rehearse（排练计时）+ presentationToHtml（打印）
+│   │   └── pdf/                 # PdfReader（pdfjs 阅读器）+ pdfjs 单例 + pdfView 纯函数
 │   └── out/                     # electron-vite build 产物（不是 dist）
 ├── packages/
 │   ├── core/                    # 本地账户/积分/文档库/SQLite + 接口契约
@@ -50,12 +51,12 @@ jareking/
 
 | 包                       | 职责                                                                       | 必读文件                                                                                                                                              |
 | ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/core`         | SQLite（SQL.js WASM）、本地账户、积分账本、文档库、自动保存；**接口契约单一事实源**                     | `src/contracts/*.ts`（ai/account/document/license）、`src/db/`、`src/library/autosaveManager.ts`、`src/account/pointsLedger.ts`                        |
+| `packages/core`         | SQLite（SQL.js WASM）、本地账户、积分账本、文档库、自动保存；**接口契约单一事实源**                     | `src/contracts/*.ts`（ai/account/document/license）、`src/db/`、`src/library/autosaveManager.ts`、`src/account/pointsLedger.ts`、`src/account/aiMeteringLedger.ts`（AI 算力计量账本，`ai_usage` 表）                        |
 | `packages/writer`       | **自研** docx 模型/解析/导出；保真分级 L1/L2/L3                                       | `src/model/document.ts`（模型）、`src/parser/docxParser.ts`、`src/exporter/document.ts`、`src/exporter/units.ts`（单位换算，解析/导出必须互逆）、`src/model/fidelity.ts` |
 | `packages/sheet`        | xlsx 读写为 ExcelJS；公式与单元格渲染由 Univer 承担                                     | `src/parser/xlsxParser.ts`、`src/exporter/index.ts`、`src/exporter/csv.ts`                                                                          |
 | `packages/presentation` | pptx 解析（JSZip+fast-xml）+ **自研**序列化导出                                     | `src/parser/pptxParser.ts`、`src/exporter/index.ts`、`src/model/index.ts`                                                                           |
-| `packages/ai`           | AIAdapter（OpenAI兼容/Claude/Gemini/Ollama）、流式/重试、Planner→Executor 的 ops 协议 | `src/adapter.ts`、`src/planner/{writerOps,sheetOps,presentationOps}.ts`、`src/planner/index.ts`                                                     |
-| `packages/pdf`          | pdf-lib 页面级操作                                                            | `src/index.ts`                                                                                                                                    |
+| `packages/ai`           | AIAdapter（OpenAI兼容/Claude/Gemini/Ollama）、流式/重试、**算力计量（`src/metering.ts`）**、Planner→Executor 的 ops 协议 | `src/adapter.ts`、`src/planner/{writerOps,sheetOps,presentationOps}.ts`、`src/planner/index.ts`                                                     |
+| `packages/pdf`          | pdf-lib 页面操作 + pdfjs（渲染/文本提取）；含水印 `addWatermark`/`addImageWatermark`（位图，中文可用）、`pdfToText`                                                            | `src/index.ts`                                                                                                                                    |
 
 ### 2.2 渲染进程关键文件
 
@@ -65,7 +66,6 @@ jareking/
 | `writer/jkToHtml.ts` / `htmlToJk.ts` | 文档模型 ↔ HTML（编辑器 ↔ 模型 ↔ 文件 的枢纽，**任何格式漂移先查这里**）                                                 |
 | `writer/opsExecutor.ts`              | AI ops 的本地确定性执行；新增 Writer AI 能力在此接                                                            |
 | `sheet/univerAdapter.ts`             | Univer ↔ JkWorkbook 双向映射（`JK→Univer` 打开、`Univer→JK` 保存）；**样式回写目前是空实现，见第 7 节**                 |
-| `sheet/SheetEditor.tsx`              | 挂载 Univer、打开/保存/重置、查找替换、**插入图表（T2.5）**、持有 `__jkDebug`                                         |
 | `sheet/SheetEditor.tsx`              | 挂载 Univer、打开/保存/重置、单元格格式（Ctrl+1）、**插入图表（T2.5，选区→PNG 生成/预览/下载）**、持有 `__jkDebug`                |
 | `sheet/chartData.ts`                 | 单元格矩阵 → 图表数据（`buildChartData`，纯函数；Sheet 图表复用 `lib/chartRenderer`）                             |
 | `slide/SlideEditor.tsx`              | Konva 舞台；所有幻灯片/形状一次性渲染（无懒加载）；`addChart` 复用 `lib/chartRenderer`；持有 `__jkSlideDebug`            |
@@ -75,6 +75,14 @@ jareking/
 | `components/Ribbon.tsx`              | 功能区（已支持折叠：`ribbonCollapsed` + Ctrl+F1）                                                        |
 | `components/AIPanel.tsx`             | 右侧 AI 面板（可折叠 + 拖拽调宽 `aiPanelWidth`）                                                           |
 | `components/SettingsPanel.tsx`       | 设置弹窗（分区可折叠 Accordion）                                                                         |
+| `pdf/PdfReader.tsx` | PDF 阅读器（pdfjs 渲染/翻页/缩放/文本层选择复制/目录/搜索） |
+| `lib/autosave.ts` + `stores/recoveryStore.ts` + `components/RecoveryCenter.tsx` | 自动保存 + 崩溃恢复中心（文档备份，启动自检，恢复→pendingOpen 直达） |
+| `lib/macro*.ts` + `components/MacroSection.tsx` | JS 宏：主进程 CRUD + Worker 沙箱执行 + 设置面板管理 |
+| `lib/printHtml.ts` + `lib/pdfExport.ts` + `sheet/sheetToHtml.ts` + `slide/presentationToHtml.ts` | 全模块导出 PDF（Electron 原生打印管线） |
+| `stores/aiMeteringStore.ts` | AI 算力用量（设置面板「算力用量」分区数据源） |
+| `writer/jkComment.ts` / `jkRevision.ts` / `jkParagraphStyle.ts` | 批注 / 修订 / 段落样式（TipTap mark，模型↔HTML 往返） |
+| `slide/rehearse.ts` | 排练计时纯函数（advTm 自动换片） |
+| `sheet/printSettings.ts` + `sheet/dataTools.ts` + `sheet/pivot.ts` | Sheet 打印设置 / 分列·去重 / 数据透视表（纯函数） |
 
 ---
 
@@ -223,9 +231,11 @@ node scripts/verify-xlsx-roundtrip.mjs   # 同上（表/合并/公式/样式）
 
 ---
 
-## 8. 当前进度（速记，详见 `todo.md` 与 `wps-parity.md`；更新于 2026-10-15）
+## 8. 当前进度（速记，详见 `todo.md` 与 `wps-parity.md`；更新于 2026-10-17）
 
-- ✅ 完成：Phase 0 基础设施；**Phase 1 Writer**（L2：docx 读写 + 域/页码/目录/批注/查找替换/页眉页脚/公式 OMML）；**Phase 2 Sheet**（xlsx + 公式 + 样式双向映射 + 查找替换 + 单元格格式对话框 + **插入图表 T2.5（选区→PNG）**）；**Phase 3 Presentation**（开/编/存 + 表格 + 备注 + 图表 + 动画切换/放映）；**Phase 4 AI** 全链路（适配器 + Planner + 本地 ops 执行）；**Phase 5 PDF 部分**（页面工具 + PDF 转 TXT/图片 + Office 转 PDF 本机 COM）。
-- ⏸ 未做/暂缓：**Phase 6 商业化**、**Phase 7 账户**、**Phase 8 体验发布**；Writer 修订（track changes）、数据透视表、演示母版、JS 宏实现（`docs/macros.md` 方案已定）、Sheet 图表散点类型；大文件「真正流式 xlsx 读取器」（M3，按实测决定）。
-- 🔧 近期（2026-10-15）落地：PDF 功能区一级标签 + PDF 转 TXT/图片 + Office 转 PDF；Writer 批注；PPT 表格；**公共能力下沉（`slide/chartRenderer`→`lib/chartRenderer`、`writer/fonts`→`lib/fonts`、新增 `lib/download`）**；**Sheet 插入图表（T2.5）**；工程质量——修复 `SheetEditor` 缺 `Modal` 导入致 Sheet 崩溃（P0）、desktop typecheck 空转根治（renderer 45 类型错误清零）、模块命名统一（`slide`）；另含 #46 大文件缓解、#47 Sheet 样式双向映射、#48 Writer 域建模。
+- ✅ **WPS 对齐专项 P0 全部清零**：批 1–批 7 + 长尾（查找替换/字数统计/字体库/页眉页脚/页码/目录/导出 PDF/批注/修订/脚注尾注/分栏/样式管理器/公式 OMML/表格/图表/透视表/母版·版式/对象超链接/JS 宏/水印/分列·去重/打印设置/排练计时/崩溃恢复）。
+- ✅ **Phase 0–4** 完成；**Phase 5**：T5.1 PDF 阅读器 ✅、T5.3 三模块导出 PDF ✅、**T5.2 编辑门控待产品决策**、T5.4 未做。
+- ✅ **工程质量与基础设施**：desktop typecheck 真检查 renderer（45 类型错误清零）；**AI 算力计量接口**（core 契约 `AiMetering` + `packages/ai/metering` + `ai_usage` 表 + IPC + 设置面板）；**对抗性审计**（`scripts/adversarial-audit.mjs`：边界/保真/包完整性/**WPS COM 跨软件**，P0/P1 已清零）；**崩溃恢复中心**（`lib/autosave` + `RecoveryCenter` + DB v3）。
+- ⏸ 未做：**Phase 6 商业化**（T6.1–T6.7，最缺失块）、**Phase 7 账户/云同步**、**Phase 8 体验发布**；T5.2/T5.4；T0.6 CI；T1.7 拼写检查。
+- 📊 测试基线（2026-10-17）：writer 58 · desktop 250 · presentation 52 · core 87 · sheet 55 · pdf 15 · ai 16（全绿）。
 - ⏸ 大文件深层架构债（不丢项）：仅剩「真正流式 xlsx 读取器」——见 `lib/largeFile.ts` 注释 + `todo.md`。
