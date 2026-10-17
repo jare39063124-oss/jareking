@@ -12,3 +12,21 @@ coverage/
 *.tsbuildinfo
 output/
 .workbuddy/
+
+# ---- Android（apps/mobile）----
+# android/ 工程本身要入库（否则每人需重新 `cap add`，模板版本会漂移），
+# 但构建产物、本机 SDK 路径、gradle 缓存一律不入库。
+apps/mobile/android/build/
+apps/mobile/android/app/build/
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/capacitor-cordova-android-plugins/build/
+apps/mobile/android/app/src/main/assets/public/
+apps/mobile/android/app/src/main/assets/capacitor.config.json
+*.apk
+*.aab
+
+# 冒烟产物
+apps/mobile/.smoke.png
+apps/mobile/.smoke-profile/
+apps/mobile/.dbg-profile/
