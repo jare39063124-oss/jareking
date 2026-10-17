@@ -1,7 +1,7 @@
 # jareking 深度扫描测试报告（deep-scan）
 
 > 生成者：QA 严过关 · 由 `scripts/deep-scan.mjs` 自动生成
-> 生成时间：2026-10-17T01:34:56.237Z
+> 生成时间：2026-10-17T01:35:39.243Z
 > 运行环境：win32 / Node v22.22.2
 
 ## 1. 概述
@@ -66,8 +66,17 @@
 | D44 | Convert | PDF 图片水印（addImageWatermark） | 页数守恒、输出合法 PDF | 页数=1 head=%PDF- | ✅ |
 | D45 | CrossSoft | PDF 产物可读性（pdf-lib 解析 + 页数 + MediaBox） | 可解析、页数正确、MediaBox 合法 | 页数=2 MediaBox=595.3x841.9 getPdfInfo=2 | ✅ |
 | D46 | CrossSoft | PDF 产物可读性（pdfjs 文本层解析不崩溃） | pdfjs 能打开并逐页解析 | pdfjs 解析成功（文本 6 字符） | ✅ |
+| D47 | CrossSoft | WPS 打开 jareking-deep-doc-1.docx | 能被本机 WPS 正常打开并读回结构 | 段落=11 表格=1 | ✅ |
+| D48 | CrossSoft | WPS 打开 jareking-deep-doc-2.docx | 能被本机 WPS 正常打开并读回结构 | 段落=3 表格=0 | ✅ |
+| D49 | CrossSoft | WPS 打开 jareking-deep-doc-3.docx | 能被本机 WPS 正常打开并读回结构 | 段落=3 表格=0 | ✅ |
+| D50 | CrossSoft | WPS 打开 jareking-deep-sheet-1.xlsx | 能被本机 WPS 正常打开并读回结构 | sheets=1 首表UsedRange=4x3 | ✅ |
+| D51 | CrossSoft | WPS 打开 jareking-deep-sheet-2.xlsx | 能被本机 WPS 正常打开并读回结构 | sheets=3 首表UsedRange=1x2 | ✅ |
+| D52 | CrossSoft | WPS 打开 jareking-deep-sheet-3.xlsx | 能被本机 WPS 正常打开并读回结构 | sheets=1 首表UsedRange=2x3 | ✅ |
+| D53 | CrossSoft | WPS 打开 jareking-deep-slide-1.pptx | 能被本机 WPS 正常打开并读回结构 | slides=1 | ✅ |
+| D54 | CrossSoft | WPS 打开 jareking-deep-slide-2.pptx | 能被本机 WPS 正常打开并读回结构 | slides=1 | ✅ |
+| D55 | CrossSoft | WPS 打开 jareking-deep-slide-3.pptx | 能被本机 WPS 正常打开并读回结构 | slides=2 | ✅ |
 
-**小计**：共 46 项 —— 通过 45 / 设计内降级 1 / 失败 0。
+**小计**：共 55 项 —— 通过 54 / 设计内降级 1 / 失败 0。
 
 ## 3. Bug 清单（分级）
 
@@ -75,13 +84,33 @@
 
 ## 4. 跨软件可读性结论
 
-**未纳入真实 WPS/Office 实测结果**（未检测到 `deep-cross-out.json`）。
+**结论：已用本机 WPS 的 COM 自动化组件真实打开 jareking 导出的复杂样本并读回结构。**
 
-两步执行：1) `node scripts/deep-scan.mjs`（生成样本 + `deep-cross.ps1`）；2) PowerShell 执行 `& "C:\Users\Administrator\AppData\Local\Temp\jareking-deep-scan\deep-cross.ps1"`；3) 再次运行本脚本纳入结果。
+引擎探测（ProgID → 自报名/版本）：
+
+| 大类 | ProgID | 自报名 | 版本 |
+|---|---|---|---|
+| word | Word.Application | Microsoft Word | 12.0 |
+| excel | Excel.Application | Microsoft Excel | 12.0 |
+| ppt | KWPP.Application | Microsoft PowerPoint | 12.0 |
+
+打开结果：
+
+| 文件 | 大类 | 打开 | 读回结构 |
+|---|---|---|---|
+| jareking-deep-doc-1.docx | word | ✅ | 段落=11 表格=1 |
+| jareking-deep-doc-2.docx | word | ✅ | 段落=3 表格=0 |
+| jareking-deep-doc-3.docx | word | ✅ | 段落=3 表格=0 |
+| jareking-deep-sheet-1.xlsx | excel | ✅ | sheets=1 首表UsedRange=4x3 |
+| jareking-deep-sheet-2.xlsx | excel | ✅ | sheets=3 首表UsedRange=1x2 |
+| jareking-deep-sheet-3.xlsx | excel | ✅ | sheets=1 首表UsedRange=2x3 |
+| jareking-deep-slide-1.pptx | ppt | ✅ | slides=1 |
+| jareking-deep-slide-2.pptx | ppt | ✅ | slides=1 |
+| jareking-deep-slide-3.pptx | ppt | ✅ | slides=2 |
 
 ## 5. 本轮 GUI 端到端冒烟（复用既有脚本 · 真实 Electron + CDP）
 
-> 运行时间：2026-10-17T01:34:56.237Z；构建产物 `apps/desktop/out`（2026-10-16 18:59 构建，晚于全部非测试源码 → 非陈旧构建）。
+> 运行时间：2026-10-17T01:35:39.243Z；构建产物 `apps/desktop/out`（2026-10-16 18:59 构建，晚于全部非测试源码 → 非陈旧构建）。
 > 脚本均为既有资产，本轮只**运行**（其中 `ai-ops-acceptance.mjs` 因「AI 面板默认收起」改造后未同步展开面板，属**脚本缺陷**，本轮已自修）。
 
 | 脚本 | 覆盖链路 | 结果 | 关键证据 |
@@ -96,11 +125,36 @@
 说明：`ai-ops-acceptance.mjs` 首轮 15/24（Writer 全挂）根因已定位为**脚本侧** —— 该脚本未展开默认收起的 AI 面板，`sendPanel` 恒返回 `no-input`；
 与 `gui-smoke.mjs`（显式点击「展开 AI 助手面板」后 `aiPanelSent=sent / aiDocChanged=true`）对照证实**产品侧 Writer AI 写入正常**；补上展开动作后复跑 **24/24（100%）**。
 
-## 6. 路由判定（交工程师 / 主理人转派）
+## 6. 缺陷闭环复验（P1 · parseXlsx 静默空簿）
+
+> 本轮发现的**唯一源码 P1** 已修复并复验；本节为验收证据（报告其余章节为**复测后**状态）。
+
+| 项 | 内容 |
+|---|---|
+| 缺陷 | `parseXlsx` 对「非 xlsx / 损坏但仍为合法 zip」的文件**静默返回空簿**（原 D10/D11） |
+| 源码 | `packages/sheet/src/parser/xlsxParser.ts#parseXlsx` |
+| 修复内容 | ① 校验包内 `xl/workbook.xml`（缺失即抛）；② 移除「伪造 20×10 空表」兜底；③ 新增 `packages/sheet/test/xlsxParser.test.ts`（10 条） |
+| 提交 | `d6577b3` |
+| 复测命令 | `node scripts/deep-scan.mjs --no-com` |
+| 复测结果 | D10 ✅ / D11 ✅；46 用例：45 通过 / 1 设计内降级 / **0 失败** |
+| 错误信息（实测） | `不是有效的 xlsx 文件：缺少 xl/workbook.xml，可能不是 Excel 工作簿` |
+
+**修复前后对比**：
+
+| 用例 | 修复前 | 修复后 |
+|---|---|---|
+| D10 `docx 字节 → parseXlsx` | ❌ 静默返回 1 张空表（P1 越权式误导：用户误以为文件为空） | ✅ 明确抛错 |
+| D11 `pptx 字节 → parseXlsx` | ❌ 静默返回 1 张空表（P1） | ✅ 明确抛错 |
+
+**回归验证**：D12（截断 xlsx）仍明确抛错；D20（空 workbook 导出）仍正常；`packages/sheet` 单测 **65/65** 全绿（含 `xlsxParser.test.ts` 10 条，独立复跑确认）；跨软件 9/9 不受影响。
+
+**结论：P1 闭环，无回归。**
+
+## 7. 路由判定（交工程师 / 主理人转派）
 
 - **判定：NoOne（全部通过）**。
 
-## 7. 未覆盖项与局限（如实声明）
+## 8. 未覆盖项与局限（如实声明）
 
 - **视觉/像素保真**：跨软件仅比对结构计数（段落/表格/sheets/slides），未逐像素比对版式、字体回退与分页位置。
 - **本机仅有 WPS**：无真实 Microsoft Office；COM 组件自报 "Microsoft Office 12.0" 为 WPS 兼容层。
@@ -109,7 +163,7 @@
 - **CSV 导入**、**xlsx→json**：项目当前未提供该能力（非缺陷，属未实现）；故未纳入转换矩阵。
 - **旧二进制格式**（.doc/.xls/.ppt）、加密/受保护文档、宏(VBA)、数字签名、SmartArt/OLE 未覆盖。
 
-## 8. 总体结论
+## 9. 总体结论
 
-- 汇总：P0=0，P1=0，P2=0，设计内降级=1，通过=45，合计=46。
+- 汇总：P0=0，P1=0，P2=0，设计内降级=1，通过=54，合计=55。
 - **结论**：本轮未发现阻断/严重缺陷；格式转换、往返幂等、模拟任务链路与跨软件可读性均达标。

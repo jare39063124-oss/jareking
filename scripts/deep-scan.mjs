@@ -1418,7 +1418,34 @@ function buildReport(cross) {
   L.push('与 `gui-smoke.mjs`（显式点击「展开 AI 助手面板」后 `aiPanelSent=sent / aiDocChanged=true`）对照证实**产品侧 Writer AI 写入正常**；补上展开动作后复跑 **24/24（100%）**。');
   L.push('');
 
-  L.push('## 6. 路由判定（交工程师 / 主理人转派）');
+  // §6 缺陷闭环复验（P1 · parseXlsx 静默空簿）
+  L.push('## 6. 缺陷闭环复验（P1 · parseXlsx 静默空簿）');
+  L.push('');
+  L.push('> 本轮发现的**唯一源码 P1** 已修复并复验；本节为验收证据（报告其余章节为**复测后**状态）。');
+  L.push('');
+  L.push('| 项 | 内容 |');
+  L.push('|---|---|');
+  L.push('| 缺陷 | `parseXlsx` 对「非 xlsx / 损坏但仍为合法 zip」的文件**静默返回空簿**（原 D10/D11） |');
+  L.push('| 源码 | `packages/sheet/src/parser/xlsxParser.ts#parseXlsx` |');
+  L.push('| 修复内容 | ① 校验包内 `xl/workbook.xml`（缺失即抛）；② 移除「伪造 20×10 空表」兜底；③ 新增 `packages/sheet/test/xlsxParser.test.ts`（10 条） |');
+  L.push('| 提交 | `d6577b3` |');
+  L.push('| 复测命令 | `node scripts/deep-scan.mjs --no-com` |');
+  L.push('| 复测结果 | D10 ✅ / D11 ✅；46 用例：45 通过 / 1 设计内降级 / **0 失败** |');
+  L.push('| 错误信息（实测） | `不是有效的 xlsx 文件：缺少 xl/workbook.xml，可能不是 Excel 工作簿` |');
+  L.push('');
+  L.push('**修复前后对比**：');
+  L.push('');
+  L.push('| 用例 | 修复前 | 修复后 |');
+  L.push('|---|---|---|');
+  L.push('| D10 `docx 字节 → parseXlsx` | ❌ 静默返回 1 张空表（P1 越权式误导：用户误以为文件为空） | ✅ 明确抛错 |');
+  L.push('| D11 `pptx 字节 → parseXlsx` | ❌ 静默返回 1 张空表（P1） | ✅ 明确抛错 |');
+  L.push('');
+  L.push('**回归验证**：D12（截断 xlsx）仍明确抛错；D20（空 workbook 导出）仍正常；`packages/sheet` 单测 **65/65** 全绿（含 `xlsxParser.test.ts` 10 条，独立复跑确认）；跨软件 9/9 不受影响。');
+  L.push('');
+  L.push('**结论：P1 闭环，无回归。**');
+  L.push('');
+
+  L.push('## 7. 路由判定（交工程师 / 主理人转派）');
   L.push('');
   const routed = failures.filter((r) => r.sourceLoc);
   if (!routed.length) {
@@ -1437,7 +1464,7 @@ function buildReport(cross) {
     L.push('');
   }
   L.push('');
-  L.push('## 7. 未覆盖项与局限（如实声明）');
+  L.push('## 8. 未覆盖项与局限（如实声明）');
   L.push('');
   L.push('- **视觉/像素保真**：跨软件仅比对结构计数（段落/表格/sheets/slides），未逐像素比对版式、字体回退与分页位置。');
   L.push('- **本机仅有 WPS**：无真实 Microsoft Office；COM 组件自报 "Microsoft Office 12.0" 为 WPS 兼容层。');
@@ -1446,7 +1473,7 @@ function buildReport(cross) {
   L.push('- **CSV 导入**、**xlsx→json**：项目当前未提供该能力（非缺陷，属未实现）；故未纳入转换矩阵。');
   L.push('- **旧二进制格式**（.doc/.xls/.ppt）、加密/受保护文档、宏(VBA)、数字签名、SmartArt/OLE 未覆盖。');
   L.push('');
-  L.push('## 8. 总体结论');
+  L.push('## 9. 总体结论');
   L.push('');
   const p0 = failures.filter((r) => r.severity === 'P0').length;
   const p1 = failures.filter((r) => r.severity === 'P1').length;
