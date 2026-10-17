@@ -58,6 +58,12 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      # @jareking/core 的类型声明由它自己的构建产物 dist/ 提供（package.json 的 types 指向 dist），
+      # 而全新检出的仓库没有 dist —— 不先构建它，ai / writer / desktop 会集体报 TS2307
+      # "Cannot find module '@jareking/core'"。根 package.json 的 typecheck 脚本同样是先 build core。
+      - name: 预构建 @jareking/core（提供类型声明）
+        run: pnpm --filter @jareking/core build
+
       # 门禁范围说明（2026-10-17）：
       #   只跑 **@jareking/desktop 及其依赖图**（core / ai / writer / sheet / pdf / presentation），
       #   而不是根目录 `pnpm typecheck` / `pnpm test`。原因：`apps/mobile` 是与本流水线无关的
