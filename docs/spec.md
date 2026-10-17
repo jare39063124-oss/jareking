@@ -1,6 +1,8 @@
 # jareking 产品规格文档（Spec）
 
-> 工作流：Trae Spec 模式 · 版本 **v1.1** · 2026-10-12 · 状态：**待审批**
+> 工作流：Trae Spec 模式 · 版本 **v1.3** · 2026-10-17 · 状态：**待审批**
+> v1.3 修订（2026-10-17）：**Android 端正式立项**（此前记为"另行评估"）。外壳选型定为 **Capacitor 7 + 系统 WebView**（Electron 不支持 Android），渲染层源码零改动复用，平台差异收敛在 `apps/mobile/src/platform/`（`window.jareking` 桥 30 通道 + IndexedDB 持久层 + 保存拦截）。spike 实测见 `docs/mobile-spike-report.md`（debug APK 9.6 MB，Univer/TipTap/Konva/pdfjs 均可用）。移动端能力差异：**Office→PDF 与「导出 PDF」不可用**（无 COM / 无 printToPDF），需显式降级。
+> v1.2 修订（2026-10-17）：**平台由「Windows 单平台、放弃 macOS」改为 Windows 10/11 + macOS 双平台**（macOS 重新启动，见第 2 章 #2 与第 5 章、第 7 章；平台差异与适配层见 `docs/macos-platform-matrix.md`）。
 > v1.1 修订：平台收敛为 Windows-only；Presentation 升入 v1 全量范围；商业模式按"个人独立开发者、无商业资质、无云服务器"约束调整落地路径；云同步改为预留；补充品牌名检索结论。
 > 本文档基于三轮需求澄清提问 + 一轮开放问题答复形成（见第 2 章决策记录）。审批通过后方可进入开发（见 `todo.md`）。
 
@@ -25,14 +27,14 @@
 
 ### 1.3 产品定位
 
-> **jareking = WPS 的平替甚至更优解**：完整兼容 Word/Excel/PPT/PDF 的办公套件（Windows 桌面端），内置用户可自配 API 的强大 AI 助手，通过"积分 + 买断"商业化，不搞订阅制。
+> **jareking = WPS 的平替甚至更优解**：完整兼容 Word/Excel/PPT/PDF 的办公套件（**Windows + macOS 桌面端**），内置用户可自配 API 的强大 AI 助手，通过"积分 + 买断"商业化，不搞订阅制。
 
 ### 1.4 v1 目标（成功标准）
 
 1. WPS 用户下载 jareking 后，能直接打开/编辑/保存 .docx/.xlsx/.pptx 文件，常用格式无明显丢失
 2. 用户配自己的 API Key 即可用全部 AI 能力；平台托管额度待服务器就绪后开放
 3. 商业化闭环跑通：安装送积分 → 用 AI → 第三方平台充值/买断 → 门控生效，全链路可走通
-4. Windows 10/11 可安装、可自动更新
+4. Windows 10/11 与 macOS（Intel / Apple Silicon）均可安装、可自动更新
 
 ### 1.5 现实边界（重要）
 
@@ -67,7 +69,7 @@ WPS 是 30 年积累、千人团队的产品。jareking 采用 **"保真分级 +
 | # | 决策项 | 结论 |
 |---|---|---|
 | 1 | 产品形态 | **类 WPS 办公套件**（Writer/Sheet/Presentation/PDF 多模块），非单一图像编辑器 |
-| 2 | 目标平台 | **Windows 10/11（x64）单平台**（v1.1 修订：放弃 macOS） |
+| 2 | 目标平台 | **Windows 10/11（x64）+ macOS（Intel x64 / Apple Silicon arm64）+ Android（手机/平板，minSdk 23）三平台**（v1.1 曾收敛为 Windows-only 并放弃 macOS；**v1.2 于 2026-10-17 推翻该决策**，macOS 重启；**v1.3 同日新增 Android 立项**，走 Capacitor + 系统 WebView） |
 | 3 | MVP 范围 | **全量都做**，分阶段交付，配详细 Todolist |
 | 4 | 格式兼容 | .docx/.xlsx/.pptx **完整读写** + **PDF 读写** |
 | 5 | AI 能力 | **全部**：自然语言改文档、自然语言处理表格、内容一键生成 |
@@ -178,8 +180,8 @@ WPS 是 30 年积累、千人团队的产品。jareking 采用 **"保真分级 +
 | 类别 | 指标 |
 |---|---|
 | 性能 | 冷启动 < 3s；100 页文档打开 < 2s；编辑输入延迟 < 50ms；大表（1万行）滚动流畅 |
-| 兼容 | Windows 10/11（x64）单平台；无需考虑 macOS/ARM 适配 |
-| 体积 | 安装包 < 150MB（Electron 方案预期） |
+| 兼容 | **桌面**：**Windows 10/11（x64）** + **macOS（x64 / Apple Silicon arm64）**，两平台功能对等，唯一能力差异：Office→PDF 在 Windows 走本机 WPS/Office COM，在 macOS 走 LibreOffice headless（需用户自行安装），未安装时明确提示降级到「导出 PDF」<br>**移动**：Android 6.0+（minSdk 23 / targetSdk 35），走系统 WebView（需 Chromium 内核 ≥ 主流版本）。能力差异：Office→PDF 与「导出 PDF」不可用（无 COM / 无 printToPDF），UI 改为触屏布局（底部 Tab + 抽屉） |
+| 体积 | 桌面安装包 < 150MB（Electron 方案预期，实测 111MB）；**Android APK ≤ 30MB（实测 12.9MB）** |
 | 安全 | API Key 用系统凭据管理器加密存储（keytar/DPAPI）；许可证 ed25519 签名防伪造；兑换码服务端校验（就绪后） |
 | 离线 | 核心编辑 + AI（自带 Key/本地 Ollama）全离线可用；仅联网用于更新检查 |
 | 隐私 | 用户 API Key 与文档内容不用于任何训练；明示隐私政策；纯本地运行默认无数据外传 |
@@ -243,7 +245,7 @@ WPS 是 30 年积累、千人团队的产品。jareking 采用 **"保真分级 +
 - 文档处理生态（docx/xlsx/pptx/pdf 库）几乎全部优先支持 JS/TS
 - 24h 不间断 Agent 并行开发模式下，TS 生态的 AI 可编码性最高（训练数据最丰富）
 - 原生能力（菜单、托盘、文件关联、自动更新）全部有成熟方案
-- 单平台（Windows）进一步降低构建与测试成本
+- 双平台（Windows + macOS）由同一套代码产出：Electron 天然跨这两端，差异面集中在打包/签名/平台专有能力（Office→PDF、应用菜单、文件打开事件、快捷键主修饰键），已抽成 `apps/desktop/src/main/platform/` 与 `renderer/src/lib/platform.ts` 两个适配层，不散落 `if (platform)`
 
 ### 7.2 前端：React 18 + TypeScript + Tailwind CSS + Zustand
 
@@ -312,7 +314,8 @@ WPS 是 30 年积累、千人团队的产品。jareking 采用 **"保真分级 +
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  Electron 主进程（Windows）                          │
+│  Electron 主进程（Windows / macOS，平台差异经        │
+│   main/platform/ 适配层隔离）                        │
 │  ├── 窗口/菜单/文件关联/自动更新                        │
 │  ├── 本地文档库（SQLite + 文件系统）                    │
 │  ├── 本地账户与积分（SQLite，设备绑定）                  │
@@ -381,7 +384,7 @@ WPS 是 30 年积累、千人团队的产品。jareking 采用 **"保真分级 +
 | 风险 | 影响 | 缓解策略 |
 |---|---|---|
 | .docx/.pptx 全保真 round-trip 是行业级难题（ONLYOFFICE 做了十年） | 复杂格式文档打开后格式漂移 | 保真分级 + 打开时提示 + "另存为 jareking 格式"保留编辑态 |
-| Electron 体积与内存占用 | 轻量用户流失 | 按需加载模块；单平台部署降低构建复杂度 |
+| Electron 体积与内存占用 | 轻量用户流失 | 按需加载模块；双平台分别出架构包（不做 universal，省一半体积） |
 | 第三方平台充值体验中断（依赖外部平台） | 转化率低、平台政策变动 | v1 可接受；v1.5 个体工商户后迁移原生支付 |
 | 许可证私钥安全 | 私钥泄露 → 激活码被伪造 | 私钥离线保管 + 备份 + 泄露时轮换（吊销旧签名的版本号清单随更新下发） |
 | 广告无法接入（个人无资质） | 免费用户无广告收入 | 主推充值+买断；广告入口预留待资质就绪 |
@@ -404,6 +407,7 @@ WPS 是 30 年积累、千人团队的产品。jareking 采用 **"保真分级 +
 |---|---|---|---|---|
 | v1.0 | 2026-10-12 | 需求方 | 已答复 | 6 条开放问题答复：品牌待检索/积分可行/个人无资质/PPT不降级/放弃macOS/云端预留 |
 | v1.1 | 2026-10-12 | （待填写） | 待审批 | 按 v1.0 答复修订 |
+| v1.2 | 2026-10-17 | 需求方 | 已答复 | **推翻"放弃 macOS"**：改为 Windows + macOS 双平台（macOS 重启）；适配层与打包方案见 `docs/macos-platform-matrix.md` |
 
 ---
 

@@ -7,6 +7,7 @@ import { useRecoveryStore } from '../stores/recoveryStore';
 import { toast } from '../stores/toastStore';
 import { setPendingOpen } from '../stores/pendingOpenStore';
 import { PdfReader } from '../pdf/PdfReader';
+import { accelLabel } from '../lib/platform';
 import { SheetEditor } from '../sheet/SheetEditor';
 import { SlideEditor } from '../slide/SlideEditor';
 import { WriterEditor } from '../writer/WriterEditor';
@@ -178,7 +179,7 @@ function EmptyState() {
         ) : null}
         <div className="flex flex-col items-center gap-2 text-center">
           <span className="text-display font-semibold text-fg">新建文档</span>
-          <p className="text-body text-muted">选择模块开始创作，或按 Ctrl+Shift+P 打开命令面板</p>
+          <p className="text-body text-muted">选择模块开始创作，或按 {accelLabel('P', true)} 打开命令面板</p>
         </div>
         <div className="flex flex-wrap justify-center gap-3">
           {modules.map((module) => {

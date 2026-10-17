@@ -14,6 +14,15 @@ const { autoUpdater } = electronUpdater;
  *   下载完成后在退出应用时经 autoInstallOnAppQuit 安装，即天然支持回滚到旧版本：
  *   用户不退出则继续使用旧版本）
  * - 本阶段所有事件仅输出 console 日志，后续接入本地崩溃日志/日志文件时统一收敛
+ *
+ * macOS 差异（交接文档 §7.2 第 5 条）：
+ *  electron-updater 在 mac 上依赖 **Squirrel.Mac**，要求应用已用 Developer ID 证书签名，
+ *  否则 `checkForUpdates` 会以「Could not get code signature」类错误拒绝执行。
+ *  因此：
+ *   - 未签名的本地/CI 构建（identity=null）**只会打印一条 error 日志**，不影响应用可用性；
+ *   - 正式分发必须补 Apple Developer 证书 + 公证（notarytool）后自动更新才真正生效。
+ *  这里不做「mac 一律跳过」的硬编码开关——否则签名后还得改代码；错误统一由下方
+ *  `autoUpdater.on('error')` 兜住，不会弹出原生错误框打断用户。
  */
 export function initAutoUpdater(): void {
   // 开发模式（未打包）不执行更新检查

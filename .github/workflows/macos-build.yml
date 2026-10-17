@@ -1,0 +1,105 @@
+# jareking macOS 构建流水线
+#
+# 为什么需要它（交接文档 §7 的硬约束）：
+#   本项目的开发机是 **Windows**，而 electron-builder **无法在 Windows 上产出 macOS 产物**
+#   （dmg / app bundle / 代码签名 / 公证全部依赖 macOS 工具链 hdiutil / codesign / notarytool）。
+#   所以在 Windows 上"开发 macOS 版"的正确做法是：
+#     ① 代码层的平台适配在本机完成（typecheck / test / Windows 构建全部可验）；
+#     ② macOS 产包交给 GitHub Actions 的 macOS runner。
+#
+# 签名策略：
+#   - 默认 **不签名**（CSC_IDENTITY_AUTO_DISCOVERY=false）→ 产出可直接安装测试的 dmg/zip，
+#     但首次打开会被 Gatekeeper 拦截，需右键「打开」或 xattr 解除隔离（见 docs/macos-release.md）；
+#   - 仓库配置以下 Secrets 后自动转为签名 + 公证（推荐正式分发）：
+#       MAC_CSC_LINK          Developer ID Application 证书 .p12 的 base64
+#       MAC_CSC_KEY_PASSWORD  .p12 密码
+#       APPLE_ID              公证用 Apple ID
+#       APPLE_APP_SPECIFIC_PASSWORD
+#       APPLE_TEAM_ID
+name: macOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: '是否走签名+公证（需先配置仓库 Secrets）'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # macos-14 = Apple Silicon 运行器；在其上可同时交叉构建 x64 与 arm64 产物
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # 与 package.json 的 packageManager 保持一致
+          version: 12.11.2
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 单元测试
+        run: pnpm test
+
+      - name: 编译（main / preload / renderer）
+        env:
+          CODEBUDDY_SAFE_DELETE_ENABLED: '0'
+        run: pnpm build
+
+      # ── 打包：签名版 / 未签名版二选一 ──────────────────────────────────
+      - name: 打包 dmg + zip（签名 + 公证）
+        if: ${{ inputs.sign }}
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CODEBUDDY_SAFE_DELETE_ENABLED: '0'
+        run: pnpm --filter @jareking/desktop package:mac
+
+      - name: 打包 dmg + zip（未签名，仅内测）
+        if: ${{ !inputs.sign }}
+        env:
+          # 显式关闭证书自动发现：无证书环境下 electron-builder 直接跳过签名而不是报错
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CODEBUDDY_SAFE_DELETE_ENABLED: '0'
+        run: pnpm --filter @jareking/desktop package:mac
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: jareking-macos-${{ github.ref_name }}
+          # electron-builder 输出目录见 apps/desktop/electron-builder.yml → directories.output
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.blockmap
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 打印产物清单（体积敏感项目：必须能看到实际大小）
+        run: ls -lh apps/desktop/release/

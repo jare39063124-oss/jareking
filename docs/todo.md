@@ -1,8 +1,11 @@
 # jareking 开发 Todolist
 
-> 配套文档：`spec.md`（产品规格）· 版本 v1.1 · 2026-10-12>   
-> 使用规则：开发前须通过 Spec 审批；任务完成后勾选并记录日期；接口契约优先于并行开发。>   
-> v1.1 变更：Windows 单平台；Presentation 升入 v1；商业化按个人开发者路径（第三方平台充值 + 离线许可证）；云同步转预留；新增品牌占位任务。>   
+> 配套文档：`spec.md`（产品规格）· 版本 v1.1 · 2026-10-12
+>   
+> 使用规则：开发前须通过 Spec 审批；任务完成后勾选并记录日期；接口契约优先于并行开发。
+>   
+> v1.1 变更：Windows 单平台；Presentation 升入 v1；商业化按个人开发者路径（第三方平台充值 + 离线许可证）；云同步转预留；新增品牌占位任务。
+>   
 > **2026-10-14 增补**：用户要求「WPS 全量功能」——差距显性化为 `docs/wps-parity.md` 对齐矩阵（P0/P1/P2 三档分批），批 1（查找替换/字数统计/字体库）已落地；字体版权调研与合规方案见 `docs/fonts.md`。
 
 ## WPS 对齐专项（2026-10-14 增设，矩阵与批次见 docs/wps-parity.md）
@@ -212,8 +215,10 @@
 
 ## Phase 5 — PDF
 
-> **2026-10-13 修订**：融合用户自研「PDF页面工具箱 v2」（PyInstaller + PyMuPDF，桌面 PDF页面工具箱(4).exe）的功能清单。>   
-> 数据层已落地：\`packages/pdf\`（pdf-lib）——页面提取/删除/合并/旋转/插入/替换/图片转PDF（A4 等比居中）+ 页码规格解析（"1,3-5,last"），真实 24 页 PDF 冒烟 10/10 通过。>   
+> **2026-10-13 修订**：融合用户自研「PDF页面工具箱 v2」（PyInstaller + PyMuPDF，桌面 PDF页面工具箱(4).exe）的功能清单。
+>   
+> 数据层已落地：\`packages/pdf\`（pdf-lib）——页面提取/删除/合并/旋转/插入/替换/图片转PDF（A4 等比居中）+ 页码规格解析（"1,3-5,last"），真实 24 页 PDF 冒烟 10/10 通过。
+>   
 > 压缩（栅格化重建，需 pdf.js 渲染层）与 Office 转 PDF（需本机 WPS/Office COM）属引擎层，随阅读器任务接入。
 > **2026-10-15 补（WPS 对齐批）**：PDF 工具箱「转换」组补 2 项真实功能——**PDF 转 TXT**（pdfjs 文本提取，纯函数 `pdfToText`，4 测 Node 通过）、**PDF 转图片**（pdfjs 渲染 canvas→PNG，渲染进程，结果区缩略图预览 + 逐张/全部下载）。PDF↔Office 双向、加密、水印、压缩、OCR 仍待 T5 引擎层。
 > **2026-10-15 补（Office→PDF 落地）**：功能区「PDF 工具」的「Office 转 PDF」组三按钮（Word/Excel/PPT → PDF）由 `toastNotImplemented` 空壳改为**真驱动本机引擎**——主进程 `services/officeConvert.ts` 用 `child_process.spawn` 调 `powershell.exe` 执行由 `shared/officePdfScript.ts`（纯函数，**8 条单测**）生成的脚本：ProgID 按 `Word/Excel/PowerPoint.Application` 优先、WPS `KWPS/KET(et)/KWPP(wpp)` 备选，只读打开原件 → 导出 PDF → `Quit()` → 释放 COM，临时 `.ps1` 用后即删，含 120s 超时强杀。纯本地、零成本、零服务端（贴合 jareking v1 约束）。**真实 COM 转换需在本机已装 Microsoft Office/WPS 的 Windows 上验收**（无头/沙箱环境无法实测，故以脚本生成器纯函数单测作为硬验证）；**WPS 个人版 COM 支持可能有限，Office 优先**。**PDF→Office、加密、水印、压缩、OCR 仍待排期**（T5.1~T5.3）。
@@ -258,8 +263,8 @@
 | 平台托管 AI 额度 | 无服务器计量         | VPS + 服务端就绪         |
 | 云同步/多端     | 无云服务器与存储       | VPS + 对象存储就绪        |
 | 原生微信/支付宝支付 | 无商户号           | 个体工商户注册             |
-| macOS 版本   | 需求方决定放弃        | 战略需要时重启（渲染层跨平台设计保持） |
-| Apple IAP  | 随 macOS 放弃     | 不再涉及                |
+| ~~macOS 版本~~ | **已重启（2026-10-17）** | 见下方「M 系列 — macOS 版专项」 |
+| Apple IAP  | 桌面直装不走 MAS，无需 IAP | 若上架 Mac App Store 再评估 |
 
 ---
 
@@ -383,3 +388,131 @@
 - [ ] CS-P0-1/2/3 合并前后跑 `pnpm typecheck` + `pnpm test`；**改 `Modal` / UI 接线后必须跑 `scripts/gui-smoke.mjs`**（AGENTS 1.8）
 - [ ] CS-P0-7 与 CS-P2-5 需跑 `scripts/sharing-merge-scan.mjs`（QA 提供）；**合并产物必须过 `node scripts/adversarial-audit.mjs`**（AGENTS 1.9）
 - [ ] **视觉合规**：对标 WPS 仅限**功能与交互范式**；图标/插画/字体/配色必须自有或开源授权，**禁止从其他软件提取**（AGENTS 铁律 1.10，详见 `docs/research-wps-gui-ip.md`）
+
+---
+
+## M 系列 — macOS 版专项（2026-10-17 立项）
+
+> 依据：`docs/handoff-2026-10-17.md` §7 + `docs/macos-platform-matrix.md`（耦合清单）+ `docs/macos-release.md`（签名公证）
+> 决策变更：`docs/spec.md` v1.2 已把「Windows 单平台、放弃 macOS」改为「Windows + macOS 双平台」。
+> 铁律不变：改 UI 接线跑 `gui-smoke`、改 OOXML 跑 `adversarial-audit`、门禁三绿才准提交。
+
+### M1 平台适配层（✅ 2026-10-17 完成）
+
+- [x] **M1.1** 主进程平台判定单一来源 `main/platform/index.ts`（`process.platform` 只允许出现在这里）
+- [x] **M1.2** Office→PDF 抽象为门面 `platform/officeConvert.ts` + Win 实现（迁入原 `services/officeConvert.ts`，COM 行为零变化）+ **mac 实现（LibreOffice headless）**
+- [x] **M1.3** mac 实现的关键坑固化：`-env:UserInstallation` 独立 profile（避免与 GUI 抢 profile 静默失败）、`--convert-to` 无法指定目标名（先临时目录再 rename，跨卷 copy+unlink）、120s 超时、临时目录必清理
+- [x] **M1.4** `isOfficePdfAvailable()` 能力探测（mac 查 LibreOffice；已接入 `system:storageInfo`）
+- [x] **M1.5** 输出路径推导收敛到 `platform/common.ts`（两端共用，防 `a.pdf` / `a (1).pdf` 类差异）
+
+### M2 macOS 生命周期与菜单（✅ 2026-10-17 完成）
+
+- [x] **M2.1** `app.on('open-file')`（**模块顶层注册 + preventDefault**，冷启动事件早于 ready）
+- [x] **M2.2** `filterOpenableFiles`：挡 `-` 开关（含 mac 的 `-psn_0_xxx`）、execPath 自身、非受支持扩展名、磁盘不存在路径
+- [x] **M2.3** 新增 IPC `doc:pending:take`（取走即清空）；渲染层 `lib/pendingFiles.ts` 在**挂载后 + 窗口聚焦**时消费，走既有 `setPendingOpen + openTab` 直达打开
+- [x] **M2.4** macOS 标准应用菜单 `platform/appMenu.ts`（App/编辑/视图/窗口 role）——**⌘C/⌘V/⌘Z/⌘A/⌘Q 的载体，缺则全应用复制粘贴失效**
+- [x] **M2.5** `window-all-closed`（mac 不退出）+ `activate`（Dock 重建窗口）按平台分支
+- [x] **M2.6** `updater.ts` 补 macOS 签名前提说明（Squirrel.Mac 未签名必失败；不加硬开关，错误由 error 监听兜住）
+
+### M3 快捷键平台化（✅ 2026-10-17 完成）
+
+- [x] **M3.1** `renderer/src/lib/platform.ts`：`hasPrimaryModifier` / `accelLabel` / `primaryModifierLabel`（含纯函数变体供单测覆盖两平台）
+- [x] **M3.2** 清掉 5 处 `e.ctrlKey` 硬编码：命令面板 ⌘⇧P、Writer 查找替换 ⌘F/⌘H、批注 ⌘Enter、Sheet ⌘1、Ribbon ⌘F1
+- [x] **M3.3** UI 文案平台化（⌘⇧P / ⌘F1 / ⌘Z 等），杜绝 mac 上显示「Ctrl+」
+- [x] **M3.4** preload 透出 `JarekingApi.platform`（不用 UA 嗅探）；渲染层对移动端 shim 做防御式取值
+
+### M4 打包与产包（✅ 配置完成 / ⏳ 待 Mac 或 CI 实跑）
+
+- [x] **M4.1** `electron-builder.yml` 加 `mac`（dmg + **zip**，x64 + arm64 分别出包，不做 universal 省体积）
+- [x] **M4.2** `resources/entitlements.mac.plist`（JIT / 可执行内存 / dyld 变量 / 库校验，逐条注释理由）
+- [x] **M4.3** 签名策略：**不写死 `identity`**（有证书自动发现、无证书自动跳过），避免将来拿证后回头改配置
+- [x] **M4.4** `package:mac` / `package:mac:x64` / `package:mac:arm64` 脚本
+- [x] **M4.5** `.github/workflows/macos-build.yml`（macos-14 runner，sign 开关，未签名/签名双路径，artifact 保留 14 天）
+- [x] **M4.6** `scripts/package-mac.sh`（mac 本机打包：平台自检 / 工具链自检 / 磁盘检查 / 门禁 / 产出体积 / 签名与 Gatekeeper 校验）
+- [ ] **M4.7** **在 macOS 或 CI 上产出第一个 dmg**（Windows 无法产出，见 `docs/macos-release.md` §6）
+- [ ] **M4.8** `resources/icon.icns`（1024×1024 自有素材）+ 登记 `docs/assets-provenance.md`
+
+### M5 mac 真机验收（⏳ 必须在 macOS 上做，清单见 platform-matrix §4）
+
+- [ ] **M5.1** 启动/首屏/Ribbon 无白屏
+- [ ] **M5.2** docx/xlsx/pptx 打开→编辑→保存往返，**用 WPS for Mac / Pages / Numbers / Keynote 打开验证**
+- [ ] **M5.3** 三模块导出 PDF + 打印设置（`scripts/pdf-export-smoke.mjs`）
+- [ ] **M5.4** **字体视觉差异验收**（mac 无宋体/黑体同名文件；决定是否切 OFL 字体做跨端一致，见 `docs/fonts.md`）
+- [ ] **M5.5** PDF 阅读器（`scripts/pdf-reader-smoke.mjs`）
+- [ ] **M5.6** 双击关联文件：**冷启动 + 热启动**两种路径都直达对应模块
+- [ ] **M5.7** ⌘C/⌘V/⌘Z/⌘A/⌘Q + ⌘⇧P/⌘F/⌘H/⌘1/⌘F1/⌘Enter 全量手工回归
+- [ ] **M5.8** Office→PDF：装了 LibreOffice 三类型各转一次；未装时给出可读中文提示且不崩
+- [ ] **M5.9** 深色模式 / 动态字体 / 中文输入法候选条不错位
+- [ ] **M5.10** 关窗不退出 + 点 Dock 重建窗口
+
+### M6 分发与更新（⏳ 需 Apple Developer）
+
+- [ ] **M6.1** Apple Developer Program（$99/年）→ Developer ID Application 证书
+- [ ] **M6.2** 公证（notarytool 或 electron-builder `notarize`）+ `stapler staple`，三条验收命令全绿
+- [ ] **M6.3** 确认 `publish` 的 owner/repo 与实际远端一致（当前写 `jareking-office/jareking`，实际远端 `jare39063124-oss/jareking`）——**不一致会导致自动更新 404**
+- [ ] **M6.4** macOS 自动更新端到端验证（旧版本 → 新 zip → 重启生效）
+
+### M7 技术债（macOS 暴露出来的架构问题）
+
+- [ ] **M7.1** `apps/mobile` 以 `@renderer/*` **直接相对引用 desktop 渲染层源码**（跨 app 反向依赖）→ 建议抽 `packages/ui-shared` + 平台桥接口，否则 desktop 任何渲染层改动都会打挂移动端 typecheck（本轮已踩到）
+- [ ] **M7.2** macOS「文件」菜单需要主进程→渲染层命令通道（`webContents.send`）；当前只有 invoke 单向，故暂不做空壳菜单项
+- [ ] **M7.3** 若用户不接受「另装 LibreOffice」，评估 AppleScript 驱动 Office for Mac 兜底（**须真机验证后再落地，不写未验证脚本**）
+
+## A 系列 — Android 版专项（2026-10-17 立项，spike 已完成）
+
+> 依据：`docs/handoff-2026-10-17.md` §8 + `docs/mobile-spike-report.md`（实测数据）
+> 决策：Electron 不支持 Android → 外壳改 **Capacitor 7 + 系统 WebView**；渲染层**零改动复用**。
+> 铁律不变：通道名取 `apps/desktop/src/ipc/channels.ts`（禁复制）、禁原生弹窗、门禁三绿才提交。
+
+### A0 外壳与适配层（✅ 2026-10-17 完成）
+
+- [x] **A0.1** `apps/mobile`（Vite 6 + React 19 + Capacitor 7），`@renderer` 别名直连 desktop 渲染层源码，**不复制一行 UI 代码**
+- [x] **A0.2** `window.jareking` 桥形状与 desktop preload 完全一致（`invoke` / `IPC` / `getPathForFile` / `versions`）
+- [x] **A0.3** **30/30 通道实现**（`src/platform/handlers.ts`），自检接口 `__jkMobileDiagnostics()` 逐条核对，缺一条即冒烟失败
+- [x] **A0.4** 持久层换 IndexedDB（`src/storage/webStore.ts`）替代 sql.js + node:fs；账户/积分/最近文件/自动保存/崩溃恢复/宏/AI 配置全通
+- [x] **A0.5** 伪路径协议 `jkfile://<id>/<文件名>`（SAF 无真实路径），承担 filePath 全部职责；纯函数抽 `platform/filePath.ts` + 8 条单测
+- [x] **A0.6** Node 内置模块 shim（fs / path / crypto / sql.js），打包期可解析、运行期误用即显式报错
+- [x] **A0.7** 保存/导出拦截：`a[download]` → Filesystem 写缓存 → 系统分享面板（Android WebView 无 DownloadListener，不拦就"点了没反应"）
+- [x] **A0.8** 能力差异显式化：Office→PDF / 导出 PDF 抛「移动端不支持」，**不静默、不假装实现**
+- [x] **A0.9** 窄屏布局修补（Ribbon 标签行横向滚动、隐藏 340px 最近侧栏），桌面版零影响
+- [x] **A0.10** 构建链：`build-apk.mjs`（自动注入 JAVA_HOME/SDK/local.properties）+ gradle 走腾讯云镜像
+- [x] **A0.11** 自动化验收：`scripts/smoke.mjs`（无头 Chromium + CDP，**10 条断言全绿**）+ 8 条单测
+- [x] **A0.12** debug APK 产出 **12.9 MB**（解包 28MB）（compileSdk 35 / minSdk 23 / targetSdk 35，权限仅 INTERNET）
+
+### A1 真机验证（⏳ 需真机或模拟器）
+
+- [ ] **A1.1** 安装 APK，冷启动首屏正常（含深色模式）
+- [ ] **A1.2** **软键盘 / 中文 IME**：TipTap 输入不丢字、光标不被键盘遮挡（可能要 `visualViewport` + `scroll-padding-bottom`）
+- [ ] **A1.3** 保存/导出真机跑通：导出 docx → 用 WPS 打开校验；导出 xlsx/pptx 同验
+- [ ] **A1.4** Univer 真机性能：1 万行表格滚动/公式重算，记录帧率与内存
+- [ ] **A1.5** pdfjs 阅读器翻页/缩放；大 PDF（>50MB）内存表现
+- [ ] **A1.6** Konva 演示放映 + 触摸拖拽/缩放手势
+- [ ] **A1.7** WebView 版本矩阵（Android 8/10/12/14 各一台或云真机）
+
+### A2 触屏 UI（⏳ 未开始）
+
+- [ ] **A2.1** 底部 TabBar（文件/编辑/插入/视图）+ 抽屉式工具条，替换 Ribbon 横排
+- [ ] **A2.2** 渐进披露：工具条只显示「最近使用 + 更多」，其余进「更多」面板
+- [ ] **A2.3** 手势：双指缩放（Writer 纸张 / Sheet 网格 / Slide 画布）、长按菜单、双击进入编辑
+- [ ] **A2.4** 最近文件抽屉（补回 A0.9 隐藏的侧栏入口）
+- [ ] **A2.5** 安全区适配（刘海/手势条）+ 横竖屏切换不丢编辑状态
+
+### A3 能力补齐（⏳ 未开始）
+
+- [ ] **A3.1** 导出 PDF：Android 打印框架（原生 PrintManager + WebView.createPrintDocumentAdapter 插件），保真度对标桌面 `printToPDF`
+- [ ] **A3.2** 文件关联 / Intent：从「文件」App、微信、邮件「用 jareking 打开」→ 接入 `doc:pending:take`（队列已就位）
+- [ ] **A3.3** 分享接收（SEND Intent，多文件）
+- [ ] **A3.4** 大文件策略：手机上把 100MB 阈值下调到 20MB，超限给明确提示
+
+### A4 分发与体积（⏳ 未开始）
+
+- [ ] **A4.1** 签名（自签 keystore）+ release 构建（`build-apk.mjs --release`）
+- [ ] **A4.2** 体积优化：Univer 四个 preset 按需加载，目标 APK ≤ 6MB
+- [ ] **A4.3** 各应用商店上架策略（个人开发者可上：华为/小米/OPPO/vivo 应用商店；Google Play 需 $25）
+- [ ] **A4.4** 应用图标 / 启动图（自有素材，登记 `docs/assets-provenance.md`）
+
+### A5 技术债
+
+- [ ] **A5.1** 同 M7.1：`apps/mobile` 用 `@renderer/*` 反向引用 desktop 源码 → 抽 `packages/ui-shared` + 平台桥接口。当前用 alias 是为「零改动复用」，代价是 desktop 渲染层改动会连带移动端 typecheck
+- [ ] **A5.2** `cap add android` 会覆盖 `gradle-wrapper.properties` 的镜像配置 → 需固化到模板或脚本后处理
+- [ ] **A5.3** smoke 依赖桌面 `public/sample.docx` 作为样本 → 应挪到 `packages/*/test/fixtures`

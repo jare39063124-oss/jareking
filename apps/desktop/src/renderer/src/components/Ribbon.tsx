@@ -108,6 +108,7 @@ import {
   type EditorCommandState,
 } from '../stores/editorCommands';
 import { FONT_GROUPS, FONT_SIZES } from '../lib/fonts';
+import { accelLabel, hasPrimaryModifier } from '../lib/platform';
 // OfficeKind 与主进程共用同一类型（单一事实源 shared/officePdfScript.ts）
 import type { OfficeKind } from '../../../shared/officePdfScript';
 
@@ -650,10 +651,10 @@ export function Ribbon() {
 
   const activeTabDef = RIBBON_TABS.find((tab) => tab.id === activeRibbonTab) ?? RIBBON_TABS[1];
 
-  // Ctrl+F1 切换功能区折叠（与 Office/WPS 一致）
+  // 主修饰键+F1 切换功能区折叠（与 Office/WPS 一致；Windows Ctrl+F1 / macOS ⌘F1）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'F1' && (e.ctrlKey || e.metaKey)) {
+      if (e.key === 'F1' && hasPrimaryModifier(e)) {
         e.preventDefault();
         toggleRibbonCollapsed();
       }
@@ -724,7 +725,7 @@ export function Ribbon() {
       <div
         className="flex items-center px-1 pt-0.5"
         onDoubleClick={toggleRibbonCollapsed}
-        title="双击折叠/展开功能区 (Ctrl+F1)"
+        title={`双击折叠/展开功能区 (${accelLabel('F1')})`}
       >
         <Tabs
           items={RIBBON_TABS.map((tab) => ({ id: tab.id, label: tab.label }))}
@@ -734,7 +735,11 @@ export function Ribbon() {
         {/* 折叠/展开功能区（对齐 WPS 右侧 ^ 按钮） */}
         <button
           type="button"
-          title={ribbonCollapsed ? '展开功能区 (Ctrl+F1)' : '折叠功能区 (Ctrl+F1)'}
+          title={
+            ribbonCollapsed
+              ? `展开功能区 (${accelLabel('F1')})`
+              : `折叠功能区 (${accelLabel('F1')})`
+          }
           aria-pressed={ribbonCollapsed}
           className="ml-auto flex h-7 w-7 items-center justify-center rounded-sm text-muted transition-colors hover:bg-hover hover:text-fg"
           onClick={toggleRibbonCollapsed}

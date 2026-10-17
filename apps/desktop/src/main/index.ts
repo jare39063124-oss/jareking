@@ -1,9 +1,13 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { initAutoUpdater, checkForUpdates } from './updater.js';
 import { initServices, type AppServices } from './services/bootstrap.js';
 import type { AiConfigSaveInput } from './services/aiConfigService.js';
-import { convertOfficeToPdf } from './services/officeConvert.js';
+// 平台适配层：Office→PDF 走门面（win32 = COM / darwin = LibreOffice），平台判定单一来源
+import { convertOfficeToPdf, isOfficePdfAvailable } from './platform/officeConvert.js';
+import { isMac, platformDetail } from './platform/index.js';
+import { installApplicationMenu } from './platform/appMenu.js';
 import { htmlToPdfBuffer } from './services/pdfExport.js';
 import type { OfficeKind } from '../shared/officePdfScript.js';
 import type { HtmlPdfRequest } from '../shared/pdfPrint.js';
@@ -23,17 +27,53 @@ let mainWindow: BrowserWindow | null = null;
 
 /**
  * 待打开文件队列（T0.5 单实例锁完善）
- * 当已运行实例通过 second-instance 收到新实例转发的命令行参数时，
- * 将其中形如文件路径的参数暂存于此，供持久层/文档编排服务读取后打开对应文档。
+ * 当已运行实例通过 second-instance / macOS open-file 收到新文件时，
+ * 将文件路径暂存于此，供渲染层主动拉取后走「待打开 + 新建标签」机制直达打开。
+ *
+ * 平台差异（交接文档 §7.2 第 4 条，务必区分）：
+ *  - **Windows**：双击关联文件 = 新进程启动 + 命令行参数 → `second-instance` 事件里从 argv 取；
+ *  - **macOS**：双击关联文件 = LaunchServices 派发 `open-file` 事件给**已有进程**（不新起进程），
+ *    且该事件可能在 app ready 之前就到达 → 必须在模块顶层注册监听并 `preventDefault()`。
  */
 const pendingOpenFiles: string[] = [];
 
+/** jareking 支持的文件关联扩展名（与 electron-builder.yml 的 fileAssociations 对齐） */
+const OPENABLE_EXTENSIONS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf'];
+
+/**
+ * 把「可能是文件路径」的字符串收敛为已存在的受支持文件列表。
+ *
+ * 过滤规则（两类平台的噪声都要挡住）：
+ *  - 以 `-` 开头：命令行开关（macOS 特有 `-psn_0_12345` 进程序列号也在此被挡掉）；
+ *  - 等于 `process.execPath`：可执行文件自身；
+ *  - 扩展名不在 OPENABLE_EXTENSIONS：非本应用可处理类型（如 .txt / 目录）；
+ *  - 磁盘上不存在：已被移动/删除的旧路径。
+ */
+function filterOpenableFiles(candidates: string[]): string[] {
+  return candidates.filter((candidate) => {
+    if (!candidate || candidate.startsWith('-')) return false;
+    if (candidate === process.execPath) return false;
+    const lower = candidate.toLowerCase();
+    const dot = lower.lastIndexOf('.');
+    if (dot < 0) return false;
+    if (!OPENABLE_EXTENSIONS.includes(lower.slice(dot + 1))) return false;
+    return existsSync(candidate);
+  });
+}
+
 /**
  * 读取待打开文件列表（返回副本，避免外部直接改动内部队列）。
- * 持久层服务就绪后由编排 Agent 决定消费语义（读取即清空 or 保留）。
+ * @deprecated 渲染层已改为经 IPC `doc:pending:take` 拉取并清空；保留导出仅为兼容既有引用。
  */
 export function getPendingOpenFiles(): string[] {
   return [...pendingOpenFiles];
+}
+
+/** 取走并清空待打开文件队列（IPC `doc:pending:take` 的实现；渲染层启动/窗口聚焦时调用） */
+export function takePendingOpenFiles(): string[] {
+  const files = [...pendingOpenFiles];
+  pendingOpenFiles.length = 0;
+  return files;
 }
 
 /**
@@ -158,7 +198,16 @@ function registerIpcHandlers(): void {
       }
     };
     await walk(dataDir);
-    return { dataDir, bytes, platform: process.platform };
+    return {
+      dataDir,
+      bytes,
+      platform: process.platform,
+      // 平台可读名 + 架构 + 内核版本（压测/反馈时一眼看出环境）
+      platformDetail: platformDetail(),
+      // Office→PDF 本机可用性：Windows 视为可用（COM 失败时由转换调用报错）；
+      // macOS 取决于是否安装 LibreOffice —— 用于「存储管理」面板给出可解释的降级提示
+      officePdfAvailable: isOfficePdfAvailable(),
+    };
   });
   ipcMain.handle(IPC.SYSTEM_OPEN_DATA_DIR, async () => {
     const { app, shell } = await import('electron');
@@ -185,6 +234,10 @@ function registerIpcHandlers(): void {
     shell.showItemInFolder(payload.path);
     return true;
   });
+
+  // 待打开文件拉取（取走即清空）：渲染层启动/窗口聚焦时调用，
+  // 覆盖「macOS 双击文件」与「Windows 第二实例转发」两条入队路径。
+  ipcMain.handle(IPC.DOC_PENDING_TAKE, () => takePendingOpenFiles());
 
   // 打开外部链接（字体官方下载页）
   ipcMain.handle(IPC.SYSTEM_OPEN_EXTERNAL, async (_event, payload?: { url?: string }) => {
@@ -293,15 +346,39 @@ function createWindow(): void {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// macOS 双击关联文件：LaunchServices 派发 `open-file` 事件
+//
+// 三个必须点（交接文档 §7.2 第 4 条）：
+//  1. 监听必须在 **app ready 之前**注册——冷启动打开文件时该事件先于 ready 到达；
+//  2. 必须 `event.preventDefault()`，否则 Electron 默认行为会忽略该文件；
+//  3. macOS 下**不新起进程**，所以 second-instance 那条路径在 mac 上收不到文件，
+//     必须由本监听入队，渲染层再经 `doc:pending:take` 拉取。
+// 非 macOS 平台不注册（Windows 走 argv，Linux 走 argv，语义不同不混用）。
+// ─────────────────────────────────────────────────────────────────────────────
+if (isMac) {
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    const openable = filterOpenableFiles([filePath]);
+    if (openable.length === 0) return; // 非受支持类型：静默忽略，不打断用户
+    pendingOpenFiles.push(...openable);
+    // 应用已在运行：把窗口提到前台，让用户立刻看到打开结果
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 // 单实例锁：第二个实例启动时，其命令行参数（双击关联文件等）通过 second-instance 转发到本实例
 if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
 } else {
   app.on('second-instance', (_event, argv) => {
-    // Windows 下 argv[0] 为可执行文件路径，其余为命令行参数；
-    // 过滤掉可执行文件本身与开关类参数，其余视为待打开的文件路径
-    const fileArgs = argv.filter((arg) => arg.length > 0 && arg !== process.execPath && !arg.startsWith('-'));
+    // argv[0] 为可执行文件路径，其余为命令行参数；
+    // 统一交给 filterOpenableFiles 处理（挡掉开关、可执行文件自身、非受支持扩展名、不存在的路径）
+    const fileArgs = filterOpenableFiles(argv);
     if (fileArgs.length > 0) {
       pendingOpenFiles.push(...fileArgs);
     }
@@ -313,6 +390,10 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // macOS 必须先安装应用菜单：Edit 组 role 承载 ⌘C/⌘V/⌘Z/⌘A，
+    // 缺菜单 = 全应用复制粘贴失效（P0）。Windows 保持 Ribbon + 默认菜单策略不变。
+    if (isMac) installApplicationMenu(isDev);
+
     // 持久层服务接入：初始化数据库 / 账户 / 文档库（幂等单例），并引导本地账户与注册礼
     services = await initServices();
     services.account.bootstrapAccount();
@@ -324,10 +405,13 @@ if (!app.requestSingleInstanceLock()) {
     initAutoUpdater();
   });
 
+  // macOS 关窗不退出应用（Dock 图标留存，点击可从 `activate` 重建窗口）；
+  // Windows / Linux 关窗即退出。此为 Electron 官方平台约定，勿统一。
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    if (!isMac) app.quit();
   });
 
+  // macOS 点击 Dock 图标且无窗口时重建窗口
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

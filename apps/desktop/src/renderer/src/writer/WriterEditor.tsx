@@ -24,6 +24,7 @@ import { JK_PARAGRAPH_STYLE } from "./jkParagraphStyle";
 import { linearToOmml, validateLinearFormula } from "@jareking/writer";
 import { Modal } from "../components/Modal";
 import { Input } from "../components/Input";
+import { accelLabel, hasPrimaryModifier } from "../lib/platform";
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TextStyle from '@tiptap/extension-text-style';
@@ -398,7 +399,7 @@ export function WriterEditor() {
     return () => setActiveEditor(null);
   }, [editor]);
 
-  // 查找/替换（T1.7 自研落地）：Ctrl+F 查找、Ctrl+H 替换
+  // 查找/替换（T1.7 自研落地）：主修饰键+F 查找、主修饰键+H 替换（Windows Ctrl / macOS ⌘）
   const [showFind, setShowFind] = useState(false);
   /** 插入公式对话框（WPS 对齐：公式）—— 用 Modal 而非 window.prompt（原生弹窗阻断自动化） */
   const [formulaOpen, setFormulaOpen] = useState(false);
@@ -411,11 +412,11 @@ export function WriterEditor() {
   useEffect(() => {
     if (!editor) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+      if (hasPrimaryModifier(e) && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault();
         setFindMode('find');
         setShowFind(true);
-      } else if (e.ctrlKey && (e.key === 'h' || e.key === 'H')) {
+      } else if (hasPrimaryModifier(e) && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault();
         setFindMode('replace');
         setShowFind(true);
@@ -1530,7 +1531,7 @@ export function WriterEditor() {
       <div className="relative flex min-h-0 flex-1">
         {/* 纸张区（文档区最大化：无重复工具栏，内边距收紧） */}
         <div className="relative min-h-0 flex-1 overflow-auto bg-muted-bg/40 p-5">
-          {/* Ctrl+F/H 查找替换条 */}
+          {/* 主修饰键+F/H 查找替换条（Windows Ctrl / macOS ⌘） */}
           {editor && showFind && (
             <FindReplaceBar editor={editor} initialMode={findMode} onClose={() => setShowFind(false)} />
           )}
@@ -1843,14 +1844,14 @@ export function WriterEditor() {
             value={commentInput}
             onChange={(e) => setCommentInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              if (e.key === 'Enter' && hasPrimaryModifier(e)) {
                 e.preventDefault();
                 applyComment();
               }
             }}
           />
           <p className="text-tiny text-muted">
-            批注将锚定到当前选区文本；保存后写入 Word 原生批注（word/comments.xml）。Ctrl+Enter 快速确定。
+            批注将锚定到当前选区文本；保存后写入 Word 原生批注（word/comments.xml）。{accelLabel('Enter')} 快速确定。
           </p>
         </div>
       </Modal>

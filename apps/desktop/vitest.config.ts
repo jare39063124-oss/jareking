@@ -17,6 +17,11 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     // 渲染层纯逻辑测试 + 主/渲染共用的 shared 纯函数测试（如 officePdfScript）
-    include: ['src/renderer/src/**/*.test.ts', 'src/shared/**/*.test.ts'],
+    // + 主进程纯函数测试（platform 适配层，文件内用 `@vitest-environment node` 声明环境）
+    include: [
+      'src/renderer/src/**/*.test.ts',
+      'src/shared/**/*.test.ts',
+      'src/main/**/*.test.ts',
+    ],
   },
 });

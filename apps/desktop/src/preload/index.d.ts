@@ -9,6 +9,7 @@ declare global {
      * - invoke：T0.5 新增通用 IPC 调用
      * - IPC：T0.5 新增 IPC 通道常量表
      * - getPathForFile：Office 转 PDF 新增，代理 webUtils.getPathForFile（取 File 磁盘路径）
+     * - platform：macOS 版新增，透出 process.platform（渲染层据此映射 ⌘ / Ctrl 主修饰键）
      */
     jareking: JarekingApi;
   }

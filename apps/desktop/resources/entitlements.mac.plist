@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  jareking macOS Hardened Runtime entitlements（apps/desktop/resources/entitlements.mac.plist）
+
+  用途：electron-builder 的 mac.hardenedRuntime = true 时，签名会把这里声明的例外写进代码签名，
+        否则开启加固运行时的应用会因下述限制直接崩溃。**公证（notarytool）也必须带上它**。
+
+  为什么每一条都需要（不是抄模板，逐条对应本项目真实行为）：
+  1. allow-jit
+     V8 引擎全靠 JIT 把 JS 编译成本地码，加固运行时默认禁止可执行内存 → 不放开则应用启动即崩。
+  2. allow-unsigned-executable-memory
+     Chromium/V8 的部分优化路径与 wasm 需要匿名可执行内存（sql.js 的 WebAssembly 也在其中，
+     packages/core 用 sql.js 持久化，属硬依赖）。
+  3. allow-dyld-environment-variables
+     Electron 主进程动态加载 libffmpeg / 各类 .dylib 时依赖 DYLD_* 环境变量。
+  4. disable-library-validation
+     允许加载非同一 Team ID 签名的动态库（Electron 框架 + 未来可能引入的原生模块）。
+     收紧此项前必须重新验证：首次启动不崩、PDF 渲染（pdfjs）、表格（sql.js WASM）可用。
+
+  ⚠️ 注意：本文件**不申请** app-sandbox 相关权限。jareking 是桌面直装应用（不走 Mac App Store），
+     不启用 App Sandbox；若将来上架 MAS，需另行添加
+     com.apple.security.files.user-selected.read-write 等沙箱权限并重做文件访问路径。
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

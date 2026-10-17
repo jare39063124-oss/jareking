@@ -4,6 +4,7 @@ import { Search } from 'lucide-react';
 import { useTabStore } from '../stores/tabStore';
 import { toast } from '../stores/toastStore';
 import { useUiStore } from '../stores/uiStore';
+import { accelLabel, hasPrimaryModifier } from '../lib/platform';
 
 /** 命令面板命令项 */
 interface Command {
@@ -58,10 +59,10 @@ export function CommandPalette() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 全局快捷键 Ctrl+Shift+P（再次按下时收起）
+  // 全局快捷键 主修饰键+Shift+P（Windows Ctrl / macOS ⌘，再次按下时收起）
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.shiftKey && event.code === 'KeyP') {
+      if (hasPrimaryModifier(event) && event.shiftKey && event.code === 'KeyP') {
         event.preventDefault();
         setOpen(!useUiStore.getState().commandPaletteOpen);
       }
@@ -225,7 +226,7 @@ export function CommandPalette() {
           <span>↑↓ 选择</span>
           <span>Enter 执行</span>
           <span>Esc 关闭</span>
-          <span className="ml-auto">Ctrl+Shift+P 唤出</span>
+          <span className="ml-auto">{accelLabel('P', true)} 唤出</span>
         </div>
       </div>
     </div>,

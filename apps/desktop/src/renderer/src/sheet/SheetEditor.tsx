@@ -36,6 +36,7 @@ import { useAiStore } from '../stores/aiStore';
 import { jkToUniverData, univerSnapshotToJk } from './univerAdapter';
 import { applySheetOps } from './sheetOpsExecutor';
 import { parseInWorker } from '../lib/parseClient';
+import { accelLabel, hasPrimaryModifier } from '../lib/platform';
 import { downloadBlob, downloadDataUrl } from '../lib/download';
 import {
   discardAutosave,
@@ -672,7 +673,7 @@ export function SheetEditor() {
     }
   }, [ready]);
 
-  /** 全局快捷键 Ctrl/Cmd+1：打开「设置单元格格式」对话框（WPS/Excel 经典聚合对话框）。
+  /** 全局快捷键 主修饰键+1（Windows Ctrl+1 / macOS ⌘1）：打开「设置单元格格式」对话框（WPS/Excel 经典聚合对话框）。
    * 仅在焦点不在输入框 / 文本域（含 Univer 单元格编辑态）时响应，避免与 Univer 自带
    * 快捷键及 AI 输入框冲突。 */
   useEffect(() => {
@@ -681,7 +682,7 @@ export function SheetEditor() {
       const tag = document.activeElement?.tagName;
       // 输入框 / 文本域（含 Univer 单元格编辑输入框）中不触发
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (e.key === '1' && (e.ctrlKey || e.metaKey)) {
+      if (e.key === '1' && hasPrimaryModifier(e)) {
         e.preventDefault();
         setFormatOpen(true);
       }

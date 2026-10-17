@@ -11,6 +11,12 @@ export { IPC };
  */
 export interface JarekingApi {
   versions: NodeJS.ProcessVersions;
+  /**
+   * 运行平台（`process.platform` 原值：'win32' / 'darwin' / 'linux'）。
+   * 渲染层据此决定主修饰键（mac = ⌘，其余 = Ctrl）与快捷键文案，
+   * 避免用 UA / navigator.platform 嗅探（不可靠且被逐步废弃）。
+   */
+  platform: NodeJS.Platform;
   ping: () => string;
   /** 通用 IPC 调用：向主进程指定通道发送 payload 并等待结果 */
   invoke: <T>(channel: string, payload?: unknown) => Promise<T>;
@@ -26,6 +32,7 @@ export interface JarekingApi {
 
 const api: JarekingApi = {
   versions: process.versions,
+  platform: process.platform,
   ping: () => 'pong',
   invoke: <T>(channel: string, payload?: unknown): Promise<T> =>
     ipcRenderer.invoke(channel, payload) as Promise<T>,

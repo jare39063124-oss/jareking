@@ -30,6 +30,50 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
 
+# ── macOS 打包（2026-10-17 macOS 版）─────────────────────────────────
+# 目标：dmg（分发）+ zip（electron-updater 增量更新用），x64 + arm64 双架构
+#   · arm64 = Apple Silicon（M1/M2/M3/M4），x64 = Intel Mac；
+#   · 双架构分别出包（不合并 universal，体积可省约 2 倍，符合"体积敏感"约束）；
+#   · zip 是 macOS 自动更新的必需产物（Squirrel.Mac 只吃 zip），dmg 只用于人工安装。
+#
+# 签名策略（**当前故意不写 identity 字段**）：
+#   · 不写 = 交给 electron-builder 自动发现证书；CI/无证书环境会自动跳过签名并告警，
+#     不会硬失败（这就是"本地可跳过签名"的实现方式，不要写死 identity: null，
+#     否则将来拿到证书还得回来改配置）；
+#   · 有证书时通过环境变量注入：CSC_LINK（.p12 的 base64 或路径）+ CSC_KEY_PASSWORD；
+#   · 显式跳过签名：CSC_IDENTITY_AUTO_DISCOVERY=false。
+# 公证（notarize）：electron-builder 26 默认关闭。正式分发需 Apple Developer($99/年) +
+#   Apple ID / App Store Connect API Key，并启用 notarize，详见 docs/macos-release.md。
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  category: public.app-category.productivity
+  # 开启 Hardened Runtime（公证的前置条件；未签名时该开关无副作用）
+  hardenedRuntime: true
+  # Gatekeeper 在签名前的静态评估会拦未签名构建，交给公证流程判定
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  # 产物命名带架构后缀，避免 x64 / arm64 同名覆盖
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # icon 待 resources/icon.icns（1024×1024）就绪后补：icon: resources/icon.icns
+  # 最低系统版本不在此硬编码（随 Electron 44 的 Electron 官方下限走），
+  # 若需收紧请先查 Electron 44 发布说明再填 LSMinimumSystemVersion
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # 拖拽式安装布局：左侧 app、右侧 Applications 软链（electron-builder 默认即此布局）
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
 # 文件关联：docx / xlsx / pptx / pdf 双击用 jareking 打开（对应 spec 4.1）
 fileAssociations:
   - ext:

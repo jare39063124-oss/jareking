@@ -7,8 +7,10 @@
 
 ## 0. 一句话
 
-jareking = Windows 单平台的 **WPS 平替办公套件**（Writer / Sheet / Presentation / PDF + 可自配 AI），
-技术栈 Electron + React 19 + TypeScript（严格）+ Tailwind + Zustand，pnpm workspace monorepo。
+jareking = **Windows + macOS + Android 三平台**的 **WPS 平替办公套件**（Writer / Sheet / Presentation / PDF + 可自配 AI）。
+桌面端：Electron + React 19 + TypeScript（严格）+ Tailwind + Zustand，pnpm workspace monorepo。
+Android 端：`apps/mobile` 走 **Capacitor 7 + 系统 WebView**，**复用同一份渲染层源码**（`@renderer` 别名），
+平台差异只允许写在 `apps/mobile/src/platform/`（见 `docs/mobile-spike-report.md`）。
 
 ## 1. 铁律（违反 = 跑偏）
 
@@ -42,6 +44,11 @@ pnpm test                                    # 全绿
 ### 1.6 代码风格
 - **全中文注释**；复用既有实现（不要另起一套）：解析/序列化、单位换算（`exporter/units.ts` 必须互逆）、`jkToHtml`/`htmlToJk`、relId 分配等。
 - 样式用设计令牌（`bg-surface` / `text-fg` / `text-muted` / `text-accent` / `bg-hover` / `border` / `text-tiny`…），不硬编码颜色。
+
+### 1.6.1 平台差异不散落（macOS 版新增）
+- **`process.platform` 只允许出现在 `apps/desktop/src/main/platform/index.ts`**；其余主进程代码一律 `import { isMac, isWindows }`。
+- **快捷键一律用 `hasPrimaryModifier(e)` / `accelLabel(...)`**（`renderer/src/lib/platform.ts`），**禁止写 `e.ctrlKey` 或手写 `'Ctrl+F'` 文案**——macOS 上会直接失效。
+- 新增平台专有能力时，先更新 `docs/macos-platform-matrix.md` 的表，再写实现。
 
 ### 1.7 AI 业务代码隔离
 非 AI 任务不要改 `AIPanel.tsx` / `aiRunner.ts` / `aiStore.ts` / `aiChatStore.ts` / `packages/ai`（仅类型层面的最小修复除外，且不得改业务逻辑）。
@@ -100,9 +107,13 @@ done
 | `docs/tasks-cs-p0.md` | 云端 P0 工程卡（可断言验收口径） | 契约变更 |
 | `docs/research-wps-gui-ip.md` | WPS GUI 版权合规调研（红线与可借鉴边界） | 合规相关 |
 | `docs/assets-provenance.md` | 视觉素材来源台账（许可登记） | **新增任何视觉素材时**（铁律 1.10） |
+| `docs/macos-platform-matrix.md` | **平台耦合清单 + 适配层边界**（macOS 版） | 新增平台差异能力 / mac 端改动后 |
+| `docs/macos-release.md` | **macOS 签名 · 公证 · 分发** | 产包 / 发版前 |
+| `docs/mobile-spike-report.md` | **Android 可行性 spike 实测**（Capacitor 选型 / 30 通道映射 / 体积构成 / 未闭环风险） | 移动端架构变化 / APK 产包后 |
 
 ## 4. 当前基线（每次变化请更新；截至 2026-10-17）
-- **测试**：writer 58 / desktop 250 / presentation 52 / core 46 / sheet 65 / pdf 15 / ai 16（合计 502）。
+- **测试**（2026-10-17 本轮实测）：writer 58 / desktop **277**（macOS 版新增 27：platform 9 / pendingFiles 11 / platform-common 7）/ presentation 52 / core 87 / sheet 65 / pdf 15 / ai 16 / **mobile 8**（Android 伪路径+文件分类，合计 **578**）。
+- **Android 验收**：`apps/mobile/scripts/smoke.mjs`（无头 Chromium+CDP，10 条断言：桥安装 / 30 通道全覆盖 / 文件读回 / 崩溃恢复闭环 / Univer+TipTap 挂载 / 能力差异显式拒绝 / 零 console error）。⚠️ 历史文档写的 desktop 250 / core 46 已过期，以实测为准。
 - **已实现**：
   - Writer：docx 读写（L2）+ 域/页码/目录 + **批注** + **修订** + 查找替换 + 页眉页脚 + 脚注/尾注 + 分栏 + 公式（OMML）+ **样式管理器**；
   - Sheet：xlsx + 公式 + 样式双向映射 + 查找替换 + **单元格格式对话框（Ctrl+1）** + **插入图表（选区→PNG 预览/下载）** + **数据透视表** + **分列/删除重复项**；

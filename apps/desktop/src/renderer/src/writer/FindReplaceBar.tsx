@@ -1,9 +1,9 @@
 /**
  * Writer 查找/替换条 + 编辑器状态栏。
  *
- * - Ctrl+F 查找（计数 + 上/下导航 + 自动选中），Ctrl+H 替换（逐个/全部）；
+ * - 主修饰键+F 查找（Windows Ctrl / macOS ⌘；计数 + 上/下导航 + 自动选中），主修饰键+H 替换（逐个/全部）；
  * - 匹配定位：findAllMatches（纯函数）→ setTextSelection + scrollIntoView；
- * - 全部替换：applyReplaceAll 倒序 replaceWith（单事务，可 Ctrl+Z 一步撤销）；
+ * - 全部替换：applyReplaceAll 倒序 replaceWith（单事务，可一步撤销）；
  * - 状态栏：字数/字符（countWords，对齐 WPS 口径）。
  */
 import { useEffect, useMemo, useState } from 'react';
@@ -11,6 +11,7 @@ import type { Editor } from '@tiptap/react';
 import { ArrowDown, ArrowUp, CaseSensitive, Replace, ReplaceAll, X } from 'lucide-react';
 import { findAllMatches, applyReplaceAll } from './findReplace';
 import { countWords } from '../lib/fonts';
+import { accelLabel } from '../lib/platform';
 
 export function FindReplaceBar({
   editor,
@@ -146,7 +147,7 @@ export function FindReplaceBar({
           </button>
           <button
             type="button"
-            title="全部替换（单事务，可 Ctrl+Z 一步撤销）"
+            title={`全部替换（单事务，可 ${accelLabel('Z')} 一步撤销）`}
             className="rounded border border-border px-2 py-1 text-tiny text-fg hover:border-accent disabled:opacity-50"
             disabled={!matches.length}
             onClick={replaceAll}

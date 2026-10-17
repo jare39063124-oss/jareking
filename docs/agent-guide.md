@@ -1,7 +1,9 @@
 # jareking 工程说明书（面向 Agent / AI 协作）
 
-> 用途：修复 bug、优化迭代、新增功能时，让 Agent 无需通读全仓即可快速定位模块、复现环境、理解约定。>   
-> 维护规则：任何人（人或 Agent）改动架构 / 新增模块 / 修正重大风险后，同步更新本文件第 5、6、7 节。>   
+> 用途：修复 bug、优化迭代、新增功能时，让 Agent 无需通读全仓即可快速定位模块、复现环境、理解约定。
+>   
+> 维护规则：任何人（人或 Agent）改动架构 / 新增模块 / 修正重大风险后，同步更新本文件第 5、6、7 节。
+>   
 > 配套文档：`spec.md`（产品规格 v1.1）、`todo.md`（Phase 0–8 任务与验收，含当前勾选状态）。
 
 ---
@@ -22,13 +24,19 @@ jareking/
 ├── apps/desktop/                # Electron 应用（主进程 + 渲染进程）
 │   ├── src/main/                # 主进程：窗口/菜单/文件关联/自动更新/服务层(IPC)
 │   │   ├── services/            # 本地持久层服务封装（调用 packages/core）
-│   │   ├── preload.ts           # 暴露 window.jareking.invoke(...) IPC 桥
+│   │   ├── platform/            # ★ 平台适配层（Windows/macOS 差异唯一收口处）
+│   │   │   ├── index.ts         # 平台判定单一来源（process.platform 只许出现在这里）
+│   │   │   ├── officeConvert.ts # Office→PDF 门面（按平台分发）
+│   │   │   ├── officeConvertWin.ts / officeConvertMac.ts  # COM / LibreOffice headless
+│   │   │   ├── common.ts        # 输出路径推导（两端共用）
+│   │   │   └── appMenu.ts       # macOS 标准菜单（⌘C/⌘V/⌘Q 的载体）
+│   │   ├── preload.ts           # 暴露 window.jareking.invoke(...) IPC 桥（含 platform）
 │   │   └── updater.ts           # electron-updater（仅 packaged 模式生效）
 │   ├── src/renderer/src/
 │   │   ├── App.tsx              # 顶层布局：TabBar + Ribbon + EditorArea + AIPanel + StatusBar
 │   │   ├── components/          # 通用组件 + 业务组件（Ribbon/AIPanel/SettingsPanel/RecoveryCenter/PdfToolbox/MacroSection/Modal…）
 │   │   ├── stores/              # zustand：uiStore / aiStore / aiChatStore / aiMeteringStore / tabStore / toastStore / pendingOpenStore / recoveryStore / macroStore
-│   │   ├── lib/                 # 渲染层公共能力：largeFile / parseClient / parse.worker / pdfRender / pdfExport / printHtml / chartRenderer / fonts / download / autosave / macro{Protocol,Api,Worker,Runner,Host}
+│   │   ├── lib/                 # 渲染层公共能力：largeFile / parseClient / parse.worker / pdfRender / pdfExport / printHtml / chartRenderer / fonts / download / autosave / macro{Protocol,Api,Worker,Runner,Host} / **platform（⌘ vs Ctrl 快捷键）** / **pendingFiles（双击文件打开）**
 │   │   ├── writer/              # WriterEditor + jkToHtml / htmlToJk + opsExecutor + jkComment/jkRevision/jkParagraphStyle/jkFormula/jkField/jkImage
 │   │   ├── sheet/               # SheetEditor + univerAdapter + chartData + sheetToHtml（打印）+ 打印设置
 │   │   ├── slide/               # SlideEditor（Konva）+ rehearse（排练计时）+ presentationToHtml（打印）

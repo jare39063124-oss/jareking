@@ -11,6 +11,9 @@ export const IPC = {
   DOC_RECENT_PIN: 'doc:recent:pin',
   DOC_READ_FILE: 'doc:read-file',
   DOC_REVEAL: 'doc:reveal',
+  // 待打开文件拉取（取走即清空）：macOS 双击关联文件走 open-file 事件入队，
+  // Windows 走 second-instance 的 argv 入队；渲染层在启动 / 窗口聚焦时拉取并直达打开。
+  DOC_PENDING_TAKE: 'doc:pending:take',
   DOC_AUTOSAVE_SAVE: 'doc:autosave:save',
   DOC_AUTOSAVE_PENDING: 'doc:autosave:pending',
   // 崩溃恢复入口显性化（文档备份中心）：文件字节备份的存/列/恢复/丢弃
