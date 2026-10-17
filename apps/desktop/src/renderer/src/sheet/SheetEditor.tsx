@@ -447,7 +447,10 @@ export function SheetEditor() {
       toast.success(`已打开 ${file.name}`);
     } catch (err) {
       console.error('打开 xlsx 失败:', err);
-      toast.warning('打开失败：文件可能不是有效的 .xlsx');
+      // 透传解析器的具体诊断（如「缺少 xl/workbook.xml」「包结构无法解析，文件可能已损坏或被截断」），
+      // 与下方「最近文档」打开路径同一口径；message 为空时回退到原泛化文案
+      const msg = (err instanceof Error ? err.message : String(err ?? '')).trim();
+      toast.warning(`打开失败：${msg || '文件可能不是有效的 .xlsx'}`);
     }
   };
 
