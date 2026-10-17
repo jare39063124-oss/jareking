@@ -94,9 +94,15 @@ done
 | `docs/size-strategy.md` | 体积战略（Electron 瘦身 + WebView2 评估） | 体积相关 |
 | `docs/fonts.md` | 字体版权与零风险白名单 | 字体相关 |
 | `docs/macros.md` | 宏方案（JS 宏 Worker 沙箱） | 宏相关 |
+| `docs/adversarial-audit.md` | 对抗性审计报告（边界 / 保真 / 包完整性 / **WPS 跨软件**） | 改 OOXML 解析导出后（铁律 1.9） |
+| `docs/deep-scan-report.md` | 深度扫描报告（格式转换矩阵 / 模拟任务 / 跨软件识别） | 发布前复测 |
+| `docs/prd-cloud-sharing.md` | 云端共享与权限配置 PRD（权限契约冻结版） | 云 / 权限设计变更 |
+| `docs/tasks-cs-p0.md` | 云端 P0 工程卡（可断言验收口径） | 契约变更 |
+| `docs/research-wps-gui-ip.md` | WPS GUI 版权合规调研（红线与可借鉴边界） | 合规相关 |
+| `docs/assets-provenance.md` | 视觉素材来源台账（许可登记） | **新增任何视觉素材时**（铁律 1.10） |
 
-## 4. 当前基线（每次变化请更新；截至 2026-10-16）
-- **测试**：writer 58 / desktop 232 / presentation 52 / core 46 / sheet 55 / pdf 15 / ai 16（合计 474）。
+## 4. 当前基线（每次变化请更新；截至 2026-10-17）
+- **测试**：writer 58 / desktop 250 / presentation 52 / core 46 / sheet 65 / pdf 15 / ai 16（合计 502）。
 - **已实现**：
   - Writer：docx 读写（L2）+ 域/页码/目录 + **批注** + **修订** + 查找替换 + 页眉页脚 + 脚注/尾注 + 分栏 + 公式（OMML）+ **样式管理器**；
   - Sheet：xlsx + 公式 + 样式双向映射 + 查找替换 + **单元格格式对话框（Ctrl+1）** + **插入图表（选区→PNG 预览/下载）** + **数据透视表** + **分列/删除重复项**；
