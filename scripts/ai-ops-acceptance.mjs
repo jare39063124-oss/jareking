@@ -194,6 +194,16 @@ async function main() {
   /* ============ Writer 10 条 ============ */
   await cdp.eval(`(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes('文字')); if (b) b.click(); })()`);
   await sleep(2000);
+  // AI 面板默认收起（uiStore.aiPanelOpen 默认 false）→ 必须先展开，面板内的指令输入框才在 DOM，
+  // 否则 sendPanel 恒返回 'no-input'，Writer 全部用例假失败（与 gui-smoke 同款展开动作）。
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('button')].find(
+      (b) => (b.getAttribute('aria-label') || '').includes('展开 AI 助手面板'),
+    );
+    if (btn) btn.click();
+    return !!btn;
+  })()`);
+  await sleep(600);
 
   const sendPanel = async (instruction) => {
     // 用持久化消息计数等待（user+assistant 各一条），不受历史消息文本干扰

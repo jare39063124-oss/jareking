@@ -7,6 +7,7 @@
  * v1 降级忽略，不阻断打开。
  */
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import type { JkCell, JkCellStyle, JkSheet, JkWorkbook } from '../model/index.js';
 import { parseA1Range } from '../model/index.js';
 
@@ -172,24 +173,56 @@ function parseWorksheet(ws: ExcelJS.Worksheet): JkSheet {
   };
 }
 
+/**
+ * 校验 OOXML 包结构：确认「真是 xlsx」。
+ *
+ * 背景（P1 缺陷，2026-10-17）：exceljs 的 `wb.xlsx.load()` 只是遍历 zip 条目、
+ * 命中 `xl/workbook.xml` 才填充 sheets；若条目缺失（docx/pptx 等其它 OOXML，
+ * 或仍是合法 zip 但内容损坏）它**不报错**，直接回落到 0 张工作表的空簿。
+ * 解析器此前又用「伪造一张 20×10 空表」兜底，导致用户打开错误文件时只看到
+ * 空白表、无任何报错 → 极易误判文件为空并覆盖保存（数据丢失）。
+ *
+ * 因此这里先做包结构校验，与 parseDocx / parsePptx「缺关键部件即明确抛错」同口径。
+ * 只读 zip 目录（不解压条目内容），开销可忽略。
+ */
+async function assertXlsxPackage(u8: Uint8Array): Promise<void> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(u8);
+  } catch {
+    // 非 zip（含 0 字节 / 截断包 / 普通文本等）——JSZip 抛出的底层错误不可读，统一转中文
+    throw new Error('不是有效的 xlsx 文件：无法解析 zip 包结构（文件可能已损坏或被截断）');
+  }
+  // 条目名容错：去掉前导 '/'（个别生产者会写入绝对路径），大小写不敏感比对
+  const hasWorkbook = Object.keys(zip.files).some(
+    (name) => name.replace(/^\//, '').toLowerCase() === 'xl/workbook.xml',
+  );
+  if (!hasWorkbook) {
+    throw new Error('不是有效的 xlsx 文件：缺少 xl/workbook.xml，可能不是 Excel 工作簿');
+  }
+}
+
 /** 解析 xlsx 字节流 → JkWorkbook */
 export async function parseXlsx(buffer: Uint8Array | ArrayBuffer): Promise<JkWorkbook> {
+  // 拷贝为独立 Uint8Array/ArrayBuffer（exceljs load 接受 ArrayBuffer；避免 SharedArrayBuffer 视图）
+  const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer.slice();
+
+  // 先校验包结构：非 xlsx / 损坏包必须明确抛错，绝不静默返回空簿
+  await assertXlsxPackage(u8);
+
   const wb = new ExcelJS.Workbook();
-  // 拷贝为独立 ArrayBuffer（exceljs load 接受 ArrayBuffer；避免 SharedArrayBuffer 视图）
-  const u8 = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : buffer;
-  const data = u8.slice().buffer as ArrayBuffer;
+  // u8 已是独立副本（偏移 0、长度一致），直接取其底层 ArrayBuffer，避免二次拷贝
+  const data = u8.buffer as ArrayBuffer;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await wb.xlsx.load(data as any);
 
   const sheets = wb.worksheets.map(parseWorksheet);
   if (!sheets.length) {
-    sheets.push({
-      name: 'Sheet1',
-      rowCount: 20,
-      colCount: 10,
-      cells: {},
-      merges: [],
-    });
+    // 已通过 xl/workbook.xml 校验却解析出 0 张工作表：真正的 xlsx 至少含 1 个 sheet，
+    // 出现该情况说明工作簿部件实质损坏（如 sheets 列表为空/工作表部件缺失）。
+    // 选择抛错而非「伪造空表」或「返回空 sheets」——后者会让上层误以为文件本身是空的，
+    // 用户可能直接覆盖保存导致数据丢失；抛错才能让上层明确提示「文件损坏」。
+    throw new Error('xlsx 解析失败：工作簿内未找到任何工作表，文件可能已损坏');
   }
 
   const view = wb.views?.[0] as { activeTab?: number } | undefined;
