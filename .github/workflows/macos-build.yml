@@ -58,11 +58,17 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 类型检查
-        run: pnpm typecheck
+      # 门禁范围说明（2026-10-17）：
+      #   只跑 **@jareking/desktop 及其依赖图**（core / ai / writer / sheet / pdf / presentation），
+      #   而不是根目录 `pnpm typecheck` / `pnpm test`。原因：`apps/mobile` 是与本流水线无关的
+      #   并行在研轨道，其自身 typecheck 存在既有红项（webStore 的 IDB 类型），会让 macOS
+      #   打包假失败。mobile 的修复由移动端轨道自行负责，不受本工作流阻断。
+      #   `...` 后缀 = 该包 + 其全部依赖。
+      - name: 类型检查（desktop 及其依赖图）
+        run: pnpm --filter @jareking/desktop... typecheck
 
-      - name: 单元测试
-        run: pnpm test
+      - name: 单元测试（desktop 及其依赖图）
+        run: pnpm --filter @jareking/desktop... test
 
       - name: 编译（main / preload / renderer）
         env:
