@@ -1,0 +1,121 @@
+/**
+ * 移动端样式入口。
+ *
+ * 设计令牌与组件样式全部来自桌面版 main.css（单一来源，不复制）：
+ * 这里只 @import 它，并补充「移动端专属」的触屏/安全区适配。
+ * `@source` 让 Tailwind v4 扫描桌面渲染层源码，保证 md:/lg: 等变体类名不丢。
+ */
+@import '../../../desktop/src/renderer/src/assets/main.css';
+
+@source '../../../desktop/src/renderer/src';
+@source '../';
+
+/* ============================================================
+ * 触屏 / 安全区适配（桌面版不受影响，仅在 WebView 生效）
+ * ============================================================ */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* 移动端视口高度用动态单位，规避地址栏/软键盘导致的 100vh 抖动 */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}
+
+body {
+  /* 禁止整页橡皮筋滚动，编辑器内部自行滚动 */
+  overscroll-behavior: none;
+  /* 关闭 300ms 点击延迟与双击缩放 */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 安全区：刘海屏 / 手势条 */
+:root {
+  --jk-safe-top: env(safe-area-inset-top, 0px);
+  --jk-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --jk-safe-left: env(safe-area-inset-left, 0px);
+  --jk-safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* 触屏命中区：把过小的图标按钮放大到 ≥40px（WCAG 2.5.5） */
+@media (pointer: coarse) {
+  button,
+  [role='button'] {
+    min-height: 32px;
+  }
+
+  /* 细滚动条在触屏上不可拖拽 → 加宽 */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+}
+
+/* 软键盘弹出时 visualViewport 缩小：编辑器容器跟随，避免光标被遮挡 */
+@media (pointer: coarse) {
+  .jk-mobile-editor-shell {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+/* ============================================================
+ * 窄屏布局修补（< 768px，手机竖屏）
+ *
+ * 只调"桌面布局在手机上的可用性"，不重写组件结构：
+ *  - 功能区标签行 / 工具组行：允许横向滚动，按钮不压缩变形（原 flex 会把
+ *    8 个标签压成竖排单字，见 spike 首屏截图）；
+ *  - 首页 340px 宽「最近使用」侧栏：窄屏改为底部独立区域（先隐藏侧栏，
+ *    避免挤占编辑区——后续由 MobileShell 提供抽屉式入口）。
+ * ============================================================ */
+@media (max-width: 767px) {
+  /* 功能区标签行：横向滚动，不换行不压缩 */
+  [role='tablist'] {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  [role='tablist']::-webkit-scrollbar {
+    display: none;
+  }
+
+  [role='tab'] {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* 工具组行：组与组、组内按钮一律不压缩（保持横向滚动） */
+  [data-editor-revision] > div {
+    flex: 0 0 auto;
+  }
+
+  [data-editor-revision] button {
+    white-space: nowrap;
+  }
+
+  /* 首页右侧固定宽度的「最近使用」(340px) 与「云文件」(w-64) 侧栏：
+     窄屏合计 596px 会把 390px 视口的编辑区挤成单列（见 spike 首屏截图），
+     故隐藏侧栏，把宽度让给新建引导/编辑区。抽屉式入口由 MobileShell 承担。 */
+  main div[class*='340px'],
+  main div[class*='w-64'] {
+    display: none;
+  }
+
+  /* 顶栏与状态栏压缩，给内容留高度 */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: var(--jk-z-sticky);
+  }
+}
+

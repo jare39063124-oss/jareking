@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">jareking</string>
+    <string name="title_activity_main">jareking</string>
+    <string name="package_name">cn.jareking.app</string>
+    <string name="custom_url_scheme">cn.jareking.app</string>
+</resources>
